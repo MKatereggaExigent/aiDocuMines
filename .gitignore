@@ -196,3 +196,8 @@ ImageMagick-7.*/utilities/magick
 **/*.pyd
 **/*.so
 
+# Allow GitHub workflows
+!.github/
+!.github/workflows/
+!.github/workflows/deploy.yml
+
