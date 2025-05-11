@@ -1,0 +1,191 @@
+# Django and REST Framework
+Django
+djangorestframework
+django-cors-headers
+django-oauth-toolkit
+djangorestframework-simplejwt
+drf-yasg
+drf-spectacular
+
+# Authentication
+oauthlib
+requests
+requests-oauthlib
+jwcrypto
+
+# Celery and Task Queue
+celery
+redis
+kombu
+billiard
+vine
+
+# Database and ORM
+psycopg2-binary
+sqlalchemy
+alembic
+
+# File Handling and Processing
+PyPDF2
+pymupdf
+ocrmypdf
+pytesseract
+pillow
+pdf2image
+python-docx
+python-pptx
+XlsxWriter
+openpyxl
+pdfservices-sdk
+pikepdf
+python-magic
+
+# Cloud Storage (Azure)
+azure-identity
+azure-core
+azure-common
+azure-mgmt-core
+azure-mgmt-resource
+azure-mgmt-storage
+azure-mgmt-compute
+azure-keyvault-secrets
+azure-ai-formrecognizer
+azure-ai-ml
+azure-ai-textanalytics
+azure-ai-translation-document
+azure-cognitiveservices-vision-computervision
+azure-storage-blob
+azure-storage-file-datalake
+azure-storage-file-share
+
+# Environment Variables
+python-dotenv
+
+# Logging and Monitoring
+gunicorn
+whitenoise
+
+# Data Processing and Utilities
+pandas
+numpy  # ==1.23.5  # Ensure compatibility
+attrs
+PyYAML
+python-dateutil
+pytz
+tzdata
+sqlparse
+isodate
+inflection
+strictyaml
+pydash
+
+# Encryption and Security
+cryptography
+pycryptodome
+
+# Web Frameworks and APIs
+werkzeug
+sanic-session
+sanic-wtf
+
+# Terminal and CLI Enhancements
+click
+colorama
+prompt_toolkit
+tqdm
+
+# Miscellaneous
+aiofiles
+certifi
+cffi
+charset-normalizer
+idna
+jsonschema
+marshmallow
+portalocker
+pycparser
+PyJWT
+pyrsistent
+mutagen
+msal
+msal-extensions
+msrest
+typing_extensions
+uritemplate
+urllib3
+wcwidth
+Unidecode
+
+# Payment Processing
+dj-stripe
+stripe
+chardet
+itsdangerous
+icecream
+
+# NLP and Text Processing
+presidio-analyzer
+presidio-anonymizer
+regex
+reportlab
+
+# Background Tasks and Multi-Tenant Support
+fastapi
+django-filter
+django-celery-results
+django-celery-beat
+django-tenants
+django-extensions
+
+# PDF Processing
+pypdf
+pdfminer.six
+olefile
+mammoth
+
+# File Monitor
+watchdog
+
+# MFA
+pyotp
+qrcode
+
+
+# Celery Beat
+django-celery-beat
+
+
+# ➕ LLM Integration & LangChain Support
+openai
+langchain
+langchain-core
+langchain-community
+langchain-ollama
+ollama  # Optional, only if running local models
+
+# ➕ Token Counting and Chunking
+tiktoken  # Required for OpenAI-style token estimation
+
+# ➕ SQL Streaming & Cross-DB Support
+pyodbc  # For MSSQL and other ODBC drivers
+mysqlclient  # For MySQL (optional, based on usage)
+
+# ➕ PDF Image OCR Helpers (used in PDF chunking)
+wand  # Optional: used with ImageMagick for PDF → image conversion
+
+# For schema generation, preview UI, or sandbox eval:
+pandasql  # To allow SQL-style queries on DataFrames
+ipython  # If you want interactive debugging via notebook or console
+streamlit  # If exposing a visual dashboard
+
+# xlrd dependancy 
+xlrd
+pandas
+
+unstructured[all-docs,pdf]
+
+pdf2image
+pytesseract
+pandas
+openpyxl
+
