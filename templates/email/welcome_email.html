@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to aiDocuMines</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: #f4f4f4;
+            margin: 0; padding: 0;
+        }
+        .email-container {
+            background-color: #ffffff;
+            margin: 2em auto;
+            padding: 2em;
+            border-radius: 8px;
+            max-width: 600px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2em;
+        }
+        .header img {
+            height: 60px;
+        }
+        .content p {
+            line-height: 1.6;
+        }
+        .footer {
+            margin-top: 3em;
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div class="email-container">
+    <div class="header">
+        <img src="https://aidocumines.com/static/logo.png" alt="aiDocuMines Logo" />
+        <h2>Welcome to aiDocuMines</h2>
+    </div>
+    <div class="content">
+        <p>Dear {{ user.email }},</p>
+        <p>Welcome aboard! Your account has been successfully created.</p>
+
+        <p><strong>Login Credentials:</strong></p>
+        <ul>
+            <li><strong>Username:</strong> {{ user.email }}</li>
+            <li><strong>Temporary Password:</strong> {{ temporary_password }}</li>
+            <li><strong>Client ID:</strong> {{ client_id }}</li>
+            <li><strong>Client Secret:</strong> {{ client_secret }}</li>
+        </ul>
+
+        <p>Please ensure you change your password after logging in.</p>
+        <p>We’re excited to have you on board!</p>
+    </div>
+
+    <div class="footer">
+        <p>This is an automated email from aiDocuMines. Please do not reply.</p>
+        <p>&copy; {{ now|date:"Y" }} aiDocuMines. All rights reserved.</p>
+    </div>
+</div>
+</body>
+</html>
+

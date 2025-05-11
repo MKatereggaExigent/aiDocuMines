@@ -1,0 +1,112 @@
+FROM python:3.12.9-slim
+
+ENV PYTHONPATH="/app" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    USE_BLIS=0
+
+WORKDIR /app
+
+# Consolidate all apt installs and clean up in one layer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    procps \
+    coreutils \
+    make \
+    libffi-dev \
+    libjpeg-dev \
+    libtiff-dev \
+    zlib1g-dev \
+    libx11-dev \
+    libfreetype6-dev \
+    liblcms2-dev \
+    libwebp-dev \
+    libharfbuzz-dev \
+    ocrmypdf \
+    poppler-utils \
+    libfribidi-dev \
+    libxcb1-dev \
+    curl \
+    netcat-openbsd \
+    postgresql-client \
+    build-essential \
+    tesseract-ocr \
+    libtesseract-dev \
+    libopenjp2-7-dev \
+    libfontconfig1-dev \
+    libxext-dev \
+    libxrender-dev \
+    libpng-dev \
+    file \
+    ghostscript \
+    imagemagick \
+    libmagickwand-dev \
+    libmariadb-dev-compat \
+    libmariadb-dev \
+    libgl1-mesa-glx \
+    supervisor \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/*
+
+
+# Copy everything *except* .env
+COPY . /app/
+
+# Set up Supervisor config
+RUN mkdir -p /etc/supervisor/conf.d
+COPY supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Upgrade pip and install build tools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel numpy
+
+COPY production_requirements.txt /app/
+RUN pip install --no-cache-dir --prefer-binary -r production_requirements.txt gunicorn
+
+#COPY entrypoint.sh /app/entrypoint.sh
+#RUN chmod +x /app/entrypoint.sh
+
+RUN mkdir -p /app/media /app/logs && chown -R www-data:www-data /app/media
+
+#COPY wait-for-it.sh .env /app/
+#RUN chmod +x /app/wait-for-it.sh
+
+# Entrypoint + service utilities
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+COPY wait-for-it.sh /app/wait-for-it.sh
+RUN chmod +x /app/wait-for-it.sh
+
+# Supervisor for file_monitor
+COPY supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+# Add your .env explicitly to image (important for Azure)
+COPY .env /app/.env
+
+# Add source code
+# COPY . /app/
+
+# Ensure logs directory exists
+RUN mkdir -p /app/logs /app/media && chown -R www-data:www-data /app/media
+
+
+
+
+
+
+
+
+
+# Copy app source code
+# COPY . /app/
+
+#COPY .env /app/.env
+
+RUN python manage.py collectstatic --noinput
+
+EXPOSE 8020
+EXPOSE 80
+EXPOSE 5433
+
+ENTRYPOINT ["/app/entrypoint.sh"]
+

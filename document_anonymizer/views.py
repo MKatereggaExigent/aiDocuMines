@@ -1,0 +1,451 @@
+import os
+import json
+import logging
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.exceptions import PermissionDenied
+from django.shortcuts import get_object_or_404
+from django.contrib.auth import get_user_model
+from django.http import FileResponse
+from oauth2_provider.models import Application
+from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+from core.models import File
+from document_anonymizer.models import Anonymize, DeAnonymize, AnonymizationRun
+from document_anonymizer.tasks import anonymize_document_task, deanonymize_document_task
+from document_anonymizer.llm_orchestrator import query_model  # New import
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import JSONParser
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+from django.shortcuts import get_object_or_404
+from document_anonymizer.models import Anonymize
+from core.models import File
+from document_anonymizer.utils import export_to_markdown, export_to_docx, summarize_blocks, update_structured_block
+from document_anonymizer.tasks import compute_risk_score_task
+import uuid
+
+import json
+import os
+logger = logging.getLogger(__name__)
+User = get_user_model()
+
+# Swagger Parameters
+client_id_param = openapi.Parameter("X-Client-ID", openapi.IN_HEADER, type=openapi.TYPE_STRING, required=True)
+client_secret_param = openapi.Parameter("X-Client-Secret", openapi.IN_HEADER, type=openapi.TYPE_STRING, required=True)
+file_id_param = openapi.Parameter("file_id", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+project_id_param = openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+service_id_param = openapi.Parameter("service_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+file_type_param = openapi.Parameter("file_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="plain or structured")
+file_type_param = openapi.Parameter("file_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="plain or structured")
+variant_param = openapi.Parameter("variant", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="Either 'original' or 'anonymized'")
+
+def health_check(request):
+    from django.http import JsonResponse
+    return JsonResponse({"status": "ok"}, status=200)
+
+def get_user_from_client_id(client_id):
+    try:
+        application = Application.objects.get(client_id=client_id)
+        return application.user
+    except Application.DoesNotExist:
+        return None
+
+class SubmitAnonymizationAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            client_id_param,
+            client_secret_param,
+            file_id_param,
+            project_id_param,
+            service_id_param,
+            file_type_param
+        ],
+        operation_description="Starts anonymization using the default Presidio ➝ spaCy pipeline. You can optionally specify the file_type (plain or structured)."
+    )
+    def post(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        project_id = request.query_params.get("project_id")
+        service_id = request.query_params.get("service_id")
+        file_type = request.query_params.get("file_type", "plain").lower()
+
+        if not all([client_id, client_secret, file_id, project_id, service_id]):
+            return Response({"error": "Missing required parameters"}, status=status.HTTP_400_BAD_REQUEST)
+
+        application = get_object_or_404(Application, client_id=client_id)
+        user = application.user
+        file_instance = get_object_or_404(File, id=file_id, project_id=project_id, service_id=service_id)
+
+        if str(file_instance.user.id) != str(user.id):
+            raise PermissionDenied("You are not authorized to process this file.")
+
+        if not os.path.exists(file_instance.filepath):
+            return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
+
+
+        anonymization_run = AnonymizationRun.objects.create(
+                id=str(uuid.uuid4()),  # force UUID for consistency
+                project_id=project_id,
+                service_id=service_id,
+                client_name=user.username or user.email,
+                status="Processing",
+                anonymization_type="Presidio-Spacy"
+        )
+
+        anonymize_document_task.delay(file_id, file_type, str(anonymization_run.id))
+
+        # anonymization_run = AnonymizationRun.objects.create(
+        #     project_id=project_id,
+        #     service_id=service_id,
+        #     client_name=user.username or user.email,
+        #     status="Processing",
+        #     anonymization_type="Presidio-Spacy"
+        # )
+
+        # anonymize_document_task.delay(file_id, file_type)
+
+        return Response({
+            "anonymization_run_id": str(anonymization_run.id),
+            "file_id": str(file_instance.id),
+            "status": "Processing"
+        }, status=status.HTTP_202_ACCEPTED)
+
+class DownloadAnonymizedFileAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            client_id_param,
+            client_secret_param,
+            file_id_param,
+            openapi.Parameter("file_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter("structured_blocks", openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False)
+        ]
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        file_type = request.query_params.get("file_type")
+        structured_blocks = request.query_params.get("structured_blocks", "false").lower() == "true"
+
+        if not all([client_id, client_secret, file_id, file_type]):
+            return Response({"error": "Missing required parameters"}, status=400)
+
+        user = get_user_from_client_id(client_id)
+        if not user:
+            return Response({"error": "Invalid client ID"}, status=403)
+
+        anonymized_file = get_object_or_404(Anonymize, original_file_id=file_id, file_type=file_type, is_active=True)
+        de_anonymized_file = DeAnonymize.objects.filter(file_id=file_id).first()
+
+        if file_type == "structured":
+            path = anonymized_file.anonymized_structured_filepath
+            if not path or not os.path.exists(path):
+                return Response({"error": "Structured file not found."}, status=404)
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return Response(data, content_type="application/json") if structured_blocks else FileResponse(open(path, "rb"))
+
+        if file_type == "json":
+            if not os.path.exists(anonymized_file.entity_mapping_filepath):
+                return Response({"error": "JSON file not found."}, status=404)
+            with open(anonymized_file.entity_mapping_filepath, "r", encoding="utf-8") as f:
+                return Response(json.load(f), content_type="application/json")
+
+        if file_type == "html":
+            if not os.path.exists(anonymized_file.anonymized_html_filepath):
+                return Response({"error": "HTML file not found."}, status=404)
+            return FileResponse(open(anonymized_file.anonymized_html_filepath, "rb"))
+
+        file_path_map = {
+            "original": anonymized_file.original_file.filepath,
+            "anonymized": anonymized_file.anonymized_filepath,
+            "deanonymized": de_anonymized_file.unmasked_filepath if de_anonymized_file else None
+        }
+
+        path = file_path_map.get(file_type)
+        if not path or not os.path.exists(path):
+            return Response({"error": f"Requested {file_type} file does not exist."}, status=404)
+        return FileResponse(open(path, "rb"))
+
+class SubmitDeAnonymizationAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(manual_parameters=[client_id_param, file_id_param])
+    def post(self, request):
+        file_id = request.query_params.get("file_id")
+        anonymized_file = get_object_or_404(Anonymize, original_file_id=file_id)
+        deanonymize_document_task.delay(file_id)
+        return Response({
+            "message": "De-anonymization started.",
+            "file_id": str(file_id),
+            "status": "Processing"
+        }, status=status.HTTP_202_ACCEPTED)
+
+class DownloadDeAnonymizedFileAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(manual_parameters=[client_id_param, file_id_param])
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        deanonymized = get_object_or_404(DeAnonymize, file_id=file_id)
+        if not os.path.exists(deanonymized.unmasked_filepath):
+            return Response({"error": "File not found."}, status=404)
+        return FileResponse(open(deanonymized.unmasked_filepath, "rb"))
+
+
+class StructuredBlocksView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(manual_parameters=[
+        openapi.Parameter('file_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+        openapi.Parameter('flat', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
+        openapi.Parameter('include_coordinates', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
+    ])
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        flat = request.query_params.get("flat") == "true"
+        include_coordinates = request.query_params.get("include_coordinates") == "true"
+
+        instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+        path = instance.anonymized_structured_filepath
+
+        with open(path, "r", encoding="utf-8") as f:
+            blocks = json.load(f)
+
+        if not include_coordinates:
+            for block in blocks:
+                block.pop("metadata", None)
+
+        return Response(blocks)
+
+
+class SummarizeBlocksView(APIView):
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file_id = request.data.get("file_id")
+        element_ids = request.data.get("element_ids", [])
+        model = request.data.get("model", "phi-2")  # Default to local
+        api_key = request.data.get("api_key")  # Optional for GPT-style models
+
+        instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+        path = instance.anonymized_structured_filepath
+
+        with open(path, "r", encoding="utf-8") as f:
+            blocks = json.load(f)
+
+        summaries = query_model(blocks, element_ids, model=model, api_key=api_key)
+        return Response({"summaries": summaries})
+
+
+class EditBlockView(APIView):
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        file_id = request.data.get("file_id")
+        element_id = request.data.get("element_id")
+        new_text = request.data.get("new_text")
+
+        instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+        path = instance.anonymized_structured_filepath
+
+        updated = update_structured_block(path, element_id, new_text)
+        return Response({"updated": updated})
+
+
+class ExportBlocksView(APIView):
+    parser_classes = [JSONParser]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file_id = request.data.get("file_id")
+        export_format = request.data.get("export_format")
+
+        instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+        path = instance.anonymized_structured_filepath
+
+        if export_format == "markdown":
+            export_path = export_to_markdown(path, generate_preview=True)
+        elif export_format == "docx":
+            export_path = export_to_docx(path)
+        else:
+            return Response({"error": "Invalid export format"}, status=400)
+
+        return Response({"download": export_path})
+
+
+
+class DownloadStructuredMarkdownView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        manual_parameters=[file_id_param, variant_param]
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        variant = request.query_params.get("variant", "anonymized").lower()
+
+        if variant == "original":
+            file = get_object_or_404(File, id=file_id)
+            path = file.filepath.replace(".pdf", ".md")
+        else:
+            instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+            path = instance.anonymized_structured_filepath.replace(".json", ".md")
+
+        if not os.path.exists(path):
+            return Response({"error": f"{variant.capitalize()} Markdown file not found."}, status=404)
+
+        return FileResponse(open(path, "rb"), content_type="text/markdown")
+
+
+class DownloadStructuredHTMLView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        manual_parameters=[file_id_param, variant_param]
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        variant = request.query_params.get("variant", "anonymized").lower()
+
+        if variant == "original":
+            file = get_object_or_404(File, id=file_id)
+            path = file.filepath.replace(".pdf", ".html")
+        else:
+            instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+            path = instance.anonymized_html_filepath
+
+        if not os.path.exists(path):
+            return Response({"error": f"{variant.capitalize()} structured HTML not found."}, status=404)
+
+        return FileResponse(open(path, "rb"), content_type="text/html")
+
+
+class DownloadStructuredTextView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        manual_parameters=[file_id_param, variant_param]
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        variant = request.query_params.get("variant", "anonymized").lower()
+
+        if variant == "original":
+            file = get_object_or_404(File, id=file_id)
+            path = file.filepath
+        else:
+            instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+            path = instance.anonymized_filepath
+
+        if not os.path.exists(path):
+            return Response({"error": f"Structured {variant} text file not found."}, status=404)
+
+        return FileResponse(open(path, "rb"), content_type="text/plain")
+
+
+class DownloadStructuredJSONView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        manual_parameters=[file_id_param, variant_param]
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        variant = request.query_params.get("variant", "anonymized").lower()
+
+        if variant == "original":
+            file = get_object_or_404(File, id=file_id)
+            path = file.filepath.replace(".pdf", ".json")
+        else:
+            instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+            path = instance.anonymized_structured_filepath
+
+        if not os.path.exists(path):
+            return Response({"error": f"{variant.capitalize()} structured JSON not found."}, status=404)
+
+        with open(path, "r", encoding="utf-8") as f:
+            return Response(json.load(f), content_type="application/json")
+
+
+from document_anonymizer.tasks import compute_risk_score_task
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from celery.result import AsyncResult
+
+class DocumentRiskScoreView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(manual_parameters=[file_id_param])
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "file_id is required"}, status=400)
+
+        # Check if risk score already exists in DB or cache in future
+        task = compute_risk_score_task.delay(file_id)
+        return Response({"task_id": task.id, "status": "Risk analysis started"}, status=202)
+
+
+class DocumentRiskScoreResultView(APIView):
+    """
+    Fetches the result of a risk score analysis task
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(manual_parameters=[
+        openapi.Parameter("task_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+    ])
+    def get(self, request):
+        task_id = request.query_params.get("task_id")
+        if not task_id:
+            return Response({"error": "task_id is required"}, status=400)
+
+        result = AsyncResult(task_id)
+        if not result.ready():
+            return Response({"status": "Pending"}, status=202)
+
+        if result.failed():
+            return Response({"status": "Failed", "error": str(result.result)}, status=500)
+
+        return Response({
+            "status": "Completed",
+            "data": result.result
+        }, status=200)
+
+
+class DownloadStructuredDocxView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        file_type = request.query_params.get("file_type")
+
+        # Validate and fetch file
+        file_obj = get_object_or_404(File, id=file_id)
+        anonymize_obj = get_object_or_404(Anonymize, original_file=file_obj)
+
+        docx_path = anonymize_obj.anonymized_structured_filepath.replace(".json", ".docx")
+        if not os.path.exists(docx_path):
+            return Response({"error": "Anonymized DOCX file not found."}, status=404)
+
+        return FileResponse(open(docx_path, "rb"), content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+

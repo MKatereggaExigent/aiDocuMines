@@ -1,0 +1,198 @@
+# Byte-compiled / optimized / DLL files
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+__pycache__/
+
+# C and C++ extensions
+*.o
+*.obj
+*.dll
+*.a
+*.lib
+*.h
+*.c
+*.cc
+*.cpp
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.~lock.*
+*.err
+*.out
+
+# Secret and environment files
+*.env
+.env.*
+*.pem
+.env
+env.json
+tmp_env.json
+azure_env.txt
+secrets/
+keys/
+*.key
+*.crt
+certs/
+
+# Virtual environments
+env/
+ENV/
+venv/
+.venv/
+vmEnv*/
+.virtualenv/
+.vm/
+.vmEnv/
+
+# Django-specific
+db.sqlite3
+/media/
+media/*
+!media/.gitkeep
+logs/
+logs/*
+!logs/.gitkeep
+staticfiles/
+staticfiles/*
+!staticfiles/.gitkeep
+*.pot
+*.mo
+*.pid
+*.sock
+celerybeat-schedule
+migrations/__pycache__/
+migrations/_init__.py
+
+# Build, coverage, and packaging
+*.egg
+*.egg-info/
+*.manifest
+*.spec
+dist/
+build/
+wheels/
+htmlcov/
+coverage.xml
+.coverage*
+.cache
+.pytest_cache/
+.tox/
+
+# Test and debug artifacts
+nosetests.xml
+*.cover
+*.coverage
+
+# IDE-specific
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+*.sublime*
+*.project
+*.workspace
+
+# OS and system files
+.DS_Store
+Thumbs.db
+desktop.ini
+._*
+
+# Dependency directories
+node_modules/
+bower_components/
+package-lock.json
+yarn.lock
+npm-debug.log*
+
+# Docker and CapRover
+docker-compose.override.yml
+#docker-cleanup.sh
+#docker_launch.sh
+#docker_rebuild_safe.sh
+caprover*
+*.pid
+*.sock
+
+# Document formats and large files (optional)
+*.mp4
+*.mp3
+*.wav
+*.png
+*.jpg
+*.jpeg
+*.tiff
+*.bmp
+*.gif
+*.ico
+*.pdf
+*.docx
+*.doc
+*.xls
+*.xlsx
+*.csv
+*.ppt
+*.pptx
+*.txt
+
+# Archive files
+*.tar
+*.zip
+*.gz
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+
+# Git hooks
+hooks/
+*.lock
+
+# Custom tools and generated files
+*.generated
+*.bak
+*.bak.*
+
+# Database files
+*.db
+*.sql
+*.sqlite
+*.sqlite3
+postgres_data/
+mysql_data/
+postgres_data/*
+!postgres_data/.gitkeep
+
+# Ignore output from ImageMagick source
+ImageMagick-7.*/build/
+ImageMagick-7.*/Makefile
+ImageMagick-7.*/config.log
+ImageMagick-7.*/config.status
+ImageMagick-7.*/configure
+ImageMagick-7.*/libtool
+ImageMagick-7.*/local.exp
+ImageMagick-7.*/.libs/
+ImageMagick-7.*/*.la
+ImageMagick-7.*/*.o
+ImageMagick-7.*/*.lo
+ImageMagick-7.*/tests/*.tap
+ImageMagick-7.*/PerlMagick/Makefile
+ImageMagick-7.*/MagickCore/Makefile
+ImageMagick-7.*/MagickWand/Makefile
+ImageMagick-7.*/utilities/magick
+
+# Ignore compiled Python scripts in all subfolders
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/*.so
+

@@ -1,0 +1,54 @@
+from django.urls import path
+from .views import (
+    SubmitAnonymizationAPIView,
+    SubmitDeAnonymizationAPIView,
+    DownloadAnonymizedFileAPIView,
+    DownloadDeAnonymizedFileAPIView,
+    StructuredBlocksView,
+    SummarizeBlocksView,
+    EditBlockView,
+    ExportBlocksView,
+    DownloadStructuredMarkdownView,
+    DownloadStructuredHTMLView,
+    DownloadStructuredTextView,
+    DownloadStructuredJSONView,
+    DocumentRiskScoreView,               # ✅ NEW
+    DocumentRiskScoreResultView,        # ✅ NEW
+    DownloadStructuredDocxView,
+    health_check
+)
+from .task_statuses import AnonymizationTaskStatusView
+
+urlpatterns = [
+    # Anonymization
+    path("submit-anonymization/", SubmitAnonymizationAPIView.as_view(), name="submit-anonymization"),
+    path("check-anonymization-status/", AnonymizationTaskStatusView.as_view(), name="check-anonymization-status"),
+    path("download-anonymized-file/", DownloadAnonymizedFileAPIView.as_view(), name="download-anonymized-file"),
+
+    # Structured Block Utilities (NEW)
+    path("structured-blocks/", StructuredBlocksView.as_view(), name="structured-blocks"),
+    path("summarize-blocks/", SummarizeBlocksView.as_view(), name="summarize-blocks"),
+    path("edit-block/", EditBlockView.as_view(), name="edit-block"),
+    path("export-blocks/", ExportBlocksView.as_view(), name="export-blocks"),
+
+    # De-Anonymization
+    path("submit-deanonymization/", SubmitDeAnonymizationAPIView.as_view(), name="submit-deanonymization"),
+    path("check-deanonymization-status/", AnonymizationTaskStatusView.as_view(), name="check-deanonymization-status"),
+    path("download-deanonymized-file/", DownloadDeAnonymizedFileAPIView.as_view(), name="download-deanonymized-file"),
+
+    # Structured Downloads
+    path("download-structured-markdown/", DownloadStructuredMarkdownView.as_view(), name="download-structured-markdown"),
+    path("download-structured-html/", DownloadStructuredHTMLView.as_view(), name="download-structured-html"),
+    path("download-structured-text/", DownloadStructuredTextView.as_view(), name="download-structured-text"),
+    path("download-structured-json/", DownloadStructuredJSONView.as_view(), name="download-structured-json"),
+    path("download-structured-docx/", DownloadStructuredDocxView.as_view(), name="download-structured-docx"),
+
+
+    # Risk Score
+    path("risk-score/", DocumentRiskScoreView.as_view(), name="risk-score"),
+    path("risk-score-result/", DocumentRiskScoreResultView.as_view(), name="risk-score-result"),
+
+    # Health
+    path("health/", health_check, name="health_check"),
+]
+

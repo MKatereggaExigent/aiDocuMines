@@ -1,0 +1,39 @@
+import os
+
+def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
+    """
+    Returns the full nested tree of user's uploaded files and folders,
+    including direct download URL for each file.
+    """
+    if not base_upload_dir:
+        base_upload_dir = os.path.join("media", "uploads", str(user_id))
+
+    if not base_url:
+        # base_url could also come from Django settings.MEDIA_URL
+        base_url = f"/media/uploads/{user_id}"
+
+    file_tree = []
+
+    for root, dirs, files in os.walk(base_upload_dir):
+        rel_path = os.path.relpath(root, base_upload_dir)
+        path_parts = [] if rel_path == "." else rel_path.split(os.sep)
+
+        current_node = file_tree
+        for part in path_parts:
+            node = next((item for item in current_node if item["name"] == part and item["type"] == "folder"), None)
+            if not node:
+                node = {"name": part, "type": "folder", "children": []}
+                current_node.append(node)
+            current_node = node["children"]
+
+        for file in files:
+            file_rel_path = os.path.join(rel_path, file) if rel_path != "." else file
+            file_url_path = f"{base_url}/{file_rel_path}".replace("\\", "/")
+            current_node.append({
+                "name": file,
+                "type": "file",
+                "download_url": file_url_path
+            })
+
+    return file_tree
+
