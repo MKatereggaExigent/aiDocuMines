@@ -1,0 +1,60 @@
+name: Build and Deploy Multi-Container App to Azure
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  ACR_NAME: aidocuminesacr
+  ACR_LOGIN_SERVER: aidocuminesacr.azurecr.io
+  RESOURCE_GROUP: aidocumines-rg
+  WEBAPP_NAME: aidocumines-app
+  DOCKER_COMPOSE_FILE: docker-compose.yml
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Log in to Azure
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Enable ACR admin (just in case)
+      run: |
+        az acr update --name $ACR_NAME --admin-enabled true
+
+    - name: Log in to ACR
+      run: |
+        az acr login --name $ACR_NAME
+
+    - name: Build all containers
+      run: |
+        docker-compose -f $DOCKER_COMPOSE_FILE build --no-cache
+
+    - name: Tag and push images to ACR
+      run: |
+        IMAGE_NAMES=$(docker-compose config --services)
+        for SERVICE in $IMAGE_NAMES; do
+          IMAGE_TAG="$ACR_LOGIN_SERVER/${SERVICE}:latest"
+          echo "Tagging $SERVICE as $IMAGE_TAG"
+          docker tag "${SERVICE}:latest" "$IMAGE_TAG"
+          docker push "$IMAGE_TAG"
+        done
+
+    - name: Deploy to Azure Web App (Multi-Container)
+      run: |
+        az webapp config container set \
+          --resource-group $RESOURCE_GROUP \
+          --name $WEBAPP_NAME \
+          --multicontainer-config-type compose \
+          --multicontainer-config-file $DOCKER_COMPOSE_FILE \
+          --docker-registry-server-url https://$ACR_LOGIN_SERVER \
+          --docker-registry-server-user $(az acr credential show --name $ACR_NAME --query "username" -o tsv) \
+          --docker-registry-server-password $(az acr credential show --name $ACR_NAME --query "passwords[0].value" -o tsv)
+
