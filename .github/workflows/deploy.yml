@@ -51,4 +51,3 @@ jobs:
             --resource-group $RESOURCE_GROUP \
             --multicontainer-config-type compose \
             --multicontainer-config-file https://raw.githubusercontent.com/MKatereggaExigent/aiDocuMines/main/docker-compose.yml
-
