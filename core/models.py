@@ -7,6 +7,9 @@ import typing
 if typing.TYPE_CHECKING:
     from grid_documents_interrogation.models import Topic
 
+# from document_translation.models import TranslationRun
+from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.fields import GenericForeignKey
 
 
 
@@ -43,6 +46,54 @@ class Run(models.Model):
         return f"Run {self.run_id} - {self.status}"
 
 
+
+class Storage(models.Model):
+    storage_id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="storages", null=True)
+
+    # 👇 Generic link to any run-like model: Run, TranslationRun, OCRRun, etc.
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, null=True)
+    object_id = models.UUIDField(null=True)  # Assumes your runs use UUIDField
+    run_object = GenericForeignKey("content_type", "object_id")
+
+    upload_storage_location = models.CharField(max_length=1024, blank=True, null=True)
+    output_storage_location = models.CharField(max_length=1024, blank=True, null=True)
+
+    def __str__(self):
+        return f"Storage {self.storage_id} - {self.upload_storage_location}"
+
+
+
+'''
+class Storage(models.Model):
+    """
+    Represents storage locations for uploaded and processed files.
+    """
+    storage_id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="storages", null=True)
+    
+    # Optionally link to either a Run (for general file processing) or a TranslationRun (for translation tasks)
+    # run = models.ForeignKey(Run, on_delete=models.CASCADE, related_name="storages", db_column="run_id", null=True, blank=True)
+
+    translation_run = models.ForeignKey(
+        "document_translation.TranslationRun",
+        on_delete=models.CASCADE,
+        related_name="core_storages",
+        db_column="translation_run_id",
+        null=True,
+        blank=True
+    )
+
+    # translation_run = models.ForeignKey(TranslationRun, on_delete=models.CASCADE, related_name="storages", db_column="translation_run_id", null=True, blank=True)
+
+    upload_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # Store absolute path for uploaded file
+    output_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # Store path for processed/generated output
+
+    def __str__(self):
+        return f"Storage {self.storage_id} - {self.upload_storage_location}"
+'''
+
+'''
 class Storage(models.Model):
     """
     Represents storage locations for uploaded and processed files.
@@ -55,7 +106,7 @@ class Storage(models.Model):
 
     def __str__(self):
         return f"Storage {self.storage_id} - {self.upload_storage_location}"
-
+'''
 
 class File(models.Model):
     """

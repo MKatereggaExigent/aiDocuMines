@@ -194,6 +194,19 @@ class TranslationTaskStatusView(APIView):
             "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+        # ✅ Filter only translation-related files from File table
+        registered_outputs = list(
+            File.objects.filter(run=translation_file.original_file.run)
+            .exclude(id=translation_file.original_file.id)
+            .filter(filepath__icontains=f"/translations/{run_instance.to_language}/")
+            # File.objects.filter(run=run_instance)
+            # .exclude(id=translation_file.original_file.id)
+            #.filter(filepath__icontains=f"/translations/{run_instance.to_language}/")
+            .values("id", "filename", "filepath")
+        )
+
+        response_data["registered_outputs"] = registered_outputs
+
         return Response(response_data, status=200)
 
 

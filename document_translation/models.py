@@ -80,7 +80,7 @@ class TranslationStorage(models.Model):
     
     storage_id = models.AutoField(primary_key=True)
     run = models.ForeignKey(
-        TranslationRun, on_delete=models.CASCADE, related_name="storages", null=True, blank=True
+        TranslationRun, on_delete=models.CASCADE, related_name="translation_storages", null=True, blank=True
     )  # ✅ Ensures storage links to a run
     upload_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # ✅ Path for uploaded file
     translated_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # ✅ Path for translated file

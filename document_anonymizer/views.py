@@ -449,3 +449,35 @@ class DownloadStructuredDocxView(APIView):
 
         return FileResponse(open(docx_path, "rb"), content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
+
+class DownloadRedactionReadyJSONView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(manual_parameters=[
+        openapi.Parameter("file_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+    ])
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
+
+        with open(instance.anonymized_structured_filepath, "r", encoding="utf-8") as f:
+            blocks = json.load(f)
+
+        # Combine Presidio + SpaCy mappings
+        mapping = {}
+        mapping.update(instance.presidio_masking_map or {})
+        mapping.update(instance.spacy_masking_map or {})
+
+        redaction_targets = []
+        for block in blocks:
+            masked_text = block.get("text", "")
+            if masked_text in mapping:
+                real_text = mapping[masked_text]
+                redaction_targets.append({
+                    "text": real_text,
+                    "page": block.get("metadata", {}).get("page_number", 1),
+                    "coordinates": block.get("metadata", {}).get("coordinates", {}).get("points", [])
+                })
+
+        return Response(redaction_targets)
+

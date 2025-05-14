@@ -8,6 +8,7 @@ from django.shortcuts import get_object_or_404
 from core.models import File
 from document_anonymizer.models import AnonymizationRun, Anonymize, DeAnonymize
 from document_anonymizer.utils import AnonymizationService, generate_anonymized_html
+from core.utils import register_generated_file
 
 logger = logging.getLogger(__name__)
 service = AnonymizationService()
@@ -20,6 +21,17 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
     if not os.path.exists(file_entry.filepath):
         logger.error(f"❌ File not found: {file_entry.filepath}")
         return {"error": "File not found", "file_id": file_id}
+
+    # ✅ EARLY EXIT: Already anonymized
+    existing = Anonymize.objects.filter(original_file=file_entry, file_type=file_type, is_active=True).first()
+    if existing:
+        logger.info(f"⚠️ Skipping duplicate anonymization. File ID {file_id} already has active anonymized output (ID: {existing.id})")
+        return {
+            "status": "Already Anonymized",
+            "anonymized_id": str(existing.id),
+            "file_id": file_id,
+            "message": "An active anonymization already exists for this file."
+        }
 
     anonymized_dir = os.path.join(os.path.dirname(file_entry.filepath), "anonymized")
     os.makedirs(anonymized_dir, exist_ok=True)
@@ -85,17 +97,19 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
     risk_result = service.compute_risk_score(final_masked_doc, global_presidio_map, global_spacy_map)
 
     if run_id:
-        run = get_object_or_404(AnonymizationRun, id=run_id)
-        run.status = "Completed"
-        run.save(update_fields=["status"])
+        anonymization_run = get_object_or_404(AnonymizationRun, id=run_id)
+        anonymization_run.status = "Completed"
+        anonymization_run.save(update_fields=["status"])
     else:
-        run = AnonymizationRun.objects.create(
-            project_id=file_entry.project_id,
-            service_id=file_entry.service_id,
-            client_name=file_entry.user.username or file_entry.user.email,
-            status="Completed",
-            anonymization_type="Presidio-Spacy"
-        )
+        anonymization_run = AnonymizationRun.objects.create(
+                project_id=file_entry.project_id,
+                service_id=file_entry.service_id,
+                client_name=file_entry.user.username or file_entry.user.email,
+                status="Completed",
+                anonymization_type="Presidio-Spacy"
+                )
+
+        run = file_entry.run # ✅ Still fallback to the File’s Run
 
     with transaction.atomic():
         
@@ -112,7 +126,7 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
 
         Anonymize.objects.create(
             original_file=file_entry,
-            run=run,
+            run=anonymization_run,
             file_type=file_type,
             is_active=True,
             anonymized_filepath=txt_path,
@@ -130,11 +144,45 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
             status="Completed"
         )
 
+
+        # ✅ Register each generated file in the File table
+        user = file_entry.user
+        project_id = file_entry.project_id
+        service_id = file_entry.service_id
+
+        registered_files = []
+
+        upload_run = file_entry.run  # This is from core.models.Run
+
+        for path in [
+            txt_path,
+            json_path,
+            html_path,
+            structured_json_path,
+            structured_txt_path,
+            structured_html_path
+        ]:
+            if path and os.path.exists(path):
+                registered = register_generated_file(
+                    file_path=path,
+                    user=user,
+                    run=upload_run,
+                    project_id=project_id,
+                    service_id=service_id,
+                    folder_name="anonymized"
+                )
+                registered_files.append({
+                    "filename": registered.filename,
+                    "file_id": registered.id,
+                    "path": registered.filepath
+                })
+
     return {
         "file_id": file_id,
         "anonymization_run_id": str(run.id),
         "file_type": file_type,
-        "status": "Completed"
+        "status": "Completed",
+        "registered_outputs": registered_files
     }
 
 

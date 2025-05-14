@@ -9,6 +9,8 @@ from django.utils.timezone import now
 from core.models import File
 from document_translation.models import TranslationRun, TranslationFile
 from document_translation.utils import TranslationService, AzureBlobService
+from core.utils import register_generated_file
+
 
 # ✅ Initialize Services
 logger = logging.getLogger(__name__)
@@ -16,6 +18,280 @@ translation_service = TranslationService()
 azure_service = AzureBlobService()
 
 
+@shared_task
+def translate_document_task(file_id, from_language, to_language):
+    logger.info(f"🔄 Starting translation for file_id={file_id}, {from_language} ➔ {to_language}")
+    file_entry = get_object_or_404(File, id=file_id)
+
+    if not os.path.exists(file_entry.filepath):
+        logger.error(f"❌ File not found: {file_entry.filepath}")
+        return {"error": "File not found", "file_id": file_id}
+
+    # ✅ Check if already translated to this language
+    existing_translation = TranslationFile.objects.filter(
+        original_file=file_entry,
+        run__to_language=to_language,
+        status="Completed"
+    ).first()
+
+    if existing_translation and os.path.exists(existing_translation.translated_filepath):
+        logger.info(f"⚠️ Duplicate translation. Already translated to {to_language}")
+
+        registered = File.objects.filter(filepath=existing_translation.translated_filepath).first()
+        if not registered:
+            registered = register_generated_file(
+                file_path=existing_translation.translated_filepath,
+                user=file_entry.user,
+                run=existing_translation.run,
+                project_id=file_entry.project_id,
+                service_id=file_entry.service_id,
+                folder_name=os.path.join("translations", to_language)
+            )
+
+        return {
+            "status": "Already Translated",
+            "translation_run_id": str(existing_translation.run.id),
+            "file_id": file_id,
+            "translated_filepath": existing_translation.translated_filepath,
+            "registered_outputs": [{
+                "filename": registered.filename,
+                "file_id": registered.id,
+                "path": registered.filepath
+            }]
+        }
+
+    # ✅ Setup output dir and containers
+    output_dir = os.path.join(os.path.dirname(file_entry.filepath), "translations", to_language)
+    os.makedirs(output_dir, exist_ok=True)
+
+    translation_run = TranslationRun.objects.create(
+        project_id=file_entry.project_id,
+        service_id=file_entry.service_id,
+        client_name=file_entry.user.username or file_entry.user.email,
+        status="Pending",
+        from_language=from_language,
+        to_language=to_language
+    )
+
+    source_container = f"translation-source-{uuid.uuid4()}"
+    target_container = f"translation-target-{uuid.uuid4()}"
+
+    try:
+        azure_service.ensure_container_exists(source_container)
+        azure_service.ensure_container_exists(target_container)
+        azure_service.upload_file_if_not_exists(source_container, file_entry.filepath)
+
+        result = translation_service.translate_file(file_id, translation_run.id, from_language, to_language)
+        translated_path = result.get("translated_file")
+
+        if not translated_path or not os.path.exists(translated_path):
+            raise ValueError("Translation completed but no output file found")
+
+        translation_run.status = "Completed"
+        translation_run.save()
+
+        registered_files = []
+
+        with transaction.atomic():
+            # ✅ Don't duplicate TranslationFile
+            tf_exists = TranslationFile.objects.filter(
+                original_file=file_entry,
+                run=translation_run
+            ).exists()
+
+            if not tf_exists:
+                TranslationFile.objects.create(
+                    original_file=file_entry,
+                    run=translation_run,
+                    translated_filepath=translated_path,
+                    status="Completed",
+                    created_at=now(),
+                    updated_at=now()
+                )
+
+            # ✅ Register
+            # ✅ Register translated file with the original upload run (not the translation run)
+            upload_run = file_entry.run  # ✅ This is the core run from File model
+            registered = File.objects.filter(filepath=translated_path).first()
+
+            if not registered:
+                registered = register_generated_file(
+                    file_path=translated_path,
+                    user=file_entry.user,
+                    run=upload_run,
+                    project_id=file_entry.project_id,
+                    service_id=file_entry.service_id,
+                    folder_name=os.path.join("translations", to_language)
+                )
+
+            registered_files.append({
+                "filename": registered.filename,
+                "file_id": registered.id,
+                "path": registered.filepath
+            })
+
+        logger.info(f"✅ Translation done for file_id={file_id}")
+        return {
+            "translation_run_id": str(translation_run.id),
+            "file_id": file_id,
+            "status": "Completed",
+            "translated_filepath": translated_path,
+            "registered_outputs": registered_files
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Translation failed: {e}")
+        translation_run.status = "Failed"
+        translation_run.error_message = str(e)
+        translation_run.save()
+        return {"error": str(e), "file_id": file_id}
+
+    finally:
+        azure_service.delete_container(source_container)
+        azure_service.delete_container(target_container)
+
+
+
+
+'''
+@shared_task
+def translate_document_task(file_id, from_language, to_language):
+    logger.info(f"🔄 Starting translation for file_id: {file_id}, from {from_language} to {to_language}")
+    file_entry = get_object_or_404(File, id=file_id)
+
+    if not os.path.exists(file_entry.filepath):
+        logger.error(f"❌ File not found: {file_entry.filepath}")
+        return {"error": "File not found", "file_id": file_id}
+
+    # ✅ EARLY EXIT: Already translated
+    existing_translation = TranslationFile.objects.filter(
+        original_file=file_entry,
+        run__to_language=to_language,
+        status="Completed"
+    ).first()
+    
+    if existing_translation and os.path.exists(existing_translation.translated_filepath):
+        logger.info(f"⚠️ Skipping duplicate translation. File ID {file_id} already translated to {to_language}")
+
+        # ✅ Ensure translated file is registered in the File model
+        registered = File.objects.filter(filepath=existing_translation.translated_filepath).first()
+        registered_files = []
+
+        if not registered:
+            # Register now
+            registered = register_generated_file(
+                file_path=existing_translation.translated_filepath,
+                user=file_entry.user,
+                run=file_entry.run,
+                # run=existing_translation.run,  # ✅ FIXED
+                project_id=file_entry.project_id,
+                service_id=file_entry.service_id,
+                folder_name=os.path.join("translations", to_language)
+            )
+
+        registered_files.append({
+            "filename": registered.filename,
+            "file_id": registered.id,
+            "path": registered.filepath
+        })
+
+        return {
+            "status": "Already Translated",
+            "translation_run_id": str(existing_translation.run.id),
+            "file_id": file_id,
+            "translated_filepath": existing_translation.translated_filepath,
+            "registered_outputs": registered_files
+        }
+
+
+    # ✅ Prepare output folder
+    translation_dir = os.path.join(os.path.dirname(file_entry.filepath), "translations", to_language)
+    os.makedirs(translation_dir, exist_ok=True)
+
+    # ✅ Create TranslationRun
+    translation_run = TranslationRun.objects.create(
+        project_id=file_entry.project_id,
+        service_id=file_entry.service_id,
+        client_name=file_entry.user.username or file_entry.user.email,
+        status="Pending",
+        from_language=from_language,
+        to_language=to_language
+    )
+
+    source_container = f"translation-source-{uuid.uuid4()}"
+    target_container = f"translation-target-{uuid.uuid4()}"
+
+    try:
+        azure_service.ensure_container_exists(source_container)
+        azure_service.ensure_container_exists(target_container)
+        azure_service.upload_file_if_not_exists(source_container, file_entry.filepath)
+
+        # ✅ Perform translation
+        translation_result = translation_service.translate_file(
+            file_entry.id, translation_run.id, from_language, to_language
+        )
+        translated_filepath = translation_result.get("translated_file")
+
+        if not translated_filepath or not os.path.exists(translated_filepath):
+            raise ValueError("Translation process completed, but no translated file was found.")
+
+        # ✅ Mark run as completed
+        translation_run.status = "Completed"
+        translation_run.save()
+
+        registered_files = []
+        with transaction.atomic():
+            # ✅ Save TranslationFile
+            TranslationFile.objects.create(
+                original_file=file_entry,
+                run=translation_run,
+                # run=file_entry.run,
+                translated_filepath=translated_filepath,
+                status="Completed",
+                created_at=now(),
+                updated_at=now()
+            )
+
+            # ✅ Register in File model
+            registered = register_generated_file(
+                file_path=translated_filepath,
+                user=file_entry.user,
+                run=file_entry.run,  # Use original upload Run
+                #run=translation_run,
+                project_id=file_entry.project_id,
+                service_id=file_entry.service_id,
+                folder_name=os.path.join("translations", to_language)
+            )
+            registered_files.append({
+                "filename": registered.filename,
+                "file_id": registered.id,
+                "path": registered.filepath
+            })
+
+        logger.info(f"✅ Translation completed and registered for file_id={file_id}")
+        return {
+            "translation_run_id": str(translation_run.id),
+            "file_id": file_id,
+            "status": "Completed",
+            "translated_filepath": translated_filepath,
+            "registered_outputs": registered_files
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Translation failed: {e}")
+        translation_run.status = "Failed"
+        translation_run.error_message = str(e)
+        translation_run.save()
+        return {"error": str(e), "file_id": file_id}
+
+    finally:
+        azure_service.delete_container(source_container)
+        azure_service.delete_container(target_container)
+'''
+
+
+
+'''
 @shared_task
 def translate_document_task(file_id, from_language, to_language):
     """
@@ -117,6 +393,7 @@ def translate_document_task(file_id, from_language, to_language):
         # ✅ Ensure containers are deleted to clean up storage
         azure_service.delete_container(source_container)
         azure_service.delete_container(target_container)
+'''
 
 
 @shared_task

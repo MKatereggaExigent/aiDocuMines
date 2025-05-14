@@ -15,6 +15,7 @@ from .views import (
     DocumentRiskScoreView,               # ✅ NEW
     DocumentRiskScoreResultView,        # ✅ NEW
     DownloadStructuredDocxView,
+    DownloadRedactionReadyJSONView,
     health_check
 )
 from .task_statuses import AnonymizationTaskStatusView
@@ -43,6 +44,8 @@ urlpatterns = [
     path("download-structured-json/", DownloadStructuredJSONView.as_view(), name="download-structured-json"),
     path("download-structured-docx/", DownloadStructuredDocxView.as_view(), name="download-structured-docx"),
 
+    # Download Masks json file
+    path("download-redaction-json/", DownloadRedactionReadyJSONView.as_view(), name="download-redaction-json"),
 
     # Risk Score
     path("risk-score/", DocumentRiskScoreView.as_view(), name="risk-score"),

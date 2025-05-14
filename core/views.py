@@ -27,7 +27,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status, permissions
 from document_operations.models import Folder, FileFolderLink
 from django.utils import timezone
-
+from django.contrib.contenttypes.models import ContentType
 
 logger = logging.getLogger(__name__)
 
@@ -176,8 +176,63 @@ class FileUploadView(APIView):
                 temp_details["file_path"] = final_path
             
                 # Save storage & DB entry
-                storage = Storage.objects.create(user=user, run=run, upload_storage_location=final_path)
-            
+                #storage = Storage.objects.create(user=user, run=run, upload_storage_location=final_path)
+                storage = Storage.objects.create(user=user, content_type=ContentType.objects.get_for_model(run.__class__), upload_storage_location=final_path)
+    
+                # ✅ No duplicate: create a preliminary File instance to get file_id
+                #storage = Storage.objects.create(user=user, run=run)  # Temp storage, we'll update upload path after
+                storage = Storage.objects.create(user=user, content_type=ContentType.objects.get_for_model(run.__class__))  # Temp storage, we'll update upload path after
+
+                file_instance = File.objects.create(
+                    run=run,
+                    storage=storage,
+                    filename=temp_details["filename"],
+                    filepath="",  # temp placeholder
+                    file_size=temp_details["file_size"],
+                    file_type=temp_details["file_type"],
+                    md5_hash=temp_details["md5_hash"],
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                )
+
+                # ✅ Now we have the file_id; compute final path
+                final_upload_dir = os.path.join(settings.MEDIA_ROOT, "uploads", user_id, timestamp, client_id, project_id, service_id, run_id, str(file_instance.id))
+                os.makedirs(final_upload_dir, exist_ok=True)
+
+                # Move file to final location
+                final_path = os.path.join(final_upload_dir, temp_details["filename"])
+                os.rename(temp_details["file_path"], final_path)
+                temp_details["file_path"] = final_path
+
+                # ✅ Update File and Storage with correct filepath
+                file_instance.filepath = final_path
+                file_instance.save()
+
+                storage.upload_storage_location = final_path
+                storage.save()
+
+                # Record file info for response
+                file_data.append({
+                    "file_id": file_instance.id,
+                    "filename": temp_details["filename"],
+                    "file_size": temp_details["file_size"],
+                    "mime_type": temp_details["file_type"],
+                    "message": "File successfully uploaded.",
+                })
+
+                # ✅ Link to folder
+                folder, _ = Folder.objects.get_or_create(
+                    name=project_id,
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                    defaults={"created_at": timezone.now()}
+                )
+                FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
+
+
+                '''
                 file_instance = File.objects.create(
                     run=run,
                     storage=storage,
@@ -207,6 +262,7 @@ class FileUploadView(APIView):
                     defaults={"created_at": timezone.now()}
                 )
                 FileFolderLink.objects.get_or_create(file=file_instance, folder=folder) 
+                '''
 
             except IntegrityError as e:
                 if 'core_file_md5_hash_key' in str(e):
@@ -476,7 +532,7 @@ class BulkFolderUploadView(APIView):
             file_details = save_uploaded_file(f, os.path.dirname(target_path), custom_filename=os.path.basename(target_path))
 
             try:
-                storage = Storage.objects.create(user=user, run=run, upload_storage_location=file_details["file_path"])
+                storage = Storage.objects.create(user=user, content_type=ContentType.objects.get_for_model(run.__class__), upload_storage_location=file_details["file_path"])
 
                 file_instance = File.objects.create(
                     run=run,

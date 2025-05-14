@@ -90,6 +90,14 @@ class AnonymizationTaskStatusView(APIView):
         de_anonymized_file = DeAnonymize.objects.filter(file=anonymized_file.original_file).first()
         entity_mapping = anonymized_file.spacy_masking_map or anonymized_file.presidio_masking_map or {}
 
+
+        # 🆕 Fetch all registered File entries for this run
+        registered_outputs = list(
+            File.objects.filter(run=anonymized_file.original_file.run)
+            .exclude(id=anonymized_file.original_file.id)  # exclude original
+            .values("id", "filename", "filepath")
+        )
+
         return Response({
             "anonymization_run_id": str(run_instance.id),
             "original_file_id": str(anonymized_file.original_file.id),
@@ -115,6 +123,7 @@ class AnonymizationTaskStatusView(APIView):
                 "markdown": anonymized_file.anonymized_markdown_filepath,
                 "structured": anonymized_file.anonymized_structured_filepath,
                 "deanonymized": de_anonymized_file.unmasked_filepath if de_anonymized_file else None
-            }
+            },
+            "registered_outputs": registered_outputs  # 🆕 Add this line
         }, status=200)
 
