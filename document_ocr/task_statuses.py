@@ -100,6 +100,15 @@ class OCRTaskStatusView(APIView):
         if not ocr_file:
             return Response({"error": "No OCR file found for the provided details"}, status=404)
 
+
+        # 🆕 Fetch all registered File entries for this run (except original)
+        registered_outputs = list(
+            File.objects.filter(run=ocr_file.original_file.run)
+            .exclude(id=ocr_file.original_file.id)
+            .values("id", "filename", "filepath")
+        )
+
+
         # ✅ Ensure that file paths exist and are formatted correctly
         response_data = {
             "ocr_run_id": str(run_instance.id),
@@ -117,6 +126,7 @@ class OCRTaskStatusView(APIView):
             "raw_docx_path": ocr_file.raw_docx_path if ocr_file.raw_docx_path else "N/A",
             "created_at": ocr_file.created_at,
             "updated_at": ocr_file.updated_at,
+            "registered_outputs": registered_outputs  # ✅ Added
         }
 
         return Response(response_data, status=200)

@@ -13,6 +13,8 @@ from docx import Document
 from document_ocr.models import OCRRun, OCRFile
 from document_ocr.utils import OCRService, cleanup_tmp_dir
 import uuid
+from core.utils import register_generated_file
+
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +199,19 @@ def merge_ocr_batches(results, ocr_file_id, bookmarks_list):
         file_entry.save()
         return None
 
+
+        # Register OCR’d PDF in File table
+        upload_run = file_entry.original_file.run
+        registered = register_generated_file(
+            file_path=final_pdf_path,
+            user=file_entry.original_file.user,
+            run=upload_run,
+            project_id=file_entry.original_file.project_id,
+            service_id=file_entry.original_file.service_id,
+            folder_name="ocr"
+        )
+
+
     # ✅ Reattach bookmarks
     pdf_document = fitz.open(final_pdf_path)
     total_pages = pdf_document.page_count
@@ -223,10 +238,75 @@ def merge_ocr_batches(results, ocr_file_id, bookmarks_list):
     # ✅ **Trigger DOCX conversion**
     process_pdf_to_docx.delay(file_entry.id, final_pdf_path)
 
-    return final_pdf_path
+    # return final_pdf_path
+
+
+    return {
+        "ocr_run_id": str(file_entry.run.id),
+        "file_id": file_entry.original_file.id,
+        "ocr_file_id": file_entry.id,
+        "ocr_merged_pdf": final_pdf_path,
+        "status": "Completed",
+        "registered_outputs": [{
+            "file_id": registered.id,
+            "filename": registered.filename,
+            "path": registered.filepath
+        }]
+    }
+
+
+@shared_task
+def process_pdf_to_docx(ocr_file_id, final_pdf_path):
+    """Converts an OCR’ed PDF to formatted DOCX and registers it in the File model."""
+    file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
+
+    # ✅ Ensure OCRed PDF exists before conversion
+    if not final_pdf_path or not os.path.exists(final_pdf_path):
+        logger.error(f"❌ No OCRed PDF found at {final_pdf_path}. Skipping DOCX conversion.")
+        return {"error": "OCRed PDF not found", "ocr_file_id": ocr_file_id}
+
+    ocr_service = OCRService()
+    ocr_dir = os.path.dirname(final_pdf_path)
+    formatted_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_formatted.docx")
+
+    # ✅ Convert to formatted DOCX
+    formatted_output = ocr_service.convert_to_formatted_docx(final_pdf_path, formatted_docx_path)
+
+    registered = None
+    if formatted_output:
+        with transaction.atomic():
+            file_entry.docx_path = formatted_output
+            file_entry.save()
+
+        # ✅ Register in File table
+        registered = register_generated_file(
+            file_path=formatted_output,
+            user=file_entry.original_file.user,
+            run=file_entry.original_file.run,
+            project_id=file_entry.original_file.project_id,
+            service_id=file_entry.original_file.service_id,
+            folder_name="ocr"
+        )
+
+        # ✅ Trigger raw DOCX generation
+        generate_raw_docx.delay(file_entry.id)
+
+    return {
+        "ocr_run_id": str(file_entry.run.id),
+        "file_id": file_entry.original_file.id,
+        "ocr_file_id": file_entry.id,
+        "formatted_docx": formatted_output,
+        "status": "Completed" if formatted_output else "Failed",
+        "registered_outputs": [{
+            "file_id": registered.id,
+            "filename": registered.filename,
+            "path": registered.filepath
+        }] if registered else []
+    }
 
 
 
+'''
 @shared_task
 def process_pdf_to_docx(ocr_file_id, final_pdf_path):
     """Converts an OCR’ed PDF to both formatted and raw DOCX and updates the database."""
@@ -256,9 +336,92 @@ def process_pdf_to_docx(ocr_file_id, final_pdf_path):
     if formatted_output:
         generate_raw_docx.delay(file_entry.id)
 
+    register_generated_file(
+        file_path=formatted_output,
+        user=file_entry.original_file.user,
+        run=file_entry.original_file.run,
+        project_id=file_entry.original_file.project_id,
+        service_id=file_entry.original_file.service_id,
+        folder_name="ocr"
+    )
+
+
     return {"formatted_docx": formatted_output}
+'''
 
 
+@shared_task
+def generate_raw_docx(ocr_file_id):
+    """Generate and register a raw DOCX with unformatted text extracted from the formatted DOCX."""
+    file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
+
+    if not file_entry.docx_path or not os.path.exists(file_entry.docx_path):
+        logger.error(f"❌ No formatted DOCX found for ocr_file_id: {ocr_file_id}. Skipping RAW DOCX creation.")
+        return {
+            "ocr_file_id": ocr_file_id,
+            "status": "Failed",
+            "error": "Formatted DOCX not found"
+        }
+
+    # ✅ Define path for RAW DOCX
+    ocr_dir = os.path.dirname(file_entry.docx_path)
+    raw_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_raw.docx")
+
+    original_doc = Document(file_entry.docx_path)
+    raw_doc = Document()
+
+    for para in original_doc.paragraphs:
+        if para.text.strip():
+            new_para = raw_doc.add_paragraph(para.text)
+
+            new_para.paragraph_format.left_indent = None
+            new_para.paragraph_format.right_indent = None
+            new_para.paragraph_format.first_line_indent = None
+            new_para.paragraph_format.space_before = None
+            new_para.paragraph_format.space_after = None
+            new_para.paragraph_format.alignment = None
+
+            for run in new_para.runs:
+                run.bold = False
+                run.italic = False
+                run.underline = False
+
+    raw_doc.save(raw_docx_path)
+
+    # ✅ Register file
+    registered = register_generated_file(
+        file_path=raw_docx_path,
+        user=file_entry.original_file.user,
+        run=file_entry.original_file.run,
+        project_id=file_entry.original_file.project_id,
+        service_id=file_entry.original_file.service_id,
+        folder_name="ocr"
+    )
+
+    # ✅ Save to DB
+    with transaction.atomic():
+        file_entry.raw_docx_path = raw_docx_path
+        file_entry.save()
+
+    logger.info(f"✅ Raw DOCX created and registered: {raw_docx_path}")
+
+    return {
+        "ocr_run_id": str(file_entry.run.id),
+        "file_id": file_entry.original_file.id,
+        "ocr_file_id": file_entry.id,
+        "raw_docx": raw_docx_path,
+        "status": "Completed",
+        "registered_outputs": [{
+            "file_id": registered.id,
+            "filename": registered.filename,
+            "path": registered.filepath
+        }]
+    }
+
+
+
+
+'''
 @shared_task
 def generate_raw_docx(ocr_file_id):
     """Generate a raw DOCX file with unformatted text extracted from the formatted DOCX."""
@@ -299,6 +462,15 @@ def generate_raw_docx(ocr_file_id):
     # ✅ Save the raw DOCX
     raw_doc.save(raw_docx_path)
 
+    register_generated_file(
+        file_path=raw_docx_path,
+        user=file_entry.original_file.user,
+        run=file_entry.original_file.run,
+        project_id=file_entry.original_file.project_id,
+        service_id=file_entry.original_file.service_id,
+        folder_name="ocr"
+    )
+
     # ✅ Update database record with raw_docx path
     with transaction.atomic():
         file_entry.raw_docx_path = raw_docx_path
@@ -307,3 +479,5 @@ def generate_raw_docx(ocr_file_id):
     logger.info(f"✅ Raw DOCX created at {raw_docx_path}")
 
     return raw_docx_path
+
+'''
