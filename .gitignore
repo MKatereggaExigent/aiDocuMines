@@ -195,7 +195,7 @@ ImageMagick-7.*/utilities/magick
 **/*.pyo
 **/*.pyd
 **/*.so
-
+*.env
 # Allow GitHub workflows
 !.github/
 !.github/workflows/
