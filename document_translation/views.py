@@ -21,6 +21,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework import generics
 from document_translation.serializers import TranslationFileSerializer
 
+from django.http import FileResponse, Http404
+from django.utils.encoding import smart_str
+
+
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
@@ -201,3 +205,5 @@ class TranslationFileDownloadView(generics.RetrieveAPIView):
         if getattr(self, 'swagger_fake_view', False):
             return None  # ✅ Short-circuit schema generation for Swagger
         return super().get(request, *args, **kwargs)
+
+

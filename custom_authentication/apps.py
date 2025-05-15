@@ -6,4 +6,3 @@ class CustomAuthenticationConfig(AppConfig):
     name = 'custom_authentication'
     verbose_name = "Custom Authentication"
 
-

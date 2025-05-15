@@ -12,6 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 from .tasks import process_file_query, process_db_query
 
+
 import csv
 from io import StringIO
 import os
@@ -99,6 +100,7 @@ class QueryViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+
     @action(detail=False, methods=['post'], url_path='ask')
     def ask_query(self, request):
         topic_id = request.data.get("topic_id")
@@ -116,17 +118,24 @@ class QueryViewSet(viewsets.ModelViewSet):
 
         topic = get_object_or_404(Topic, id=topic_id, user=request.user)
 
+        # 🧠 Build conversation memory
+        previous_messages = []
+        past_queries = Query.objects.filter(topic=topic).order_by('created_at')
+        for q in past_queries:
+            previous_messages.append({"role": "user", "content": q.query_text})
+            previous_messages.append({"role": "assistant", "content": q.response_text})
+
         try:
             if data_source == "file":
                 if not file_id:
                     return Response({"error": "file_id is required for file-based queries."}, status=400)
 
                 file = get_object_or_404(File, id=file_id)
-                task = process_file_query.delay(query_text, file.filepath, llm_config)
+                task = process_file_query.delay(query_text, file.filepath, llm_config, previous_messages=previous_messages)
             elif data_source == "db":
                 connection_string = request.data.get("connection_string")
                 table_name = request.data.get("table")
-                task = process_db_query.delay(query_text, connection_string, table_name, llm_config)
+                task = process_db_query.delay(query_text, connection_string, table_name, llm_config, previous_messages=previous_messages)
                 file = None
             else:
                 return Response({"error": "Invalid data_source. Must be 'file' or 'db'."}, status=400)
@@ -145,6 +154,7 @@ class QueryViewSet(viewsets.ModelViewSet):
 
         except Exception as e:
             return Response({"error": f"Query processing failed: {str(e)}"}, status=500)
+
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
@@ -218,9 +228,31 @@ class QueryViewSet(viewsets.ModelViewSet):
             "model": "gpt-4o"
         })
 
+        # Retrieve previous queries in topic as message history
+        previous_queries = Query.objects.filter(
+            topic=original.topic,
+            user=request.user,
+        ).order_by('created_at')
+
+        previous_messages = []
+        for q in previous_queries:
+            if q.query_text:
+                previous_messages.append({"role": "user", "content": q.query_text})
+            if q.response_text:
+                previous_messages.append({"role": "assistant", "content": q.response_text})
+
+        # Now ask again using the new input with history
         if original.file:
-            task = process_file_query.delay(new_query_text, original.file.filepath, llm_config)
-            result = task.get(timeout=60)
+            from .utils import execute_file_query  # Ensure this is imported
+            try:
+                result = execute_file_query(
+                    query_text=new_query_text,
+                    file_path=original.file.filepath,
+                    llm_config=llm_config,
+                    previous_messages=previous_messages
+                )
+            except Exception as e:
+                return Response({"error": f"Follow-up query failed: {str(e)}"}, status=500)
         else:
             return Response({"error": "Re-ask is only supported for file-based queries for now."}, status=400)
 
@@ -233,6 +265,28 @@ class QueryViewSet(viewsets.ModelViewSet):
         )
 
         return Response(QuerySerializer(new_query).data)
+
+    @action(detail=False, methods=['get'], url_path='chat-history')
+    def chat_history(self, request):
+        topic_id = request.query_params.get("topic_id")
+        if not topic_id:
+            return Response({"error": "Missing topic_id"}, status=400)
+
+        topic = get_object_or_404(Topic, id=topic_id, user=request.user)
+
+        queries = Query.objects.filter(topic=topic, user=request.user).order_by('created_at')
+
+        history = []
+        for q in queries:
+            history.append({"role": "user", "content": q.query_text, "timestamp": q.created_at})
+            history.append({"role": "assistant", "content": q.response_text, "timestamp": q.created_at})
+
+        return Response({
+            "topic_id": topic.id,
+            "topic_name": topic.name,
+            "messages": history
+        })
+
 
     @action(detail=False, methods=['get'], url_path='ocr-preview')
     def ocr_preview(self, request):

@@ -44,7 +44,57 @@ def chunk_text_by_token_limit(text, model_name, max_reserved_tokens=1000):
         chunks.append(" ".join(current_chunk))
     return chunks
 
-def dispatch_to_llm(query_text, chunk, llm_config):
+
+def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
+    provider = llm_config.get("provider", "openai")
+    model = llm_config.get("model", "gpt-3.5-turbo")
+    api_key = llm_config.get("api_key")
+    endpoint = llm_config.get("endpoint")
+
+    if provider == "openai":
+        client = OpenAI(api_key=api_key) if api_key else OpenAI()
+
+        # Construct message history
+        messages = [
+            {"role": "system", "content": "You are a data analysis assistant."}
+        ]
+
+        if previous_messages:
+            for msg in previous_messages:
+                messages.append({"role": "user", "content": msg.get("query")})
+                messages.append({"role": "assistant", "content": msg.get("response")})
+
+        messages.append({"role": "user", "content": f"Document: {chunk}\n\nQuestion: {query_text}"})
+
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=2048,
+            messages=messages
+        )
+        return response.choices[0].message.content
+
+    elif provider == "ollama":
+        chat = ChatOllama(model=model)
+        context = ""
+        if previous_messages:
+            for msg in previous_messages:
+                context += f"User: {msg.get('query')}\nAssistant: {msg.get('response')}\n"
+        context += f"Document: {chunk}\n\nQuestion: {query_text}"
+        return chat.invoke(context)
+
+    elif provider == "langchain":
+        raise NotImplementedError("LangChain support is not yet implemented.")
+
+    elif provider == "mcp":
+        raise NotImplementedError("MCP provider not yet integrated.")
+
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+
+
+'''
+def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
     provider = llm_config.get("provider", "openai")
     model = llm_config.get("model", "gpt-3.5-turbo")
     api_key = llm_config.get("api_key")
@@ -74,7 +124,37 @@ def dispatch_to_llm(query_text, chunk, llm_config):
 
     else:
         raise ValueError(f"Unsupported provider: {provider}")
+'''
 
+def execute_file_query(query_text, file_path, llm_config, previous_messages=None):
+    from .file_readers import read_file, convert_dataframe_to_text
+
+    content, is_tabular = read_file(file_path)
+    if content is None:
+        raise ValueError("File content could not be read. Ensure the file format is supported.")
+    if is_tabular:
+        content = convert_dataframe_to_text(content)
+    if not isinstance(content, str):
+        content = str(content)
+    if not content.strip():
+        raise ValueError("The file appears empty or unreadable.")
+
+    model_name = llm_config.get("model", "default")
+    token_chunks = chunk_text_by_token_limit(content, model_name)
+
+    answers = []
+    for i, chunk in enumerate(token_chunks):
+        try:
+            print(f"[INFO] Sending chunk {i+1}/{len(token_chunks)} to LLM...")
+            answer = dispatch_to_llm(query_text, chunk, llm_config, previous_messages=previous_messages)
+            answers.append(answer)
+        except Exception as e:
+            print(f"[ERROR] Failed to process chunk {i+1}: {e}")
+            answers.append(f"[Error processing chunk: {e}]")
+    return "\n\n---\n\n".join(answers)
+
+
+'''
 def execute_file_query(query_text, file_path, llm_config):
     from .file_readers import read_file, convert_dataframe_to_text
 
@@ -101,8 +181,68 @@ def execute_file_query(query_text, file_path, llm_config):
             print(f"[ERROR] Failed to process chunk {i+1}: {e}")
             answers.append(f"[Error processing chunk: {e}]")
     return "\n\n---\n\n".join(answers)
+'''
+
+def execute_db_query(query_text, connection_string, table_name, llm_config, stream=False, chunk_size=100, previous_messages=None):
+    from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query
+
+    try:
+        print(f"[DEBUG] Connecting to database using: {connection_string}")
+        column_names = fetch_column_names(connection_string, table_name)
+        print(f"[DEBUG] Retrieved columns: {column_names}")
+
+        sql_query = generate_sql_query(table_name, query_text, column_names)
+        if not sql_query:
+            print(f"[INFO] SQL generation failed, using fallback: SELECT * FROM {table_name} LIMIT 100")
+            sql_query = f"SELECT * FROM {table_name} LIMIT 100"
+
+        print(f"[DEBUG] Final SQL Query: {sql_query}")
+        result = execute_sql_query(connection_string, sql_query, stream=stream, chunk_size=chunk_size)
+
+        # Normalize results to text for LLM
+        text_data = ""
+        if isinstance(result, pd.DataFrame):
+            print(f"[DEBUG] Got DataFrame with shape: {result.shape}")
+            text_data = result.to_csv(index=False)
+        elif hasattr(result, '__iter__') and not isinstance(result, (str, bytes, dict)):
+            chunks = []
+            for item in result:
+                if isinstance(item, pd.DataFrame):
+                    if not item.empty:
+                        chunks.append(item.to_csv(index=False))
+                else:
+                    chunks.append(str(item))
+            text_data = "\n\n".join(chunks)
+        else:
+            text_data = str(result)
+
+        print(f"[DEBUG] Extracted text data length: {len(text_data)}")
+        if not text_data.strip():
+            print("[WARN] Query returned no usable data.")
+            return "The table exists but contains no data rows to analyze."
+
+        # Process with LLM
+        model_name = llm_config.get("model", "default")
+        token_chunks = chunk_text_by_token_limit(text_data, model_name)
+
+        answers = []
+        for i, chunk in enumerate(token_chunks):
+            try:
+                print(f"[INFO] Sending chunk {i+1}/{len(token_chunks)} to LLM...")
+                answer = dispatch_to_llm(query_text, chunk, llm_config, previous_messages=previous_messages)
+                answers.append(answer)
+            except Exception as e:
+                print(f"[ERROR] Failed to process chunk {i+1}: {e}")
+                answers.append(f"[Error processing chunk: {e}]")
+
+        return "\n\n---\n\n".join(answers)
+
+    except Exception as e:
+        print(f"[FATAL] Unexpected error in DB query pipeline: {e}")
+        return f"[ERROR] Database query failed: {str(e)}"
 
 
+'''
 def execute_db_query(query_text, connection_string, table_name, llm_config, stream=False, chunk_size=100):
     from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query
 
@@ -160,6 +300,7 @@ def execute_db_query(query_text, connection_string, table_name, llm_config, stre
     except Exception as e:
         print(f"[FATAL] Unexpected error in DB query pipeline: {e}")
         return f"[ERROR] Database query failed: {str(e)}"
+'''
 
 
 def get_token_limit(model):

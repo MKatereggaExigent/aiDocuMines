@@ -465,6 +465,30 @@ class FileDownloadView(APIView):
         manual_parameters=[client_id_param, file_id_param],
         responses={200: "Success", 404: "File Not Found"},
     )
+
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        try:
+            file = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            return Response({"error": "File not found"}, status=404)
+
+        real_path = file.filepath.replace("/app/", "")  # Map container path to host
+        if not os.path.exists(real_path):
+            return Response({"error": "File not found on disk"}, status=404)
+
+        return FileResponse(
+            open(real_path, "rb"),
+            as_attachment=True,
+            filename=os.path.basename(real_path),
+            content_type="application/pdf"
+        )
+
+
+    '''
     def get(self, request):
         client_id = request.headers.get("X-Client-ID")
         file_id = request.query_params.get("file_id")
@@ -478,7 +502,7 @@ class FileDownloadView(APIView):
 
         # ✅ Return FileResponse for download
         return FileResponse(open(file_instance.filepath, "rb"), as_attachment=True, filename=file_instance.filename)
-
+    '''
 
 
 @method_decorator(csrf_exempt, name="dispatch")
