@@ -533,6 +533,11 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
         output_storage_location=None
     )
 
+
+    existing = File.objects.filter(md5_hash=md5_hash, user=user).first()
+    if existing:
+        return existing
+
     # ✅ Register File with link to Storage and optionally Run
     from core.models import Run
     file_instance = File.objects.create(
@@ -562,146 +567,3 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
     return file_instance
 
 
-
-
-'''
-def register_generated_file(file_path, user, run, project_id, service_id, folder_name="generated", translation_run=None):
-    """
-    Registers any generated file (e.g., anonymized, translated) into the File table
-    with proper folder linkage, mimicking the upload pipeline.
-    """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Cannot register missing file: {file_path}")
-
-    # Calculate MD5 hash
-    with open(file_path, "rb") as f:
-        content = f.read()
-        md5_hash = hashlib.md5(content).hexdigest()
-
-    # Create a Storage entry with the translation_run if it exists
-    if translation_run:
-        storage = Storage.objects.create(user=user, translation_run=translation_run, upload_storage_location=file_path)
-    else:
-        storage = Storage.objects.create(user=user, run=run, upload_storage_location=file_path)
-
-    # Create the File entry
-    file_instance = File.objects.create(
-        run=run,
-        storage=storage,
-        filename=os.path.basename(file_path),
-        filepath=file_path,
-        file_size=os.path.getsize(file_path),
-        file_type=os.path.splitext(file_path)[1].lstrip("."),
-        md5_hash=md5_hash,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-    )
-
-    # Link the file to a folder
-    folder, _ = Folder.objects.get_or_create(
-        name=folder_name,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-        defaults={"created_at": timezone.now()}
-    )
-    FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-
-    return file_instance
-'''
-
-
-
-'''
-def register_generated_file(file_path, user, run, project_id, service_id, folder_name="generated"):
-    """
-    Registers any generated file (e.g., anonymized, translated) into the File table
-    with proper folder linkage, mimicking the upload pipeline.
-    """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Cannot register missing file: {file_path}")
-
-    # Calculate MD5 hash
-    with open(file_path, "rb") as f:
-        content = f.read()
-        md5_hash = hashlib.md5(content).hexdigest()
-
-    # Create or fetch Storage entry
-    # Ensure this is the correct `run` (either `Run` for anonymization or `TranslationRun` for translation)
-    storage = Storage.objects.create(user=user, run=run, upload_storage_location=file_path)
-
-    # Create the File entry
-    file_instance = File.objects.create(
-        run=run,  # Link to the correct `run` (either `Run` or `TranslationRun`)
-        storage=storage,
-        filename=os.path.basename(file_path),
-        filepath=file_path,
-        file_size=os.path.getsize(file_path),
-        file_type=os.path.splitext(file_path)[1].lstrip("."),
-        md5_hash=md5_hash,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-    )
-
-    # Link the file to a folder
-    folder, _ = Folder.objects.get_or_create(
-        name=folder_name,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-        defaults={"created_at": timezone.now()}
-    )
-    FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-
-    return file_instance
-'''
-
-
-
-
-'''
-def register_generated_file(file_path, user, run, project_id, service_id, folder_name="generated"):
-    """
-    Registers any generated file (e.g., anonymized, translated) into the File table
-    with proper folder linkage, mimicking the upload pipeline.
-    """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Cannot register missing file: {file_path}")
-
-    # Calculate MD5 hash
-    with open(file_path, "rb") as f:
-        content = f.read()
-        md5_hash = hashlib.md5(content).hexdigest()
-
-    # Create a Storage entry
-    storage = Storage.objects.create(user=user, run=run, upload_storage_location=file_path)
-
-    # Create the File entry
-    file_instance = File.objects.create(
-        run=run,
-        storage=storage,
-        filename=os.path.basename(file_path),
-        filepath=file_path,
-        file_size=os.path.getsize(file_path),
-        file_type=os.path.splitext(file_path)[1].lstrip("."),
-        md5_hash=md5_hash,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-    )
-
-    # Link the file to a folder
-    folder, _ = Folder.objects.get_or_create(
-        name=folder_name,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-        defaults={"created_at": timezone.now()}
-    )
-    FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-
-    return file_instance
-
-'''

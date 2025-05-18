@@ -6,10 +6,8 @@ from core.models import File
 from document_ocr.models import OCRRun, OCRFile
 import logging
 import os
-from django.http import FileResponse 
+from django.http import FileResponse
 from rest_framework.permissions import AllowAny
-
-
 
 # OAuth2 Authentication Imports
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
@@ -100,14 +98,12 @@ class OCRTaskStatusView(APIView):
         if not ocr_file:
             return Response({"error": "No OCR file found for the provided details"}, status=404)
 
-
         # 🆕 Fetch all registered File entries for this run (except original)
         registered_outputs = list(
             File.objects.filter(run=ocr_file.original_file.run)
             .exclude(id=ocr_file.original_file.id)
             .values("id", "filename", "filepath")
         )
-
 
         # ✅ Ensure that file paths exist and are formatted correctly
         response_data = {
@@ -130,8 +126,6 @@ class OCRTaskStatusView(APIView):
         }
 
         return Response(response_data, status=200)
-
-
 
 class OCRFileDownloadView(APIView):
     """
@@ -186,3 +180,4 @@ class OCRFileDownloadView(APIView):
         except Exception as e:
             logger.error(f"❌ Error serving file {file_path}: {e}")
             return Response({"error": "Failed to retrieve file."}, status=500)
+

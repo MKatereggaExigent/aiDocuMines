@@ -28,6 +28,8 @@ from rest_framework import status, permissions
 from document_operations.models import Folder, FileFolderLink
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
+import mimetypes
+
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +454,54 @@ class MetadataView(APIView):
         )
 
 
+
+class FileDownloadView(APIView):
+    """
+    ✅ Download a file using file_id, dynamically supporting all common formats.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Download a file using file_id. Supports multiple file types.",
+        tags=["Core Application: File Download"],
+        manual_parameters=[client_id_param, file_id_param],
+        responses={200: "Success", 404: "File Not Found"},
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        try:
+            file_obj = File.objects.get(id=file_id)
+        except File.DoesNotExist:
+            return Response({"error": "File not found"}, status=404)
+
+        real_path = file_obj.filepath.replace("/app/", "")  # Adjust path mapping if needed
+
+        if not os.path.exists(real_path):
+            return Response({"error": "File not found on disk"}, status=404)
+
+        # Try to guess the content type from the filename
+        content_type, _ = mimetypes.guess_type(real_path)
+        if not content_type:
+            content_type = "application/octet-stream"  # Fallback for unknown types
+
+        filename = os.path.basename(real_path)
+
+        try:
+            return FileResponse(
+                open(real_path, "rb"),
+                as_attachment=True,
+                filename=filename,
+                content_type=content_type
+            )
+        except Exception as e:
+            return Response({"error": f"Failed to read file: {str(e)}"}, status=500)
+
+
+'''
 class FileDownloadView(APIView):
     """
     ✅ Download a file using file_id
@@ -488,20 +538,6 @@ class FileDownloadView(APIView):
         )
 
 
-    '''
-    def get(self, request):
-        client_id = request.headers.get("X-Client-ID")
-        file_id = request.query_params.get("file_id")
-
-        # ✅ Fetch file instance
-        file_instance = get_object_or_404(File, id=file_id)
-
-        # ✅ Check if file exists
-        if not os.path.exists(file_instance.filepath):
-            return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
-
-        # ✅ Return FileResponse for download
-        return FileResponse(open(file_instance.filepath, "rb"), as_attachment=True, filename=file_instance.filename)
     '''
 
 
@@ -626,4 +662,245 @@ class AssociateTopicToFileView(APIView):
         file.topic = topic
         file.save()
 
-        return Response({"message": f"File {file.id} successfully linked to topic {topic.id}"}, status=status.HTTP_200_OK)
+        return Response({"message": f"File {file.id} successfully linked to topic {topic.id}"}, status=status.HTTP_200_OK) 
+
+
+
+
+
+
+class FileInsightView(APIView):
+    """
+    Returns full insight for a given file_id including run, project, and metadata links.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Retrieve insight for a specific file including metadata and associated run.",
+        tags=["Client Intelligence"],
+        manual_parameters=[client_id_param, file_id_param],
+        responses={200: "Success", 404: "File Not Found"},
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        file = get_object_or_404(File, id=file_id)
+        metadata = file.metadata.first()
+        run = file.run
+
+        return Response({
+            "file": {
+                "file_id": file.id,
+                "filename": file.filename,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "status": file.status,
+                "project_id": file.project_id,
+                "service_id": file.service_id,
+            },
+            "run": {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "created_at": run.created_at,
+                "cost": float(run.cost),
+            },
+            "metadata": {
+                "title": metadata.title if metadata else None,
+                "page_count": metadata.page_count if metadata else None,
+                "author": metadata.author if metadata else None,
+                "keywords": metadata.keywords if metadata else None,
+            }
+        })
+
+
+
+class RunSummaryView(APIView):
+    """
+    Summarize a processing run by run_id.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Get a summary of a run including all linked files.",
+        tags=["Client Intelligence"],
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter("run_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True, description="Run UUID"),
+        ],
+        responses={200: "Success", 404: "Not Found"},
+    )
+    def get(self, request):
+        run_id = request.query_params.get("run_id")
+        if not run_id:
+            return Response({"error": "Missing run_id"}, status=400)
+
+        run = get_object_or_404(Run, run_id=run_id)
+        files = run.files.all()
+
+        return Response({
+            "run_id": str(run.run_id),
+            "status": run.status,
+            "created_at": run.created_at,
+            "cost": float(run.cost),
+            "file_count": files.count(),
+            "files": [
+                {
+                    "file_id": f.id,
+                    "filename": f.filename,
+                    "file_type": f.file_type,
+                    "file_size": f.file_size,
+                    "project_id": f.project_id,
+                    "service_id": f.service_id,
+                }
+                for f in files
+            ]
+        })
+
+
+
+
+class ClientSummaryView(APIView):
+    """
+    Summarize total activity for the current OAuth2 user.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Returns a summary of the current user's files, runs, and storage usage.",
+        tags=["Client Intelligence"],
+        manual_parameters=[client_id_param],
+        responses={200: "Success"},
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        user = get_user_from_client_id(client_id)
+        if not user:
+            return Response({"error": "Invalid client ID"}, status=401)
+
+        files = File.objects.filter(user=user)
+        total_bytes = sum(f.file_size for f in files)
+        recent_files = files.order_by("-created_at")[:5]
+
+        return Response({
+            "total_runs": Run.objects.filter(user=user).count(),
+            "total_files": files.count(),
+            "total_storage_mb": round(total_bytes / (1024 * 1024), 2),
+            "recent_files": [
+                {"file_id": f.id, "filename": f.filename, "created_at": f.created_at}
+                for f in recent_files
+            ]
+        })
+
+
+
+
+class StorageLocationsView(APIView):
+    """
+    Show storage paths for a given file_id (upload and output).
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Returns upload and output paths for a file.",
+        tags=["Client Intelligence"],
+        manual_parameters=[client_id_param, file_id_param],
+        responses={200: "Success", 404: "File Not Found"},
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        file = get_object_or_404(File, id=file_id)
+        storage = file.storage
+
+        return Response({
+            "upload_path": storage.upload_storage_location if storage else None,
+            "output_path": storage.output_storage_location if storage else None,
+        })
+
+
+
+
+
+class ProjectSummaryView(APIView):
+    """
+    Lists all files linked to a project_id for the current user.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Returns files belonging to a specific project.",
+        tags=["Client Intelligence"],
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True, description="Project ID"),
+        ],
+        responses={200: "Success"},
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        project_id = request.query_params.get("project_id")
+        user = get_user_from_client_id(client_id)
+
+        if not project_id:
+            return Response({"error": "Missing project_id"}, status=400)
+
+        files = File.objects.filter(user=user, project_id=project_id)
+
+        return Response({
+            "project_id": project_id,
+            "total_files": files.count(),
+            "files": [
+                {"file_id": f.id, "filename": f.filename, "file_type": f.file_type}
+                for f in files
+            ]
+        })
+
+
+
+class ServiceSummaryView(APIView):
+    """
+    Lists all files linked to a service_id for the current user.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Returns files linked to a specific service.",
+        tags=["Client Intelligence"],
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter("service_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True, description="Service ID"),
+        ],
+        responses={200: "Success"},
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        service_id = request.query_params.get("service_id")
+        user = get_user_from_client_id(client_id)
+
+        if not service_id:
+            return Response({"error": "Missing service_id"}, status=400)
+
+        files = File.objects.filter(user=user, service_id=service_id)
+
+        return Response({
+            "service_id": service_id,
+            "total_files": files.count(),
+            "files": [
+                {"file_id": f.id, "filename": f.filename, "file_type": f.file_type}
+                for f in files
+            ]
+        })
+
+
+
+

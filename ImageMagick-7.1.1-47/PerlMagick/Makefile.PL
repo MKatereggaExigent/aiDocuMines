@@ -163,7 +163,7 @@ foreach my $delegate (@tested_delegates) {
 # defaults for LIBS & INC & CCFLAGS params that we later pass to Writemakefile
 my $INC_magick = '-I../ -I.. -DMAGICKCORE_HDRI_ENABLE=1 -DMAGICKCORE_QUANTUM_DEPTH=16 -DMAGICKCORE_CHANNEL_MASK_DEPTH=32 -I"' . $Config{'usrinc'} . '/ImageMagick"';
 my $LIBS_magick = '-L../MagickCore/.libs -lMagickCore-7.Q16HDRI -lm -L' . $Config{'archlib'} . '/CORE';
-my $CCFLAGS_magick = "$Config{'ccflags'} -I/usr/include/x86_64-linux-gnu -I/usr/include/libpng16 -I/usr/include/openjpeg-2.5 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/libpng16 -fopenmp -Wall -g -O2 -mtune=amdfam10 -fexceptions -pthread -DMAGICKCORE_HDRI_ENABLE=1 -DMAGICKCORE_QUANTUM_DEPTH=16 -DMAGICKCORE_CHANNEL_MASK_DEPTH=32";
+my $CCFLAGS_magick = "$Config{'ccflags'} -I/usr/include/libxml2 -I/usr/include/x86_64-linux-gnu -I/usr/include/libpng16 -I/usr/include/OpenEXR -pthread -I/usr/include/Imath -I/usr/include/lqr-1 -I/usr/include/glib-2.0 -I/usr/lib/x86_64-linux-gnu/glib-2.0/include -I/usr/include/openjpeg-2.5 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/freetype2 -I/usr/include/libpng16 -pthread -fopenmp -Wall -g -O2 -mtune=amdfam10 -fexceptions -pthread -DMAGICKCORE_HDRI_ENABLE=1 -DMAGICKCORE_QUANTUM_DEPTH=16 -DMAGICKCORE_CHANNEL_MASK_DEPTH=32";
 my $LDFLAGS_magick   = "-L../MagickCore/.libs -lMagickCore-7.Q16HDRI $Config{'ldflags'} ";
 my $LDDLFLAGS_magick = "-L../MagickCore/.libs -lMagickCore-7.Q16HDRI $Config{'lddlflags'} ";
 

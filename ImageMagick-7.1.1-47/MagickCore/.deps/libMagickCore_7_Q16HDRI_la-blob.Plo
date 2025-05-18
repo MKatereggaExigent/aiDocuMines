@@ -186,7 +186,7 @@ MagickCore/libMagickCore_7_Q16HDRI_la-blob.lo: MagickCore/blob.c \
  MagickCore/string-private.h MagickCore/timer-private.h \
  MagickCore/token.h MagickCore/utility.h MagickCore/utility-private.h \
  MagickCore/nt-base.h /usr/include/utime.h /usr/include/zlib.h \
- /usr/include/zconf.h
+ /usr/include/zconf.h /usr/include/bzlib.h
 /usr/include/stdc-predef.h:
 MagickCore/studio.h:
 MagickCore/magick-config.h:
@@ -443,3 +443,4 @@ MagickCore/nt-base.h:
 /usr/include/utime.h:
 /usr/include/zlib.h:
 /usr/include/zconf.h:
+/usr/include/bzlib.h:

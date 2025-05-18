@@ -1,6 +1,6 @@
 #!/bin/bash
 
-BASE_DIR="media/uploads"
+BASE_DIR="/home/aidocumines/Apps/aiDocuMines/media/uploads"
 
 echo "🔍 Safely scanning for truly empty subdirectories under $BASE_DIR ..."
 
@@ -11,7 +11,7 @@ find "$BASE_DIR" -mindepth 1 -type d | while read -r dir; do
 
     if [ "$file_count" -eq 0 ]; then
         echo "🧹 Deleting: $dir"
-        rm -rf "$dir"
+        sudo rm -rf "$dir"
     fi
 done
 

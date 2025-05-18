@@ -190,29 +190,29 @@ MagickCore/libMagickCore_7_Q16HDRI_la-coder.lo: MagickCore/coder.c \
  coders/avs.h coders/bayer.h coders/bgr.h coders/bmp.h coders/braille.h \
  coders/cals.h coders/caption.h coders/cin.h coders/cip.h coders/clip.h \
  coders/cmyk.h coders/cube.h coders/cut.h coders/dcm.h coders/dds.h \
- coders/debug.h coders/dib.h coders/dng.h coders/dpx.h coders/ept.h \
- coders/farbfeld.h coders/fax.h coders/fits.h coders/fl32.h coders/fpx.h \
- coders/ftxt.h coders/gif.h coders/gradient.h coders/gray.h coders/hald.h \
- coders/hdr.h coders/histogram.h coders/hrz.h coders/html.h coders/icon.h \
- coders/info.h coders/inline.h coders/ipl.h coders/jbig.h coders/jnx.h \
- coders/jp2.h coders/jpeg.h coders/json.h coders/kernel.h coders/label.h \
- coders/mac.h coders/magick.h coders/map.h coders/mask.h coders/mat.h \
- coders/matte.h coders/meta.h coders/miff.h coders/mono.h coders/mpc.h \
- coders/mpr.h coders/msl.h coders/mtv.h coders/mvg.h coders/null.h \
- coders/ora.h coders/otb.h coders/palm.h coders/pango.h coders/pattern.h \
- coders/pcd.h coders/pcl.h coders/pcx.h coders/pdb.h coders/pdf.h \
- coders/pes.h coders/pgx.h coders/pict.h coders/pix.h coders/plasma.h \
- coders/png.h coders/pnm.h coders/ps2.h coders/ps3.h coders/ps.h \
- coders/psd.h coders/pwp.h coders/qoi.h coders/raw.h coders/rgb.h \
- coders/rgf.h coders/rla.h coders/rle.h coders/scr.h coders/screenshot.h \
- coders/sct.h coders/sfw.h coders/sgi.h coders/sixel.h coders/stegano.h \
- coders/strimg.h coders/sun.h coders/svg.h coders/tga.h \
- coders/thumbnail.h coders/tiff.h coders/tile.h coders/tim.h \
- coders/tim2.h coders/ttf.h coders/txt.h coders/uil.h coders/url.h \
- coders/uyvy.h coders/vicar.h coders/vid.h coders/video.h coders/viff.h \
- coders/vips.h coders/wbmp.h coders/webp.h coders/wpg.h coders/xbm.h \
- coders/x.h coders/xc.h coders/xcf.h coders/xpm.h coders/xps.h \
- coders/xwd.h coders/yaml.h coders/ycbcr.h coders/yuv.h \
+ coders/debug.h coders/dib.h coders/djvu.h coders/dng.h coders/dpx.h \
+ coders/ept.h coders/exr.h coders/farbfeld.h coders/fax.h coders/fits.h \
+ coders/fl32.h coders/fpx.h coders/ftxt.h coders/gif.h coders/gradient.h \
+ coders/gray.h coders/hald.h coders/hdr.h coders/histogram.h coders/hrz.h \
+ coders/html.h coders/icon.h coders/info.h coders/inline.h coders/ipl.h \
+ coders/jbig.h coders/jnx.h coders/jp2.h coders/jpeg.h coders/json.h \
+ coders/kernel.h coders/label.h coders/mac.h coders/magick.h coders/map.h \
+ coders/mask.h coders/mat.h coders/matte.h coders/meta.h coders/miff.h \
+ coders/mono.h coders/mpc.h coders/mpr.h coders/msl.h coders/mtv.h \
+ coders/mvg.h coders/null.h coders/ora.h coders/otb.h coders/palm.h \
+ coders/pango.h coders/pattern.h coders/pcd.h coders/pcl.h coders/pcx.h \
+ coders/pdb.h coders/pdf.h coders/pes.h coders/pgx.h coders/pict.h \
+ coders/pix.h coders/plasma.h coders/png.h coders/pnm.h coders/ps2.h \
+ coders/ps3.h coders/ps.h coders/psd.h coders/pwp.h coders/qoi.h \
+ coders/raw.h coders/rgb.h coders/rgf.h coders/rla.h coders/rle.h \
+ coders/scr.h coders/screenshot.h coders/sct.h coders/sfw.h coders/sgi.h \
+ coders/sixel.h coders/stegano.h coders/strimg.h coders/sun.h \
+ coders/svg.h coders/tga.h coders/thumbnail.h coders/tiff.h coders/tile.h \
+ coders/tim.h coders/tim2.h coders/ttf.h coders/txt.h coders/uil.h \
+ coders/url.h coders/uyvy.h coders/vicar.h coders/vid.h coders/video.h \
+ coders/viff.h coders/vips.h coders/wbmp.h coders/webp.h coders/wpg.h \
+ coders/xbm.h coders/x.h coders/xc.h coders/xcf.h coders/xpm.h \
+ coders/xps.h coders/xwd.h coders/yaml.h coders/ycbcr.h coders/yuv.h \
  coders/coders-list.h
 /usr/include/stdc-predef.h:
 MagickCore/studio.h:
@@ -489,9 +489,11 @@ coders/dcm.h:
 coders/dds.h:
 coders/debug.h:
 coders/dib.h:
+coders/djvu.h:
 coders/dng.h:
 coders/dpx.h:
 coders/ept.h:
+coders/exr.h:
 coders/farbfeld.h:
 coders/fax.h:
 coders/fits.h:

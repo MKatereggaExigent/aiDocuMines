@@ -185,14 +185,14 @@ coders/MagickCore_libMagickCore_7_Q16HDRI_la-miff.lo: coders/miff.c \
  MagickCore/module.h MagickCore/version.h MagickCore/monitor-private.h \
  MagickCore/option.h MagickCore/profile-private.h MagickCore/property.h \
  MagickCore/static.h MagickCore/statistic.h MagickCore/string-private.h \
- /usr/include/lzma.h /usr/include/lzma/version.h /usr/include/lzma/base.h \
- /usr/include/lzma/vli.h /usr/include/lzma/check.h \
- /usr/include/lzma/filter.h /usr/include/lzma/bcj.h \
- /usr/include/lzma/delta.h /usr/include/lzma/lzma12.h \
- /usr/include/lzma/container.h /usr/include/lzma/stream_flags.h \
- /usr/include/lzma/block.h /usr/include/lzma/index.h \
- /usr/include/lzma/index_hash.h /usr/include/lzma/hardware.h \
- /usr/include/zlib.h /usr/include/zconf.h
+ /usr/include/bzlib.h /usr/include/lzma.h /usr/include/lzma/version.h \
+ /usr/include/lzma/base.h /usr/include/lzma/vli.h \
+ /usr/include/lzma/check.h /usr/include/lzma/filter.h \
+ /usr/include/lzma/bcj.h /usr/include/lzma/delta.h \
+ /usr/include/lzma/lzma12.h /usr/include/lzma/container.h \
+ /usr/include/lzma/stream_flags.h /usr/include/lzma/block.h \
+ /usr/include/lzma/index.h /usr/include/lzma/index_hash.h \
+ /usr/include/lzma/hardware.h /usr/include/zlib.h /usr/include/zconf.h
 /usr/include/stdc-predef.h:
 MagickCore/studio.h:
 MagickCore/magick-config.h:
@@ -447,6 +447,7 @@ MagickCore/property.h:
 MagickCore/static.h:
 MagickCore/statistic.h:
 MagickCore/string-private.h:
+/usr/include/bzlib.h:
 /usr/include/lzma.h:
 /usr/include/lzma/version.h:
 /usr/include/lzma/base.h:

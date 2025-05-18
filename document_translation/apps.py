@@ -6,7 +6,11 @@ logger = logging.getLogger(__name__)
 class DocumentTranslationConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "document_translation"
+    
+    def ready(self):
+        import document_translation.signals
 
+    '''
     def ready(self):
         """
         Avoid running database queries at startup.
@@ -24,3 +28,4 @@ class DocumentTranslationConfig(AppConfig):
                     logger.warning("Table 'document_translation_translationlanguage' is missing. Skipping language loading.")
         except Exception as e:
             logger.error(f"Database not ready during app initialization: {e}")
+        '''

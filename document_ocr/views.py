@@ -1,25 +1,25 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
-from oauth2_provider.models import Application  
+from oauth2_provider.models import Application
 from core.models import File
 from document_ocr.models import OCRRun, OCRFile
-from document_ocr.tasks import ocr_pdf_file, process_ocr
+from document_ocr.tasks import process_ocr
 import os
 import logging
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 import uuid
+from glob import glob
 
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
-# ✅ Define Swagger parameters
+# Define Swagger parameters
 client_id_param = openapi.Parameter(
     "X-Client-ID", openapi.IN_HEADER, type=openapi.TYPE_STRING, required=True, description="Client ID provided at signup"
 )
@@ -39,7 +39,6 @@ ocr_option_param = openapi.Parameter(
     "ocr_option", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True,
     description="OCR Processing type: 'Basic-ocr' or 'Advanced-ocr'"
 )
-
 
 def health_check(request):
     from django.http import JsonResponse
@@ -74,40 +73,40 @@ class SubmitOCRAPIView(APIView):
         file_id = request.query_params.get("file_id")
         ocr_option = request.query_params.get("ocr_option")
 
-        # ✅ Validate file
+        # Validate file
         file_obj = get_object_or_404(File, id=file_id)
         if not os.path.exists(file_obj.filepath):
             return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # ✅ Validate OCR option
+        # Validate OCR option
         if ocr_option not in ["Basic-ocr", "Advanced-ocr"]:
             return Response({"error": "Invalid OCR option."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ Define OCR directory path
-        ocr_dir = os.path.join(os.path.dirname(file_obj.filepath), "ocr")
+        # Define OCR directory path based on the ocr_option
+        ocr_dir = os.path.join(os.path.dirname(file_obj.filepath), "ocr", ocr_option.lower())
 
-        # ✅ Check if the OCR directory exists and is **not empty**
-        if os.path.exists(ocr_dir) and any(os.scandir(ocr_dir)):  # ✅ Skip OCR if already processed
+        # Check if the OCR directory exists and is **not empty**
+        if os.path.exists(ocr_dir) and any(os.scandir(ocr_dir)):  # Skip OCR if already processed
             logger.info(f"⚠️ OCR skipped: Existing processed files found in {ocr_dir}")
-            
-            # Retrieve the run_id from 
 
+            # Retrieve the run_id from existing OCR run for this file
+            ocr_run = OCRRun.objects.filter(project_id=file_obj.project_id, service_id=file_obj.service_id, client_name=file_obj.user.username).first()
             return Response({
-                "ocr_run_id": "N/A",
+                "ocr_run_id": str(ocr_run.id) if ocr_run else "N/A",
                 "status": "Processing",
                 "message": "File has already been processed. Skipping OCR."
             }, status=status.HTTP_202_ACCEPTED)
 
-        # ✅ Create OCRRun
+        # Create OCRRun
         ocr_run = OCRRun.objects.create(
             project_id=file_obj.project_id,
             service_id=file_obj.service_id,
             client_name=file_obj.user.username if file_obj.user and file_obj.user.username else file_obj.user.email,
             status="Pending",
-            ocr_option=ocr_option
+            ocr_option=ocr_option  # Storing the OCR option
         )
 
-        # ✅ Start OCR task
+        # Start OCR task
         process_ocr.delay(ocr_run.id, file_id, ocr_option)
 
         return Response({
@@ -145,10 +144,10 @@ class CheckOCRStatusAPIView(APIView):
         if not user:
             return Response({"error": "Invalid client ID"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # ✅ Fetch `OCRRun`
+        # Fetch `OCRRun`
         ocr_run = get_object_or_404(OCRRun, id=ocr_run_id)
 
-        # ✅ Retrieve OCR file if completed
+        # Retrieve OCR file if completed
         ocr_file = OCRFile.objects.filter(run=ocr_run).first()
         ocr_filepath = ocr_file.ocr_filepath if ocr_file else None
         docx_filepath = ocr_file.docx_path if ocr_file else None
@@ -161,7 +160,7 @@ class CheckOCRStatusAPIView(APIView):
                 "project_id": ocr_run.project_id,
                 "service_id": ocr_run.service_id,
                 "client_name": ocr_run.client_name,
-                "ocr_option": ocr_run.ocr_option,  # ✅ Return OCR type
+                "ocr_option": ocr_run.ocr_option,  # Return OCR type
                 "status": ocr_run.status,
                 "ocr_filepath": ocr_filepath,
                 "docx_filepath": docx_filepath,
@@ -169,3 +168,4 @@ class CheckOCRStatusAPIView(APIView):
             },
             status=status.HTTP_200_OK if ocr_run.status == "Completed" else status.HTTP_202_ACCEPTED,
         )
+

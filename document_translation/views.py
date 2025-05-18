@@ -1,3 +1,4 @@
+from django.db import models
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -6,7 +7,9 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from oauth2_provider.models import Application
 from core.models import File
-from document_translation.models import TranslationRun, TranslationFile, TranslationLanguage
+# from document_translation.models import TranslationRun, TranslationFile, TranslationLanguage
+from document_translation.models import TranslationRun, TranslationFile, TranslationLanguage, TranslationStorage
+
 from document_translation.tasks import (
     translate_document_task,
     check_translation_status_task,
@@ -206,4 +209,253 @@ class TranslationFileDownloadView(generics.RetrieveAPIView):
             return None  # ✅ Short-circuit schema generation for Swagger
         return super().get(request, *args, **kwargs)
 
+
+
+
+
+##################################################
+
+### 🔹 TranslationRunSummaryView
+class TranslationRunSummaryView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Get summary of a translation run.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, translation_run_id_param],
+    )
+    def get(self, request):
+        run_id = request.query_params.get("translation_run_id")
+        if not run_id:
+            return Response({"error": "Missing translation_run_id"}, status=400)
+
+        run = get_object_or_404(TranslationRun, id=run_id)
+        file_count = run.translation_files.count()
+
+        return Response({
+            "run_id": str(run.id),
+            "from_language": run.from_language,
+            "to_language": run.to_language,
+            "status": run.status,
+            "error_message": run.error_message,
+            "created_at": run.created_at,
+            "files_translated": file_count
+        })
+
+
+### 🔹 TranslatedFilesByRunView
+class TranslatedFilesByRunView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="List all translated files for a given translation run.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, translation_run_id_param],
+    )
+    def get(self, request):
+        run_id = request.query_params.get("translation_run_id")
+        if not run_id:
+            return Response({"error": "Missing translation_run_id"}, status=400)
+
+        run = get_object_or_404(TranslationRun, id=run_id)
+        files = run.translation_files.all()
+
+        return Response([
+            {
+                "file_id": str(f.original_file.id),
+                "original_file": f.original_file.filename,
+                "translated_filepath": f.translated_filepath,
+                "status": f.status
+            } for f in files
+        ])
+
+
+### 🔹 TranslationFileInsightView
+class TranslationFileInsightView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Get insight about a translated file.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, file_id_param],
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        translation_file = get_object_or_404(TranslationFile, original_file__id=file_id)
+        run = translation_file.run
+
+        return Response({
+            "file_id": file_id,
+            "original_filepath": translation_file.original_filepath,
+            "translated_filepath": translation_file.translated_filepath,
+            "status": translation_file.status,
+            "from_language": run.from_language,
+            "to_language": run.to_language,
+            "run_id": str(run.id)
+        })
+
+
+### 🔹 TranslationHistoryView
+class TranslationHistoryView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="List all translations performed for a given original file.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, file_id_param],
+    )
+    def get(self, request):
+        file_id = request.query_params.get("file_id")
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+
+        translations = TranslationFile.objects.filter(original_file__id=file_id)
+        return Response([
+            {
+                "translated_filepath": t.translated_filepath,
+                "status": t.status,
+                "to_language": t.run.to_language,
+                "created_at": t.created_at
+            } for t in translations
+        ])
+
+
+### 🔹 SupportedLanguagesView
+class SupportedLanguagesView(APIView):
+    permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_description="List all supported translation languages.",
+        tags=["Translation Intelligence"],
+    )
+    def get(self, request):
+        languages = TranslationLanguage.objects.all()
+        return Response([
+            {"name": lang.name, "code": lang.code} for lang in languages
+        ])
+
+
+### 🔹 TranslationStorageLocationsView
+class TranslationStorageLocationsView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Return upload and translated storage locations.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, translation_run_id_param],
+    )
+    def get(self, request):
+        run_id = request.query_params.get("translation_run_id")
+        if not run_id:
+            return Response({"error": "Missing translation_run_id"}, status=400)
+
+        storages = TranslationStorage.objects.filter(run__id=run_id)
+        return Response([
+            {
+                "upload_storage_location": s.upload_storage_location,
+                "translated_storage_location": s.translated_storage_location
+            } for s in storages
+        ])
+
+
+### 🔹 TranslationClientSummaryView
+class TranslationClientSummaryView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Return summary of all translation activity for current user.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param],
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        user = get_user_from_client_id(client_id)
+        if not user:
+            return Response({"error": "Invalid client ID"}, status=401)
+
+        files = TranslationFile.objects.filter(original_file__user=user)
+        total_runs = TranslationRun.objects.filter(client_name=user.username).count()
+        total_files = files.count()
+        success_rate = round(files.filter(status="Completed").count() / total_files, 2) if total_files else 0
+
+        lang_counts = files.values("run__to_language").annotate(count=models.Count("id"))
+        top_languages = sorted([
+            {"code": entry["run__to_language"], "count": entry["count"]} for entry in lang_counts
+        ], key=lambda x: -x["count"])[:5]
+
+        recent = files.order_by("-created_at")[:5]
+
+        return Response({
+            "total_translation_runs": total_runs,
+            "total_files_translated": total_files,
+            "success_rate": success_rate,
+            "top_languages": top_languages,
+            "recent_translations": [
+                {
+                    "original_file": f.original_file.filename,
+                    "to_language": f.run.to_language,
+                    "status": f.status,
+                    "date": f.created_at
+                } for f in recent
+            ]
+        })
+
+
+### 🔹 TranslationProjectSummaryView
+class TranslationProjectSummaryView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Aggregate translation data for a specific project.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)],
+    )
+    def get(self, request):
+        project_id = request.query_params.get("project_id")
+        if not project_id:
+            return Response({"error": "Missing project_id"}, status=400)
+
+        runs = TranslationRun.objects.filter(project_id=project_id)
+        summary = {}
+        for run in runs:
+            lang = run.to_language
+            summary[lang] = summary.get(lang, 0) + run.translation_files.count()
+
+        return Response({"project_id": project_id, "language_summary": summary})
+
+
+### 🔹 TranslationLanguageSummaryView
+class TranslationLanguageSummaryView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Return stats for all files translated into a specific language.",
+        tags=["Translation Intelligence"],
+        manual_parameters=[client_id_param, openapi.Parameter("lang", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)],
+    )
+    def get(self, request):
+        lang = request.query_params.get("lang")
+        if not lang:
+            return Response({"error": "Missing lang parameter"}, status=400)
+
+        files = TranslationFile.objects.filter(run__to_language=lang)
+        projects = files.values("original_file__project_id").distinct()
+
+        return Response({
+            "language": lang,
+            "file_count": files.count(),
+            "projects": [p["original_file__project_id"] for p in projects],
+            "statuses": files.values("status").annotate(count=models.Count("id"))
+        })
 

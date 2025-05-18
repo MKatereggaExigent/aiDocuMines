@@ -9,35 +9,29 @@ from django.utils.timezone import now
 from core.models import File
 import shutil
 from docx import Document
-# from document_ocr.models import OCRFile
 from document_ocr.models import OCRRun, OCRFile
 from document_ocr.utils import OCRService, cleanup_tmp_dir
 import uuid
 from core.utils import register_generated_file
-
+# from glob import glob
+import glob 
+from PyPDF2 import PdfMerger
 
 logger = logging.getLogger(__name__)
 
-
-
 @shared_task
-def process_ocr(run_id, file_id, ocr_option):
+def process_ocr(run_id, file_id, ocr_option="basic"):
     """
     Celery task to perform OCR on a document asynchronously.
     """
     try:
-        try:
-            run = OCRRun.objects.get(id=run_id)
-        except OCRRun.DoesNotExist:
-            logger.error(f"❌ OCRRun with id {run_id} does not exist. Skipping OCR.")
-            return {"error": f"OCRRun with id {run_id} not found"}
-
-        # ✅ Retrieve the original file using file_id (INTEGER)
+        # Retrieve the OCRRun object and file
+        run = OCRRun.objects.get(id=run_id)
         file_obj = get_object_or_404(File, id=file_id)
 
-        # ✅ Create the OCRFile entry before processing
+        # Create or get the OCRFile entry
         ocr_file, created = OCRFile.objects.get_or_create(
-            original_file=file_obj, defaults={"status": "Processing", "run": run}
+            original_file=file_obj, ocr_option=ocr_option, defaults={"status": "Processing", "run": run}
         )
 
         run.status = "Processing"
@@ -45,33 +39,37 @@ def process_ocr(run_id, file_id, ocr_option):
 
         ocr_service = OCRService()
 
-        # ✅ Skip non-PDF files
+        # Check if the file is a valid PDF
         if not ocr_service.is_pdf(file_obj.filepath):
             logger.info(f"🔹 Skipping OCR: {file_obj.filepath} is not a PDF.")
             ocr_file.status = "Completed"
             ocr_file.save()
             return {"message": "File is not a PDF. OCR skipped."}
 
-        # ✅ Extract bookmarks before OCR processing
+        # Step 1: Extract bookmarks before processing
         bookmarks_df = ocr_service.extract_bookmarks_to_dataframe(file_obj.filepath)
-        bookmarks_list = bookmarks_df.to_dict(orient="records")
+        bookmarks_list = bookmarks_df.to_dict(orient="records")  # Convert to list for Celery serialization
 
-        # ✅ Burst the PDF into page batches
-        batch_files = ocr_service.burst_pdf(file_obj.filepath)
+        # Step 2: Burst the PDF into page batches
+        batch_files = ocr_service.burst_pdf(file_obj.filepath, ocr_option=ocr_option)
 
         if not batch_files:
             ocr_file.status = "Failed"
             ocr_file.save()
             return {"error": "Failed to burst the PDF", "file_path": file_obj.filepath}
 
-        # ✅ Define OCR tasks for each batch
+        # Ensure output directories exist
+        output_dir = os.path.join(os.path.dirname(file_obj.filepath), "ocr", ocr_option.lower(), "tmp")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Step 3: Define OCR tasks for each batch
         ocr_tasks = [
-            ocr_pdf_page_batch.s(ocr_file.id, batch_file, start_page, end_page, ocr_option)  # 🔥 Use `ocr_file.id` (UUID)
+            ocr_pdf_page_batch.s(ocr_file.id, batch_file, start_page, end_page, ocr_option)  # Pass ocr_option
             for start_page, end_page, batch_file in batch_files
         ]
 
-        # ✅ Wait for all OCR tasks before merging
-        workflow = chord(ocr_tasks)(merge_ocr_batches.s(ocr_file.id, bookmarks_list))  # 🔥 Use `ocr_file.id` (UUID)
+        # Step 4: Wait for all OCR tasks to finish before merging
+        workflow = chord(ocr_tasks)(merge_ocr_batches.s(ocr_file.id, bookmarks_list))  # Pass bookmarks_list
 
         return workflow
 
@@ -82,125 +80,108 @@ def process_ocr(run_id, file_id, ocr_option):
             ocr_file.save()
         return {"error": str(e)}
 
-
-@shared_task
-def ocr_pdf_file(file_id, ocr_option="basic"):
-    """Main OCR task that processes a PDF file and applies OCR."""
-    file_entry = get_object_or_404(OCRFile, id=file_id)
-
-    # ✅ Instantiate OCR Service
-    ocr_service = OCRService()
-
-    # ✅ Ensure the file exists and is a PDF
-    file_path = ocr_service.get_file_path(file_entry.original_file.id)
-    if not file_path or not ocr_service.is_pdf(file_path):
-        logger.info(f"🔹 Skipping OCR: File {file_path} is not a PDF or does not exist.")
-        return None
-
-    # ✅ Get the OCR directory
-    ocr_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr")
-
-    # ✅ Ensure OCR folder exists
-    if not os.path.exists(ocr_dir):
-        os.makedirs(ocr_dir, exist_ok=True)
-
-    # ✅ Check if an OCR file already exists before proceeding
-    existing_ocr_files = [f for f in os.listdir(ocr_dir) if f.endswith(".pdf") and "ocr-" in f]
-
-    if existing_ocr_files:
-        existing_ocr_file = os.path.join(ocr_dir, existing_ocr_files[0])
-        logger.info(f"⚠️ Skipping OCR: Existing OCR file found at {existing_ocr_file}")
-
-        with transaction.atomic():
-            file_entry.ocr_filepath = existing_ocr_file
-            file_entry.status = "Completed"
-            file_entry.updated_at = now()
-            file_entry.save()
-
-        return {"message": "OCR already completed", "ocr_file": existing_ocr_file}
-
-    # ✅ Proceed with OCR if no existing file is found
-    logger.info(f"🔄 Starting OCR for {file_path}")
-
-    # ✅ Step 1: Extract bookmarks before processing and store them
-    bookmarks_df = ocr_service.extract_bookmarks_to_dataframe(file_path)
-    bookmarks_list = bookmarks_df.to_dict(orient='records')  # Convert DataFrame to list of dicts for Celery serialization
-
-    # ✅ Step 2: Burst the PDF into smaller page batches
-    batch_files = ocr_service.burst_pdf(file_path)
-
-    if not batch_files:
-        file_entry.status = "Failed"
-        file_entry.save()
-        return {"error": "Failed to burst the PDF", "file_path": file_path}
-
-    # ✅ Step 3: Define OCR tasks for each batch
-    ocr_tasks = [
-        ocr_pdf_page_batch.s(file_id, batch_file, start_page, end_page, ocr_option)
-        for start_page, end_page, batch_file in batch_files
-    ]
-
-    # ✅ Step 4: Use `chord` to wait for OCR tasks before merging
-    callback = merge_ocr_batches.s(file_id, bookmarks_list)  # 🔹 Ensure bookmarks_list is passed here
-
-    workflow = chord(ocr_tasks)(callback)
-    return workflow
-
-
 @shared_task
 def ocr_pdf_page_batch(file_id, batch_file_path, start_page, end_page, ocr_option="basic"):
     """OCR task for a batch of pages in a PDF."""
     try:
-        # ✅ Ensure the file exists before proceeding
-        batch_file_path = os.path.normpath(batch_file_path)  # ✅ Fix double `/ocr/tmp/` issue
+        # Ensure the file exists
+        batch_file_path = os.path.normpath(batch_file_path)  # Fix path issues
         if not os.path.exists(batch_file_path):
             logger.error(f"❌ Batch file not found: {batch_file_path}")
             return {"error": "Batch file not found", "batch_file_path": batch_file_path}
 
-        # ✅ Instantiate OCR Service
         ocr_service = OCRService()
 
         # Apply OCR to the batch file
-        ocr_file = ocr_service.apply_ocr(file_id, batch_file_path, ocr_option)
+        ocr_file = ocr_service.apply_ocr(file_id, batch_file_path, ocr_option)  # Pass ocr_option
         return {"start_page": start_page, "end_page": end_page, "ocr_file": ocr_file}
 
     except Exception as e:
         logger.error(f"❌ OCR processing failed: {str(e)}")
         return {"error": str(e), "batch_file_path": batch_file_path}
-    
-    
+
+
+
+
 @shared_task
 def merge_ocr_batches(results, ocr_file_id, bookmarks_list):
     """Merges all OCR'ed PDF batches and reattaches bookmarks."""
     file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
 
-    # ✅ Ensure all paths are correct
-    ocr_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr")
-    tmp_dir = os.path.join(ocr_dir, "tmp")
+    # Ensure the OCR option is passed correctly
+    if not file_entry.ocr_option:
+        logger.error(f"❌ OCR option is missing for OCRFile {ocr_file_id}.")
+        file_entry.status = "Failed"
+        file_entry.save()
+        return {"error": "OCR option missing"}
 
     ocr_service = OCRService()
 
-    # ✅ Filter out `None` OCR outputs
-    ocr_files = [res["ocr_file"] for res in results if res.get("ocr_file") is not None]
+    # Locate the tmp directory where the batch PDFs are stored
+    ocr_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr", file_entry.ocr_option.lower(), "tmp")
+    logger.info(f"🔍 Searching for OCR tmp directory: {ocr_dir}"
+                )
+    if not os.path.exists(ocr_dir):
+        if "basic-ocr" in ocr_dir:
+            ocr_dir = ocr_dir.replace("basic-ocr", "advanced-ocr")
+            
+            logger.info(f"🔄 Updated OCR tmp directory to: {ocr_dir}")
+            
+            # There is a folder inside the ocr_dir that needs to be removed. i.e delete os.path.join(ocr_dir, "ocr")
+            
+            tmp_ocr_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr", file_entry.ocr_option.lower(), "ocr")
+            tmp_ocr_dir = tmp_ocr_dir.replace("basic-ocr", "advanced-ocr")
+            
+            if os.path.exists(tmp_ocr_dir):
+                # Remove the tmp_ocr_dir
+                shutil.rmtree(tmp_ocr_dir)
+                logger.info(f"🔄 Removed OCR folder inside tmp directory: {tmp_ocr_dir}")
+                
+        else:
+            logger.error(f"❌ OCR tmp directory not found: {ocr_dir}.")
+             
+    
+    # Find all PDF files under the OCR tmp directory (recursively)
+    pdf_files = glob.glob(os.path.join(ocr_dir, '*.pdf'))
 
-    if not ocr_files:
-        logger.error(f"❌ No valid OCR'ed pages found. Merging failed.")
+    # Ensure there are files to merge
+    if not pdf_files:
+        logger.error(f"❌ No OCR batches found to merge in {ocr_dir}.")
         file_entry.status = "Failed"
         file_entry.save()
-        return None
+        return {"error": "No OCR batches found"}
 
-    # ✅ Merge final OCR document inside `ocr/`
-    final_pdf_path = os.path.join(ocr_dir, f"ocr-{uuid.uuid4()}.pdf")
-    merged_pdf = ocr_service.merge_pdf(ocr_files, final_pdf_path)
+    logger.info(f"🔄 Found {len(pdf_files)} PDFs to merge.")
 
-    if not merged_pdf:
-        logger.error(f"❌ Merging failed. No final PDF created.")
-        file_entry.status = "Failed"
-        file_entry.save()
-        return None
+    # Merge PDFs using PdfMerger
+    final_pdf_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr", file_entry.ocr_option.lower(), "final")
+    if "advanced-ocr" in ocr_dir:
+        final_pdf_dir = final_pdf_dir.replace("basic-ocr", "advanced-ocr")
+        
+    logger.info(f"🔄 Final PDF directory: {final_pdf_dir}")
+    
+    os.makedirs(final_pdf_dir, exist_ok=True)
 
+    try:
+        final_pdf_path = os.path.join(final_pdf_dir, f"ocr-{uuid.uuid4()}.pdf")
+        try:
+            merger = PdfMerger()
+            for pdf in pdf_files:
+                logger.info(f"🔹 Adding {pdf} to the merger.")
+                merger.append(pdf)
 
-        # Register OCR’d PDF in File table
+            # Write the merged PDF to the final output path
+            with open(final_pdf_path, "wb") as output_file:
+                merger.write(output_file)
+
+            logger.info(f"✅ Merged PDF saved to: {final_pdf_path}")
+        except Exception as e:
+            logger.error(f"❌ Error during merging PDFs: {e}")
+            file_entry.status = "Failed"
+            file_entry.save()
+            return {"error": f"Error merging PDFs: {e}"}
+
+        # Register the OCR'ed PDF
         upload_run = file_entry.original_file.run
         registered = register_generated_file(
             file_path=final_pdf_path,
@@ -211,34 +192,88 @@ def merge_ocr_batches(results, ocr_file_id, bookmarks_list):
             folder_name="ocr"
         )
 
+        # Reattach bookmarks
+        pdf_document = fitz.open(final_pdf_path)
+        total_pages = pdf_document.page_count
+        pdf_document.close()
 
-    # ✅ Reattach bookmarks
-    pdf_document = fitz.open(final_pdf_path)
-    total_pages = pdf_document.page_count
-    pdf_document.close()
+        bookmarks_df = pd.DataFrame(bookmarks_list)
 
-    bookmarks_df = pd.DataFrame(bookmarks_list)
+        try:
+            final_pdf_with_bookmarks = ocr_service.reattach_bookmarks_from_dataframe(final_pdf_path, bookmarks_df, 1, total_pages)
+        except Exception as e:
+            logger.error(f"❌ Failed to reattach bookmarks: {e}")
+            final_pdf_with_bookmarks = final_pdf_path
 
-    try:
-        ocr_service.reattach_bookmarks_from_dataframe(final_pdf_path, bookmarks_df, 1, total_pages)
+
+        # Register the final PDF with bookmarks
+        registered_pdf = register_generated_file(
+            file_path=final_pdf_with_bookmarks,  # Use the file with bookmarks
+            user=file_entry.original_file.user,
+            run=file_entry.original_file.run,
+            project_id=file_entry.original_file.project_id,
+            service_id=file_entry.original_file.service_id,
+            folder_name="ocr"
+        )
+
+        # Update the database record
+        with transaction.atomic():
+            file_entry.ocr_filepath = final_pdf_path
+            file_entry.status = "Processed"
+            file_entry.updated_at = now()
+            file_entry.save()
+
+        # Cleanup temporary files
+        ocr_service.cleanup_tmp_dir(ocr_dir)
+
+        # Trigger DOCX conversion
+        process_pdf_to_docx.delay(file_entry.id, final_pdf_path)
+
+        logger.info(f"✅ OCR processing completed and saved: {final_pdf_path}")
+
+    # If we enter the except block, this part of the code will handle the final file detection in Advanced-ocr case
     except Exception as e:
-        logger.error(f"❌ Failed to reattach bookmarks: {e}")
+        logger.error(f"❌ Advanced OCR processing failed, attempting to detect final file: {e}")
 
-    # ✅ Update database record
-    with transaction.atomic():
-        file_entry.ocr_filepath = final_pdf_path
-        file_entry.status = "Processed"
-        file_entry.updated_at = now()
-        file_entry.save()
+        try:
+            # Get the last final file found (i.e. final_merged_ocr_file.pdf) and re-attach bookmarks
+            final_pdf_dir = os.path.join(os.path.dirname(file_entry.original_file.filepath), "ocr", file_entry.ocr_option.lower(), "final")
+            files_in_final = glob.glob(os.path.join(final_pdf_dir, "*final_merged_ocr_file.pdf"))
 
-    # ✅ Delete `tmp/` after merging
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    logger.info(f"✅ Cleaned up temporary directory: {tmp_dir}")
+            if files_in_final:
+                final_pdf_with_bookmarks = files_in_final[0]
+                logger.info(f"✅ Found final PDF at: {final_pdf_with_bookmarks}")
 
-    # ✅ **Trigger DOCX conversion**
-    process_pdf_to_docx.delay(file_entry.id, final_pdf_path)
+                # Register the final file
+                registered_pdf = register_generated_file(
+                    file_path=final_pdf_with_bookmarks,
+                    user=file_entry.original_file.user,
+                    run=file_entry.original_file.run,
+                    project_id=file_entry.original_file.project_id,
+                    service_id=file_entry.original_file.service_id,
+                    folder_name="ocr"
+                )
 
-    # return final_pdf_path
+                # Update the database record
+                with transaction.atomic():
+                    file_entry.ocr_filepath = final_pdf_with_bookmarks
+                    file_entry.status = "Processed"
+                    file_entry.updated_at = now()
+                    file_entry.save()
+
+                logger.info(f"✅ Advanced OCR processed and saved: {final_pdf_with_bookmarks}")
+
+                # Cleanup temporary files
+                ocr_service.cleanup_tmp_dir(ocr_dir)
+                return {"status": "Completed", "ocr_merged_pdf": final_pdf_with_bookmarks}
+            else:
+                raise FileNotFoundError("Final OCR PDF not found in the 'final' folder.")
+
+        except Exception as e:
+            logger.error(f"❌ Advanced OCR failed to detect final file: {e}")
+            file_entry.status = "Failed"
+            file_entry.save()
+            return {"error": "Advanced OCR final file not found or error occurred."}
 
 
     return {
@@ -255,21 +290,21 @@ def merge_ocr_batches(results, ocr_file_id, bookmarks_list):
     }
 
 
+
 @shared_task
 def process_pdf_to_docx(ocr_file_id, final_pdf_path):
     """Converts an OCR’ed PDF to formatted DOCX and registers it in the File model."""
     file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
 
-    # ✅ Ensure OCRed PDF exists before conversion
+    # Ensure the OCRed PDF exists before conversion
     if not final_pdf_path or not os.path.exists(final_pdf_path):
         logger.error(f"❌ No OCRed PDF found at {final_pdf_path}. Skipping DOCX conversion.")
         return {"error": "OCRed PDF not found", "ocr_file_id": ocr_file_id}
 
     ocr_service = OCRService()
-    ocr_dir = os.path.dirname(final_pdf_path)
-    formatted_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_formatted.docx")
+    formatted_docx_path = os.path.join(os.path.dirname(final_pdf_path), f"{uuid.uuid4()}_formatted.docx")
 
-    # ✅ Convert to formatted DOCX
+    # Convert to formatted DOCX
     formatted_output = ocr_service.convert_to_formatted_docx(final_pdf_path, formatted_docx_path)
 
     registered = None
@@ -278,7 +313,7 @@ def process_pdf_to_docx(ocr_file_id, final_pdf_path):
             file_entry.docx_path = formatted_output
             file_entry.save()
 
-        # ✅ Register in File table
+        # Register in File table
         registered = register_generated_file(
             file_path=formatted_output,
             user=file_entry.original_file.user,
@@ -288,7 +323,7 @@ def process_pdf_to_docx(ocr_file_id, final_pdf_path):
             folder_name="ocr"
         )
 
-        # ✅ Trigger raw DOCX generation
+        # Trigger raw DOCX generation
         generate_raw_docx.delay(file_entry.id)
 
     return {
@@ -304,52 +339,6 @@ def process_pdf_to_docx(ocr_file_id, final_pdf_path):
         }] if registered else []
     }
 
-
-
-'''
-@shared_task
-def process_pdf_to_docx(ocr_file_id, final_pdf_path):
-    """Converts an OCR’ed PDF to both formatted and raw DOCX and updates the database."""
-    file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
-
-    # ✅ Ensure OCRed PDF exists before conversion
-    if not final_pdf_path or not os.path.exists(final_pdf_path):
-        logger.error(f"❌ No OCRed PDF found at {final_pdf_path}. Skipping DOCX conversion.")
-        return None
-
-    ocr_service = OCRService()
-    
-    # ✅ **Define output paths inside `ocr/` directory**
-    ocr_dir = os.path.dirname(final_pdf_path)
-    formatted_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_formatted.docx")
-
-    # ✅ **Convert to formatted DOCX using Adobe**
-    formatted_output = ocr_service.convert_to_formatted_docx(final_pdf_path, formatted_docx_path)
-
-    # ✅ **Update database with formatted DOCX path**
-    with transaction.atomic():
-        if formatted_output:
-            file_entry.docx_path = formatted_output
-            file_entry.save()
-
-    # ✅ **Trigger raw DOCX generation**
-    if formatted_output:
-        generate_raw_docx.delay(file_entry.id)
-
-    register_generated_file(
-        file_path=formatted_output,
-        user=file_entry.original_file.user,
-        run=file_entry.original_file.run,
-        project_id=file_entry.original_file.project_id,
-        service_id=file_entry.original_file.service_id,
-        folder_name="ocr"
-    )
-
-
-    return {"formatted_docx": formatted_output}
-'''
-
-
 @shared_task
 def generate_raw_docx(ocr_file_id):
     """Generate and register a raw DOCX with unformatted text extracted from the formatted DOCX."""
@@ -363,9 +352,7 @@ def generate_raw_docx(ocr_file_id):
             "error": "Formatted DOCX not found"
         }
 
-    # ✅ Define path for RAW DOCX
-    ocr_dir = os.path.dirname(file_entry.docx_path)
-    raw_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_raw.docx")
+    raw_docx_path = os.path.join(os.path.dirname(file_entry.docx_path), f"{uuid.uuid4()}_raw.docx")
 
     original_doc = Document(file_entry.docx_path)
     raw_doc = Document()
@@ -388,7 +375,7 @@ def generate_raw_docx(ocr_file_id):
 
     raw_doc.save(raw_docx_path)
 
-    # ✅ Register file
+    # Register file
     registered = register_generated_file(
         file_path=raw_docx_path,
         user=file_entry.original_file.user,
@@ -398,7 +385,7 @@ def generate_raw_docx(ocr_file_id):
         folder_name="ocr"
     )
 
-    # ✅ Save to DB
+    # Save to DB
     with transaction.atomic():
         file_entry.raw_docx_path = raw_docx_path
         file_entry.save()
@@ -418,66 +405,3 @@ def generate_raw_docx(ocr_file_id):
         }]
     }
 
-
-
-
-'''
-@shared_task
-def generate_raw_docx(ocr_file_id):
-    """Generate a raw DOCX file with unformatted text extracted from the formatted DOCX."""
-    file_entry = get_object_or_404(OCRFile, id=ocr_file_id)
-
-    # ✅ Ensure that a formatted DOCX exists before proceeding
-    if not file_entry.docx_path or not os.path.exists(file_entry.docx_path):
-        logger.error(f"❌ No formatted DOCX found for ocr_file_id: {ocr_file_id}. Skipping RAW DOCX creation.")
-        return None
-
-    # ✅ Define path for the RAW DOCX in the same `ocr/` directory
-    ocr_dir = os.path.dirname(file_entry.docx_path)
-    raw_docx_path = os.path.join(ocr_dir, f"{uuid.uuid4()}_raw.docx")
-
-    # ✅ Load the formatted DOCX
-    original_doc = Document(file_entry.docx_path)
-    raw_doc = Document()  # Create a new blank DOCX
-
-    # ✅ Extract text without any formatting
-    for para in original_doc.paragraphs:
-        if para.text.strip():  # Check if the paragraph has non-blank text
-            new_para = raw_doc.add_paragraph(para.text)
-
-            # ✅ Remove any potential numbering or indentation by resetting paragraph formatting
-            new_para.paragraph_format.left_indent = None
-            new_para.paragraph_format.right_indent = None
-            new_para.paragraph_format.first_line_indent = None
-            new_para.paragraph_format.space_before = None
-            new_para.paragraph_format.space_after = None
-            new_para.paragraph_format.alignment = None
-
-            # ✅ Ensure no text is bolded, italicized, or underlined
-            for run in new_para.runs:
-                run.bold = False
-                run.italic = False
-                run.underline = False
-
-    # ✅ Save the raw DOCX
-    raw_doc.save(raw_docx_path)
-
-    register_generated_file(
-        file_path=raw_docx_path,
-        user=file_entry.original_file.user,
-        run=file_entry.original_file.run,
-        project_id=file_entry.original_file.project_id,
-        service_id=file_entry.original_file.service_id,
-        folder_name="ocr"
-    )
-
-    # ✅ Update database record with raw_docx path
-    with transaction.atomic():
-        file_entry.raw_docx_path = raw_docx_path
-        file_entry.save()
-
-    logger.info(f"✅ Raw DOCX created at {raw_docx_path}")
-
-    return raw_docx_path
-
-'''
