@@ -3,8 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import Topic, Query
-from .serializers import TopicSerializer, QuerySerializer
+from .models import Topic, Query, DatabaseConnection
+from .serializers import TopicSerializer, QuerySerializer, DatabaseConnectionSerializer
 from core.models import File
 from custom_authentication.models import CustomUser
 
@@ -19,8 +19,33 @@ import os
 
 import pandas as pd
 
-from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query
+from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query, test_connection
 from .file_readers import read_pdf_file
+
+
+
+class DatabaseConnectionViewSet(viewsets.ModelViewSet):
+    serializer_class = DatabaseConnectionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return DatabaseConnection.objects.filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+    @action(detail=True, methods=["get"], url_path="test-connection")
+    def test_connection_view(self, request, pk=None):
+        db_conn = get_object_or_404(DatabaseConnection, pk=pk, owner=request.user)
+        connection_uri = db_conn.build_connection_uri()
+
+        try:
+            test_connection(connection_uri)  # Implement this in db_query_tools
+            return Response({"success": "Connection successful."})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
 
 class TopicViewSet(viewsets.ModelViewSet):
     serializer_class = TopicSerializer
@@ -66,6 +91,20 @@ class TopicViewSet(viewsets.ModelViewSet):
             })
         return Response({"active_file": None})
 
+
+    @action(detail=True, methods=["post"])
+    def attach_file(self, request, pk=None):
+        topic = self.get_object()
+        file_id = request.data.get("file_id")
+
+        if not file_id:
+            return Response({"error": "file_id is required"}, status=400)
+
+        file_obj = get_object_or_404(File, id=file_id)
+        topic.files.add(file_obj)
+        return Response({"message": f"File {file_obj.filename} attached to topic {topic.id}."}, status=200)
+
+
     @action(detail=False, methods=['post'], url_path='start-interrogation')
     def start_interrogation(self, request):
         project_id = request.data.get("project_id")
@@ -88,6 +127,28 @@ class TopicViewSet(viewsets.ModelViewSet):
             "service_id": topic.service_id,
             "created": created
         }, status=200)
+
+    @action(detail=True, methods=["get"])
+    def download_chats(self, request, pk=None):
+        topic = self.get_object()
+        queries = topic.queries.filter(user=request.user).order_by("created_at")
+
+        history = []
+        for q in queries:
+            history.append({
+                "query": q.query_text,
+                "response": q.response_text,
+                "file": q.file.filename if q.file else None,
+                "timestamp": q.created_at.isoformat()
+            })
+
+        return Response({
+            "topic_id": topic.id,
+            "project_id": topic.project_id,
+            "service_id": topic.service_id,
+            "messages": history
+        })
+
 
 
 class QueryViewSet(viewsets.ModelViewSet):
@@ -117,6 +178,13 @@ class QueryViewSet(viewsets.ModelViewSet):
             return Response({"error": "topic_id and query_text are required."}, status=400)
 
         topic = get_object_or_404(Topic, id=topic_id, user=request.user)
+
+
+        if not topic.has_data_source:
+            return Response({
+                "error": "No data source connected to this topic. Attach a file or link a database connection."
+            }, status=400)
+
 
         # 🧠 Build conversation memory
         previous_messages = []
@@ -234,12 +302,27 @@ class QueryViewSet(viewsets.ModelViewSet):
             user=request.user,
         ).order_by('created_at')
 
+
         previous_messages = []
+
         for q in previous_queries:
-            if q.query_text:
-                previous_messages.append({"role": "user", "content": q.query_text})
-            if q.response_text:
-                previous_messages.append({"role": "assistant", "content": q.response_text})
+            try:
+                if q.query_text and isinstance(q.query_text, str) and q.query_text.strip():
+                    previous_messages.append({"role": "user", "content": q.query_text})
+                if q.response_text and isinstance(q.response_text, str) and q.response_text.strip():
+                    previous_messages.append({"role": "assistant", "content": q.response_text})
+            except Exception as e:
+                print(f"[⚠️ Skipped bad query ID {q.id} due to: {e}]")
+
+        # 🔍 Check if we have any usable memory
+        if not previous_messages:
+            print("[ℹ️ No previous chat history, treating as fresh query]")
+
+
+        if not previous_messages:
+            response_meta = {"note": "No previous messages — treated as fresh query."}
+        else:
+            response_meta = {"note": f"Used {len(previous_messages)} prior messages as context."}
 
         # Now ask again using the new input with history
         if original.file:

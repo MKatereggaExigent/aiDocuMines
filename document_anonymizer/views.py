@@ -56,6 +56,84 @@ def get_user_from_client_id(client_id):
     except Application.DoesNotExist:
         return None
 
+
+
+
+class SubmitAnonymizationAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            client_id_param,
+            client_secret_param,
+            file_id_param,
+            project_id_param,
+            service_id_param,
+            file_type_param
+        ],
+        operation_description="Starts anonymization using the default Presidio ➝ spaCy pipeline. You can optionally specify the file_type (plain or structured)."
+    )
+    def post(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        project_id = request.query_params.get("project_id")
+        service_id = request.query_params.get("service_id")
+        file_type = request.query_params.get("file_type", "plain").lower()
+
+        if not all([client_id, client_secret, file_id, project_id, service_id]):
+            return Response({"error": "Missing required parameters"}, status=status.HTTP_400_BAD_REQUEST)
+
+        application = get_object_or_404(Application, client_id=client_id)
+        user = application.user
+        file_instance = get_object_or_404(File, id=file_id, project_id=project_id, service_id=service_id)
+
+        if str(file_instance.user.id) != str(user.id):
+            raise PermissionDenied("You are not authorized to process this file.")
+
+        if not os.path.exists(file_instance.filepath):
+            return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # ✅ CHECK FOR EXISTING COMPLETED ANONYMIZATION
+        existing = Anonymize.objects.filter(
+            original_file=file_instance,
+            file_type=file_type,
+            status="Completed",
+            is_active=True
+        ).first()
+
+        if existing:
+            return Response({
+                "message": "This file has already been anonymized.",
+                "anonymized_id": str(existing.id),
+                "anonymized_filepath": existing.anonymized_filepath,
+                "anonymized_structured_filepath": existing.anonymized_structured_filepath,
+                "status": "Completed"
+            }, status=status.HTTP_200_OK)
+
+        # Proceed with new anonymization
+        anonymization_run = AnonymizationRun.objects.create(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            service_id=service_id,
+            client_name=user.username or user.email,
+            status="Processing",
+            anonymization_type="Presidio-Spacy"
+        )
+
+        anonymize_document_task.delay(file_id, file_type, str(anonymization_run.id))
+
+        return Response({
+            "anonymization_run_id": str(anonymization_run.id),
+            "file_id": str(file_instance.id),
+            "status": "Processing"
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+
+
+'''
 class SubmitAnonymizationAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
@@ -119,6 +197,11 @@ class SubmitAnonymizationAPIView(APIView):
             "file_id": str(file_instance.id),
             "status": "Processing"
         }, status=status.HTTP_202_ACCEPTED)
+        '''
+
+
+
+
 
 class DownloadAnonymizedFileAPIView(APIView):
     authentication_classes = [OAuth2Authentication]

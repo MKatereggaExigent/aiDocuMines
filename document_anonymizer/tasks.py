@@ -100,6 +100,7 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
         anonymization_run = get_object_or_404(AnonymizationRun, id=run_id)
         anonymization_run.status = "Completed"
         anonymization_run.save(update_fields=["status"])
+        run = file_entry.run 
     else:
         anonymization_run = AnonymizationRun.objects.create(
                 project_id=file_entry.project_id,

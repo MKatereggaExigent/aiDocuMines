@@ -1,0 +1,72 @@
+
+# ===============================
+# ✅ Django settings
+# ===============================
+DEBUG=False
+SECRET_KEY="django-insecure-o!^pok_qt&z)(i8v-3ojr-0pps4awh_8jh7t*uwzy1tx3v3%aj"
+ALLOWED_HOSTS=aidocumines.com,0.0.0.0,localhost,127.0.0.1,41.76.109.131
+
+# ===============================
+# ✅ PostgreSQL (CapRover hostnames)
+# ===============================
+POSTGRES_DB=aidocumines_backend
+POSTGRES_USER=aidocu_admin
+POSTGRES_PASSWORD=secure1234
+POSTGRES_HOST=db
+# POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+FIELD_ENCRYPTION_KEY=SFhWOROXIEFOWf2TSB9TuLh9lUB7RDZLHJBNauIdIlE=
+
+# ===============================
+# ✅ Django Superuser (optional automation)
+# ===============================
+DJANGO_SUPERUSER_USERNAME=admin
+DJANGO_SUPERUSER_EMAIL=admin@aidocumines.com
+DJANGO_SUPERUSER_PASSWORD=superpassword
+
+# ===============================
+# ✅ Redis & Celery (CapRover internal names)
+# ===============================
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
+REDIS_URL=redis://redis:6379/0
+
+# ===============================
+# ✅ Email SMTP
+# ===============================
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+EMAIL_HOST_USER="michael.kateregga@datasqan.com"
+EMAIL_HOST_PASSWORD="khbz ibib wmub ubok"
+DEFAULT_FROM_EMAIL="info@datasqan.com"
+EMAIL_TIMEOUT=60
+
+# ===============================
+# ✅ Stripe keys (placeholders)
+# ===============================
+STRIPE_TEST_SECRET_KEY=sk_test_placeholder
+STRIPE_LIVE_SECRET_KEY=sk_live_placeholder
+DJSTRIPE_WEBHOOK_SECRET=whsec_placeholder
+
+# ===============================
+# ✅ Misc
+# ===============================
+MallocStackLogging=0
+
+# ===============================
+# ✅ Adobe PDF Services
+# ===============================
+PDF_SERVICES_CLIENT_ID="b61807fd8b2e4051885d96e4e4be064c"
+PDF_SERVICES_CLIENT_SECRET="p8e-0JDJR2-FkYFSaJr_XbpCchyOrcG5F_Qt"
+
+# ===============================
+# ✅ Azure AI Services and Blob Storage
+# ===============================
+STORAGE_ACCOUNT_KEY="uC5iwq4iS+LVoU2WFIM6VXOoGzLOtYueCSoBygETXmi4pRxq5yQpGZY0nmx8nR2eqcQ9o1Q+pk0s+ASt0ZLPtw=="
+CONNECTION_STRING="DefaultEndpointsProtocol=https;AccountName=aidocuminesstorage;AccountKey=uC5iwq4iS+LVoU2WFIM6VXOoGzLOtYueCSoBygETXmi4pRxq5yQpGZY0nmx8nR2eqcQ9o1Q+pk0s+ASt0ZLPtw==;EndpointSuffix=core.windows.net"
+TRANSLATOR_DOCUMENT_KEY="A58WFMMuqGuXcdr4SvRfcduUQsfibBDlUAxpNagjdVSHACzbm2WrJQQJ99BEACYeBjFXJ3w3AAAbACOGFBaV"
+
+OPENAI_API_KEY="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"

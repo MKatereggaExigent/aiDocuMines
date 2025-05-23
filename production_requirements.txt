@@ -188,4 +188,5 @@ pdf2image
 pytesseract
 pandas
 openpyxl
-
+# django-fernet-fields
+django-encrypted-model-fields

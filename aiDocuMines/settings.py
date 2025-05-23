@@ -15,6 +15,8 @@ LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 if not os.path.exists(LOGS_DIR):
     os.makedirs(LOGS_DIR)
 
+FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY")
+
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default")
 DEBUG = os.getenv("DEBUG", "True") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "aidocumines.com,41.76.109.131,127.0.0.1,localhost,0.0.0.0").split(",")
@@ -78,6 +80,13 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "aiDocuMines.wsgi.application"
+
+
+OAUTH2_PROVIDER_APPLICATION_MODEL = 'oauth2_provider.Application'
+OAUTH2_PROVIDER_ID_TOKEN_MODEL = 'oauth2_provider.IDToken'
+OAUTH2_PROVIDER_ACCESS_TOKEN_MODEL = 'oauth2_provider.AccessToken'
+OAUTH2_PROVIDER_REFRESH_TOKEN_MODEL = 'oauth2_provider.RefreshToken'
+
 
 DATABASES = {
     "default": {

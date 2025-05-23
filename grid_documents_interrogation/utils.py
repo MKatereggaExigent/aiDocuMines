@@ -60,9 +60,26 @@ def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
         ]
 
         if previous_messages:
+
+            # previous_messages = previous_messages[-10:]  # Keep last 10 turns
+
             for msg in previous_messages:
-                messages.append({"role": "user", "content": msg.get("query")})
-                messages.append({"role": "assistant", "content": msg.get("response")})
+                role = msg.get("role")
+                content = msg.get("content")
+
+                # Fallback for legacy format with 'query'/'response'
+                if not content:
+                    if msg.get("query"):
+                        role = "user"
+                        content = msg.get("query")
+                    elif msg.get("response"):
+                        role = "assistant"
+                        content = msg.get("response")
+
+                if role and content and isinstance(content, str) and content.strip():
+                    messages.append({"role": role, "content": content})
+                else:
+                    print(f"[⚠️ Skipping malformed message] {msg}")
 
         messages.append({"role": "user", "content": f"Document: {chunk}\n\nQuestion: {query_text}"})
 

@@ -16,12 +16,25 @@ llama = ChatOllama(model="llama3.1:latest", temperature=0.5)
 
 def safe_create_engine(connection_string):
     try:
+        parsed_url = make_url(unquote(connection_string))
+        safe_url = parsed_url.set(password="***")
+        print(f"[🔌 Creating engine for]: {safe_url}")
+        return create_engine(parsed_url)
+    except Exception as e:
+        print(f"[❌ ERROR in safe_create_engine]: {e}")
+        raise
+
+
+'''
+def safe_create_engine(connection_string):
+    try:
         # Unquote password and parse properly
         parsed_url = make_url(unquote(connection_string))
         return create_engine(parsed_url)
     except Exception as e:
         print(f"[❌ ERROR in safe_create_engine]: {e}")
         raise
+'''
 
 def fetch_tables(connection_string):
     """List all available tables in the database."""
@@ -85,4 +98,16 @@ def execute_sql_query(connection_string, sql_query, stream=False, chunk_size=100
     except Exception as e:
         print(f"[Error] SQL execution failed: {e}")
         return pd.DataFrame([{"error": str(e)}])
+
+
+def test_connection(connection_string):
+    """Verify whether the DB is reachable and credentials are valid."""
+    try:
+        engine = safe_create_engine(connection_string)
+        with engine.connect() as conn:
+            conn.execute(sqlalchemy.text("SELECT 1"))
+        print("[✅ DB Connection Successful]")
+    except Exception as e:
+        print(f"[❌ DB Connection Failed]: {e}")
+        raise
 

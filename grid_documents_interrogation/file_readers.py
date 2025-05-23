@@ -8,6 +8,23 @@ import shutil
 import subprocess
 import glob
 
+import pytesseract
+from PIL import Image
+import tempfile
+
+import hashlib
+
+
+
+# Top of file_readers.py
+OCR_CACHE_DIR = "media/ocr_cache"
+
+os.makedirs(OCR_CACHE_DIR, exist_ok=True)  # Make sure it exists
+
+
+# Allow large images (disable Pillow safety)
+Image.MAX_IMAGE_PIXELS = None  # Only do this for trusted PDFs
+
 def read_csv_file(file_path):
     try:
         return pd.read_csv(file_path)
@@ -53,6 +70,193 @@ def read_docx_file(file_path):
         print(f"Error reading DOCX: {e}")
         return None
 
+
+
+def compute_ocr_cache_path(file_path):
+    """
+    Generate a unique OCR cache path using a hash of the absolute file path.
+    Ensures no mixing between clients or topics.
+    """
+    ocr_cache_dir = os.path.join(os.path.dirname(file_path), ".ocr_cache")
+    os.makedirs(ocr_cache_dir, exist_ok=True)
+
+    file_hash = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+    filename = f"{file_hash}.ocr.txt"
+    return os.path.join(ocr_cache_dir, filename)
+
+
+
+def perform_ocr_on_pdf(file_path):
+    """
+    OCR with caching: Avoid repeated OCR if .txt exists AND is non-empty.
+    """
+    ocr_cache_path = file_path + ".ocr.txt"
+
+    if os.path.exists(ocr_cache_path):
+        with open(ocr_cache_path, "r", encoding="utf-8") as f:
+            cached_text = f.read().strip()
+            if cached_text:
+                print(f"[OCR] Using cached OCR from {ocr_cache_path}")
+                return cached_text
+            else:
+                print(f"[OCR] Cached OCR is empty, re-running OCR for {file_path}")
+
+    print(f"[OCR] Starting lightweight OCR on {file_path}")
+    try:
+        doc = fitz.open(file_path)
+        extracted_text = []
+
+        for page_number in range(len(doc)):
+            print(f"[OCR] Rendering page {page_number + 1}/{len(doc)}")
+            try:
+                pix = doc.load_page(page_number).get_pixmap(dpi=96)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_temp:
+                    pix.save(img_temp.name)
+                    image = Image.open(img_temp.name)
+
+                    # safety check
+                    if image.size[0] * image.size[1] > 178_956_970:
+                        print(f"[⚠️ Skipping page {page_number + 1}] Too large, possible decompression bomb")
+                        continue
+                    if image.size[0] > 2000 or image.size[1] > 2000:
+                        print(f"[⚠️ Resizing large image {image.size}]")
+                        image = image.resize((int(image.width / 2), int(image.height / 2)))
+
+                    text = pytesseract.image_to_string(image)
+                    extracted_text.append(text)
+                    os.remove(img_temp.name)
+            except Exception as page_err:
+                print(f"[⚠️ Skipping page {page_number + 1}] Reason: {page_err}")
+                continue
+
+        full_text = "\n".join(extracted_text).strip()
+        print(f"[OCR] OCR complete. Extracted {len(full_text)} characters.")
+
+        if full_text:
+            with open(ocr_cache_path, "w", encoding="utf-8") as f:
+                f.write(full_text)
+
+        return full_text
+
+    except Exception as e:
+        print(f"[❌ OCR ERROR] Failed completely: {e}")
+        return ""
+
+
+
+
+'''
+def perform_ocr_on_pdf(file_path):
+    """
+    Perform lightweight OCR on scanned PDF, with cache per file (by path hash).
+    """
+    cache_path = compute_ocr_cache_path(file_path)
+
+    # Use cache if it exists and is not empty
+    if os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cached_text = f.read()
+            if cached_text.strip():
+                print(f"[OCR] Using cached OCR from {cache_path}")
+                return cached_text
+            else:
+                print(f"[⚠️ OCR] Cache found but is empty. Re-attempting OCR...")
+
+    print(f"[OCR] Starting OCR on {file_path}")
+    try:
+        doc = fitz.open(file_path)
+        extracted_text = []
+
+        for i, page in enumerate(doc):
+            print(f"[OCR] Rendering page {i + 1}/{len(doc)}")
+            try:
+                pix = page.get_pixmap(dpi=96)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_temp:
+                    pix.save(img_temp.name)
+                    image = Image.open(img_temp.name)
+
+                    # Safety checks
+                    if image.size[0] * image.size[1] > 178_956_970:
+                        print(f"[⚠️ Skipping page {i+1}] Too large, possible decompression bomb")
+                        continue
+                    if image.size[0] > 2000 or image.size[1] > 2000:
+                        print(f"[⚠️ Resizing large image {image.size}]")
+                        image = image.resize((int(image.width / 2), int(image.height / 2)))
+
+                    text = pytesseract.image_to_string(image)
+                    extracted_text.append(text)
+                    os.remove(img_temp.name)
+
+            except Exception as page_err:
+                print(f"[⚠️ Skipping page {i + 1}] Reason: {page_err}")
+                continue
+
+        full_text = "\n".join(extracted_text)
+        print(f"[OCR] OCR complete. Extracted {len(full_text)} characters.")
+
+        # Cache the result
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(full_text)
+
+        return full_text
+
+    except Exception as e:
+        print(f"[❌ OCR ERROR] Failed completely: {e}")
+        return ""
+'''
+
+
+
+'''
+def perform_ocr_on_pdf(file_path):
+    """
+    Safer OCR using PyMuPDF + Tesseract with throttled DPI and decompression bomb handling.
+    """
+    print(f"[OCR] Starting lightweight OCR on {file_path}")
+    try:
+        doc = fitz.open(file_path)
+        extracted_text = []
+
+        for page_number in range(len(doc)):
+            print(f"[OCR] Rendering page {page_number + 1}/{len(doc)}")
+            tmp_img_path = None
+
+            try:
+                # Use low DPI to reduce image size
+                pix = doc.load_page(page_number).get_pixmap(dpi=96)
+
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as img_temp:
+                    pix.save(img_temp.name)
+                    tmp_img_path = img_temp.name
+
+                image = Image.open(tmp_img_path)
+
+                # Optional: resize if too large
+                max_size = (2000, 2000)
+                if image.width > max_size[0] or image.height > max_size[1]:
+                    print(f"[⚠️ Resizing large image {image.size}]")
+                    image.thumbnail(max_size)
+
+                text = pytesseract.image_to_string(image)
+                extracted_text.append(text)
+
+            except Exception as page_err:
+                print(f"[⚠️ Skipping page {page_number + 1}] Reason: {page_err}")
+            finally:
+                if tmp_img_path and os.path.exists(tmp_img_path):
+                    os.remove(tmp_img_path)
+
+        full_text = "\n".join(extracted_text)
+        print(f"[OCR] OCR complete. Extracted {len(full_text)} characters.")
+        return full_text
+
+    except Exception as e:
+        print(f"[❌ OCR ERROR] Failed completely: {e}")
+        return ""
+'''
+
+
+'''
 def perform_ocr_on_pdf(file_path):
     try:
         output_img_pattern = file_path.replace('.pdf', '_page_%d.png')
@@ -91,7 +295,20 @@ def perform_ocr_on_pdf(file_path):
     except Exception as e:
         print(f"Advanced OCR failed: {e}")
         return file_path
+'''
 
+
+def read_pdf_file(file_path):
+    """
+    Returns text content of PDF file. Uses OCR for scanned PDFs.
+    """
+    try:
+        return perform_ocr_on_pdf(file_path)
+    except Exception as e:
+        print(f"[❌ PDF READ ERROR] {e}")
+        return ""
+
+'''
 def read_pdf_file(file_path):
     try:
         file_path = perform_ocr_on_pdf(file_path)
@@ -100,6 +317,8 @@ def read_pdf_file(file_path):
     except Exception as e:
         print(f"Error reading PDF: {e}")
         return None
+'''
+
 
 def read_file(file_path):
     if file_path.endswith('.csv'):

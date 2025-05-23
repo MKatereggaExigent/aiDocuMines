@@ -3,12 +3,14 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
-from .views import TopicViewSet, QueryViewSet
 from .db_meta_views import test_db_connection, list_tables, list_columns
+
+from .views import TopicViewSet, QueryViewSet, DatabaseConnectionViewSet
 
 router = DefaultRouter()
 router.register(r"topics", TopicViewSet, basename="topics")
 router.register(r"queries", QueryViewSet, basename="queries")
+router.register(r"connections", DatabaseConnectionViewSet, basename="db-connections")
 
 urlpatterns = [
     # 🧠 MAIN INTERROGATION ROUTES

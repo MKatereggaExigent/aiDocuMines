@@ -133,7 +133,7 @@ class File(models.Model):
     # topic = models.ForeignKey(Topic, on_delete=models.CASCADE, related_name="files", null=True, blank=True)
     # topic = models.ForeignKey("grid_documents_interrogation.Topic", on_delete=models.CASCADE)
     # topic = models.ForeignKey("grid_documents_interrogation.Topic", on_delete=models.SET_NULL, null=True, blank=True)
-    topic = models.ForeignKey("grid_documents_interrogation.Topic", on_delete=models.SET_NULL, null=True, blank=True, related_name="files")
+    topic = models.ForeignKey("grid_documents_interrogation.Topic", on_delete=models.SET_NULL, null=True, blank=True, related_name="primary_files")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="files")
     project_id = models.CharField(max_length=255, db_index=True)
     service_id = models.CharField(max_length=255, db_index=True)
