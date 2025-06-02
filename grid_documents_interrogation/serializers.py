@@ -8,6 +8,7 @@ User = get_user_model()
 
 class DatabaseConnectionSerializer(serializers.ModelSerializer):
     owner = serializers.StringRelatedField(read_only=True)
+    password = serializers.CharField(write_only=True)
 
     class Meta:
         model = DatabaseConnection
@@ -18,11 +19,20 @@ class DatabaseConnectionSerializer(serializers.ModelSerializer):
             'host',
             'port',
             'username',
+            'password',          # <- required for POST
             'database_name',
             'created_at',
             'owner'
         ]
         read_only_fields = ['id', 'created_at', 'owner']
+
+    def create(self, validated_data):
+        password = validated_data.pop("password", None)
+        instance = DatabaseConnection(**validated_data)
+        if password is not None:
+            instance.password = password  # 🔒 force trigger encryption
+        instance.save()
+        return instance
 
 
 class FileSerializer(serializers.ModelSerializer):

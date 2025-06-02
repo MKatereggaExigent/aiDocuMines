@@ -82,6 +82,32 @@ def generate_sql_query(table, user_query, column_names):
 
 
 def execute_sql_query(connection_string, sql_query, stream=False, chunk_size=100):
+    """
+    Run the SQL query and return results either all-at-once or in chunks.
+    If streaming, loads all chunks into memory and returns a single DataFrame.
+    """
+    try:
+        engine = safe_create_engine(connection_string)
+        with engine.connect() as connection:
+            if stream:
+                result = connection.execution_options(stream_results=True).execute(sqlalchemy.text(sql_query))
+                df_chunks = []
+                while True:
+                    rows = result.fetchmany(chunk_size)
+                    if not rows:
+                        break
+                    df_chunks.append(pd.DataFrame(rows, columns=result.keys()))
+                return pd.concat(df_chunks, ignore_index=True) if df_chunks else pd.DataFrame()
+            else:
+                return pd.read_sql_query(sql_query, con=connection)
+    except Exception as e:
+        print(f"[Error] SQL execution failed: {e}")
+        return pd.DataFrame([{"error": str(e)}])
+
+
+
+'''
+def execute_sql_query(connection_string, sql_query, stream=False, chunk_size=100):
     """Run the SQL query and return results either all-at-once or in chunks."""
     try:
         engine = safe_create_engine(connection_string) # create_engine(connection_string)
@@ -98,6 +124,7 @@ def execute_sql_query(connection_string, sql_query, stream=False, chunk_size=100
     except Exception as e:
         print(f"[Error] SQL execution failed: {e}")
         return pd.DataFrame([{"error": str(e)}])
+'''
 
 
 def test_connection(connection_string):

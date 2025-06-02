@@ -32,6 +32,35 @@ class DatabaseConnectionViewSet(viewsets.ModelViewSet):
         return DatabaseConnection.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
+        instance = serializer.save(owner=self.request.user)
+        # 🔥 Force reloading to correctly decrypt encrypted fields (e.g. password)
+        self._created_instance = DatabaseConnection.objects.get(pk=instance.pk)
+
+    @action(detail=True, methods=["get"], url_path="test-connection")
+    def test_connection_view(self, request, pk=None):
+        # 🔄 Try to use freshly reloaded instance if available
+        db_conn = getattr(self, "_created_instance", None)
+        if not db_conn or str(db_conn.pk) != pk:
+            db_conn = get_object_or_404(DatabaseConnection, pk=pk, owner=request.user)
+
+        connection_uri = db_conn.build_connection_uri()
+
+        try:
+            test_connection(connection_uri)
+            return Response({"success": "Connection successful."})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+'''
+class DatabaseConnectionViewSet(viewsets.ModelViewSet):
+    serializer_class = DatabaseConnectionSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return DatabaseConnection.objects.filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
 
     @action(detail=True, methods=["get"], url_path="test-connection")
@@ -44,7 +73,7 @@ class DatabaseConnectionViewSet(viewsets.ModelViewSet):
             return Response({"success": "Connection successful."})
         except Exception as e:
             return Response({"error": str(e)}, status=500)
-
+'''
 
 
 class TopicViewSet(viewsets.ModelViewSet):

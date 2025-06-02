@@ -146,6 +146,7 @@ LOGGING = {
 CORS_ALLOWED_ORIGINS = [
     "http://aidocumines.com",
     "http://41.76.109.131:8020",
+    "http://41.76.109.131:4200",  # ✅ ADD THIS
     "http://localhost:4200",
     "http://127.0.0.1:3000",
 ]

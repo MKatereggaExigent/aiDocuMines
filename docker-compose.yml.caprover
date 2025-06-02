@@ -1,0 +1,148 @@
+captainVersion: 4
+services:
+  db:
+    image: postgres:15
+    restart: always
+    user: postgres
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: aidocumines_backend
+      POSTGRES_USER: aidocu_admin
+      POSTGRES_PASSWORD: secure1234
+    caproverExtra:
+      containerHttpPort: 5432
+      notExposeAsWebApp: true
+
+  frontend-db:
+    image: postgres:15
+    restart: always
+    user: postgres
+    volumes:
+      - frontend-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: aidocumines_frontend
+      POSTGRES_USER: aidocu_frontend_user
+      POSTGRES_PASSWORD: secure_frontend_pw
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  backend-db:
+    image: postgres:15
+    restart: always
+    user: postgres
+    volumes:
+      - backend-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: aidocumines_backend
+      POSTGRES_USER: aidocu_backend_user
+      POSTGRES_PASSWORD: secure_backend_pw
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  redis:
+    image: redis:alpine
+    restart: always
+    command: redis-server --appendonly yes --save 60 1 --loglevel warning --protected-mode no
+    caproverExtra:
+      containerHttpPort: 6379
+      notExposeAsWebApp: true
+
+  redis-watchdog:
+    image: python:3.11-slim
+    restart: always
+    command: >
+      sh -c "pip install redis && python /watchdog/redis_watchdog.py"
+    volumes:
+      - ./redis_watchdog:/watchdog
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  ollama:
+    image: ollama/ollama
+    restart: always
+    volumes:
+      - ollama-data:/root/.ollama
+    caproverExtra:
+      containerHttpPort: 11434
+      notExposeAsWebApp: true
+
+  db-prepare:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: /app/entrypoint.sh
+    volumes:
+      - .:/app
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: /app/entrypoint.sh
+    volumes:
+      - .:/app
+      - ./media:/app/media
+      - ./static:/app/static
+    environment:
+      SERVICE_NAME: web
+    caproverExtra:
+      containerHttpPort: 8020
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: /app/entrypoint.sh
+    volumes:
+      - .:/app
+    environment:
+      SERVICE_NAME: celery
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: /app/entrypoint.sh
+    volumes:
+      - .:/app
+    environment:
+      SERVICE_NAME: celery_beat
+    caproverExtra:
+      notExposeAsWebApp: true
+
+  file-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
+    volumes:
+      - .:/app
+      - ./media:/app/media
+      - ./logs/supervisor:/var/log
+    environment:
+      SERVICE_NAME: file_monitor
+    caproverExtra:
+      notExposeAsWebApp: true
+
+volumes:
+  db-data:
+  frontend-db-data:
+  backend-db-data:
+  ollama-data:
+
+caproverOneClickApp:
+  displayName: aiDocuMines Django Backend
+  description: Full Django stack deployment including PostgreSQL, Redis, Celery, Ollama, and Supervisor.
+  instructions:
+    start: Starting deployment of aiDocuMines services...
+    end: Deployment complete. You can now manage each service in your CapRover dashboard.
+

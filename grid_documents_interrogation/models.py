@@ -33,7 +33,35 @@ class DatabaseConnection(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.database_type})"
+    
+    def build_connection_uri(self):
+        try:
+            username = quote_plus(str(self.username))
+            decrypted_password = str(self.password)  # This should trigger decryption
+            password = quote_plus(decrypted_password)
 
+            print(f"[🔐 DB URI DEBUG]")
+            print(f"   Raw Username: {self.username}")
+            print(f"   Raw Password: {self.password}")
+            print(f"   Encoded Username: {username}")
+            print(f"   Encoded Password: {password}")
+
+            if self.database_type == "postgres":
+                uri = f"postgresql://{username}:{password}@{self.host}:{self.port}/{self.database_name}"
+            elif self.database_type == "mysql":
+                uri = f"mysql+pymysql://{username}:{password}@{self.host}:{self.port}/{self.database_name}"
+            elif self.database_type == "sqlite":
+                uri = f"sqlite:///{self.database_name}"
+            else:
+                raise ValueError(f"Unsupported database type: {self.database_type}")
+
+            print(f"[🔌 Final Connection URI]: {uri}")
+            return uri
+        except Exception as e:
+            print(f"[❌ URI Build Failed]: {e}")
+            raise
+
+    '''
     def build_connection_uri(self):
         encoded_username = quote_plus(str(self.username))
         encoded_password = quote_plus(str(self.password))
@@ -53,9 +81,11 @@ class DatabaseConnection(models.Model):
         else:
             uri = None
 
+        print(f"[🔐 DEBUG] user={self.username}, password={self.password}, uri={uri}")
+
         print(f"[🔌 Final URI]: {uri}")
         return uri
-
+    '''
 
 class Topic(models.Model):
     """
