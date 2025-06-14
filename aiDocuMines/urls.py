@@ -82,6 +82,10 @@ urlpatterns = [
     path("o/", include("oauth2_provider.urls", namespace="oauth2_provider")),
     path("o/token/", TokenView.as_view(), name="token"),
     path("o/revoke-token/", RevokeTokenView.as_view(), name="revoke-token"),
+
+    # System Settings
+    path("api/v1/system-settings/", include("system_settings.urls")),
+
 ]
 
 # Serve static files for Swagger UI

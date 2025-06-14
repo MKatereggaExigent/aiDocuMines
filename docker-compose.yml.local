@@ -3,7 +3,7 @@ services:
     image: postgres:15
     container_name: aidocumines_db
     restart: unless-stopped
-    user: postgres
+    user: postgres  # ✅ Ensures PostgreSQL runs under the correct user
     volumes:
       - postgres_data:/var/lib/postgresql/data
     env_file:
@@ -12,13 +12,18 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    ports:
+      - "5433:5432"  # ✅ Maps container port 5432 to host port 5433
     networks:
-      - captain-overlay-network
+      - aidocumines_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h db"]
       interval: 10s
       timeout: 5s
       retries: 5
+
 
   frontend_db:
     image: postgres:15
@@ -31,8 +36,12 @@ services:
       POSTGRES_DB: ${FRONTEND_POSTGRES_DB}
       POSTGRES_USER: ${FRONTEND_POSTGRES_USER}
       POSTGRES_PASSWORD: ${FRONTEND_POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    ports:
+      - "5001:5432"  # Host port 5001 mapped to container 5432
     networks:
-      - captain-overlay-network
+      - aidocumines_network
 
   backend_db:
     image: postgres:15
@@ -45,51 +54,48 @@ services:
       POSTGRES_DB: ${BACKEND_POSTGRES_DB}
       POSTGRES_USER: ${BACKEND_POSTGRES_USER}
       POSTGRES_PASSWORD: ${BACKEND_POSTGRES_PASSWORD}
+    expose:
+      - "5432"
+    ports:
+      - "5002:5432"  # Host port 5002 mapped to container 5432
     networks:
-      - captain-overlay-network
+      - aidocumines_network
+
 
   redis:
     image: redis:alpine
     container_name: aidocumines_redis
     restart: unless-stopped
     command: redis-server --appendonly yes --save 60 1 --loglevel warning --protected-mode no
+    expose:
+      - "6379"
+    ports:
+      - "6379:6379"
     networks:
-      - captain-overlay-network
+      - aidocumines_network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 3
 
-  redis_watchdog:
-    image: python:3.11-slim
-    container_name: aidocumines_redis_watchdog
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: >
-      sh -c "pip install redis && python /watchdog/redis_watchdog.py"
-    volumes:
-      - ./redis_watchdog:/watchdog
-    networks:
-      - captain-overlay-network
-
-  ollama:
-    image: ollama/ollama
-    container_name: aidocumines_ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    networks:
-      - captain-overlay-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      # redis:
+      #image: redis:alpine
+      #container_name: aidocumines_redis
+      #restart: unless-stopped  # ✅ Ensures Redis always restarts
+    #command: >
+    #redis-server --appendonly yes --save 60 1 --loglevel warning --protected-mode yes --replicaof no one
+    #expose:
+    # - "6379"
+    #ports:
+    # - "6379:6379"
+    #networks:
+    # - aidocumines_network
+    #healthcheck:
+    #  test: ["CMD", "redis-cli", "ping"]
+    #  interval: 10s
+    #  timeout: 5s
+    #  retries: 3
 
   db_prepare:
     build:
@@ -105,9 +111,9 @@ services:
     env_file:
       - .env
     environment:
-      SERVICE_NAME: db_prepare
+      SERVICE_NAME: db_prepare  # ✅ Ensures correct execution in entrypoint.sh
     networks:
-      - captain-overlay-network
+      - aidocumines_network
 
   web:
     build:
@@ -123,14 +129,18 @@ services:
     env_file:
       - .env
     environment:
-      SERVICE_NAME: web
+      SERVICE_NAME: web  # ✅ Ensures correct execution in entrypoint.sh
     depends_on:
       db_prepare:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    expose:
+      - "8020"
+    ports:
+      - "8020:8020"
     networks:
-      - captain-overlay-network
+      - aidocumines_network
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://0.0.0.0:8020/api/v1/health/ || exit 1"]
       interval: 10s
@@ -144,19 +154,20 @@ services:
     container_name: aidocumines_celery
     restart: unless-stopped
     command: /app/entrypoint.sh
+    # user: appuser  # Run Celery as a non-root user
     volumes:
       - .:/app
     env_file:
       - .env
     environment:
-      SERVICE_NAME: celery
+      SERVICE_NAME: celery  # ✅ Ensures correct execution in entrypoint.sh
     depends_on:
       db_prepare:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
-      - captain-overlay-network
+      - aidocumines_network
     healthcheck:
       test: ["CMD-SHELL", "celery -A aiDocuMines inspect ping"]
       interval: 30s
@@ -175,14 +186,14 @@ services:
     env_file:
       - .env
     environment:
-      SERVICE_NAME: celery_beat
+      SERVICE_NAME: celery_beat  # ✅ Ensures correct execution in entrypoint.sh
     depends_on:
       db_prepare:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     networks:
-      - captain-overlay-network
+      - aidocumines_network
     healthcheck:
       test: ["CMD-SHELL", "celery -A aiDocuMines inspect ping"]
       interval: 30s
@@ -198,8 +209,8 @@ services:
     command: /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
     volumes:
       - .:/app
-      - ./media:/app/media
-      - ./logs/supervisor:/var/log
+      - ./media:/app/media  # ✅ Ensure access to monitored folders
+      - ./logs/supervisor:/var/log  # ✅ Supervisor logs go here
     env_file:
       - .env
     environment:
@@ -208,15 +219,70 @@ services:
       db_prepare:
         condition: service_completed_successfully
     networks:
-      - captain-overlay-network
+      - aidocumines_network
+
+  ollama:
+    image: ollama/ollama
+    container_name: aidocumines_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - aidocumines_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+
+  redis_watchdog:
+    image: python:3.11-slim
+    container_name: aidocumines_redis_watchdog
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "pip install redis && python /watchdog/redis_watchdog.py"
+    volumes:
+      - ./redis_watchdog:/watchdog
+    networks:
+      - aidocumines_network
+
+
+
+
+      #  collabora:
+      #image: collabora/code
+      #container_name: aidocumines_collabora
+      #restart: always
+      #    environment:
+      # - domain=aidocumines.com  # ✅ Ensure this matches your domain
+      #- username=admin
+      #- password=securepassword
+      #- dictionaries=en_US,en_GB
+      #- DONT_GEN_SSL_CERT=true  # ✅ Disable SSL
+        # - extra_params=--o:ssl.enable=false --o:storage.wopi.host=aidocumines.com  # ✅ Add WOPI host
+        #- extra_params=--o:ssl.enable=false --o:storage.wopi.host=aidocumines.com --o:net.proto=IPv4
+        #expose:
+        #- "9980"
+        #ports:
+        #- "8050:9980"
+        #networks:
+        #- aidocumines_network
+        #extra_hosts:
+        #- "host.docker.internal:host-gateway"
+
+networks:
+  aidocumines_network:
+    driver: bridge
 
 volumes:
-  postgres_data:
+  postgres_data:  # ✅ Docker-managed PostgreSQL volume
   frontend_postgres_data:
   backend_postgres_data:
   ollama-data:
-
-networks:
-  captain-overlay-network:
-    external: true
 

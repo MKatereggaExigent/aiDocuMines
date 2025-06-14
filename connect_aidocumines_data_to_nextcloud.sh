@@ -9,7 +9,7 @@ AIDOCUMINES_DATA="/home/aidocumines/Apps/aiDocuMines/media/uploads"
 # Nextcloud Admin Credentials
 NEXTCLOUD_ADMIN_USER="michael.kateregga@datasqan.com"
 NEXTCLOUD_ADMIN_PASS="Micho#25"
-NEXTCLOUD_URL="http://aidocumines.com:8080"
+NEXTCLOUD_URL="https://nextcloud.aidocumines.com"
 
 # File to store generated passwords
 PASSWORD_FILE="nextcloud_user_passwords.txt"

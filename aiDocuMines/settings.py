@@ -17,6 +17,14 @@ if not os.path.exists(LOGS_DIR):
 
 FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY")
 
+
+# ✅ Explicitly tell dotenv where to find the file
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
+
+
+print("✅ Loaded ALLOWED_HOSTS from .env:", os.getenv("ALLOWED_HOSTS"))
+
+
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default")
 DEBUG = os.getenv("DEBUG", "True") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "aidocumines.com,41.76.109.131,127.0.0.1,localhost,0.0.0.0").split(",")
@@ -45,6 +53,7 @@ INSTALLED_APPS = [
     "grid_documents_interrogation",
     "document_operations",
     "file_system",
+    "system_settings"
 ]
 
 MIDDLEWARE = [
@@ -143,13 +152,20 @@ LOGGING = {
     },
 }
 
+
 CORS_ALLOWED_ORIGINS = [
     "http://aidocumines.com",
+    "https://aidocumines.aidocumines.com",
     "http://41.76.109.131:8020",
     "http://41.76.109.131:4200",  # ✅ ADD THIS
     "http://localhost:4200",
     "http://127.0.0.1:3000",
+    "https://aidocumines-frontend.aidocumines.com",
+    "https://ai-docu-mines-frontend.vercel.app"
 ]
+
+# CORS_ALLOW_ALL_ORIGINS = True
+
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-client-id",
