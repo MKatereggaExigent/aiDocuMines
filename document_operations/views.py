@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from .models import Folder, FileFolderLink
 from .serializers import (
     FolderSerializer, FileFolderLinkSerializer,
-    FileSerializer, EffectiveAccessSerializer
+    FileSerializer, EffectiveAccessSerializer, RecursiveFolderSerializer
 )
 from core.models import File
 from custom_authentication.permissions import IsOwner, HasEffectiveAccess
@@ -34,6 +34,7 @@ from rest_framework.generics import RetrieveAPIView
 from .models import FileFolderLink
 from .serializers import FileFolderLinkSerializer
 
+'''
 class FolderDetailView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
@@ -42,6 +43,34 @@ class FolderDetailView(APIView):
         self.check_object_permissions(request, folder)
         serializer = FolderSerializer(folder)
         return Response(serializer.data)
+'''
+
+
+class FolderDetailView(APIView):
+    """
+    GET /api/v1/documents/folders/<uuid>/
+
+    Returns full recursive details of a single folder:
+    - subfolders (nested)
+    - files (optional, default true)
+
+    Query-string support:
+    ─────────────────────
+    ?include_files=false  → omit the file listings
+    """
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    def get(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        self.check_object_permissions(request, folder)
+
+        include_files = request.query_params.get("include_files", "true").lower() == "true"
+        ctx = {"include_files": include_files, "request": request}
+        serializer = RecursiveFolderSerializer(folder, context=ctx)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
 
 class FileDetailView(APIView):
@@ -322,4 +351,132 @@ class PublicSharedFileView(RetrieveAPIView):
             "shared_file": serializer.data,
             "preview_url": link.file.file.url  # Optional: direct link
         })
+
+'''
+# document_operations/views.py
+class FolderListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        folders = Folder.objects.filter(user=request.user)
+        data = [{"id": str(f.id), "name": f.name, "project_id": f.project_id} for f in folders]
+        return Response(data)
+'''
+
+# document_operations/views.py
+class FolderListView(APIView):
+    """
+    GET /api/v1/documents/folders/
+
+    Query-string filters
+    ─────────────────────
+    ?project_id=<str>      → return only this project’s root folders
+    ?service_id=<str>      → narrow further by service
+    ?include_trashed=true  → include folders that are in the trash
+    ?include_files=false   → omit the file listings inside each folder
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # ── base queryset: current user + root-level folders
+        qs = Folder.objects.filter(user=request.user, parent__isnull=True)
+
+        # ── optional query-string filters
+        project_id      = request.query_params.get("project_id")
+        service_id      = request.query_params.get("service_id")
+        include_trashed = request.query_params.get("include_trashed", "false").lower() == "true"
+        include_files   = request.query_params.get("include_files",  "true").lower() == "true"
+
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+
+        if not include_trashed:
+            qs = qs.filter(is_trashed=False)
+
+        # ── serializer context lets us tell the recursive serializer
+        #    whether to include the file list for each folder.
+        ctx = {"include_files": include_files, "request": request}
+
+        serializer = RecursiveFolderSerializer(qs, many=True, context=ctx)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class FolderCreateView(APIView):
+    """
+    POST /api/v1/documents/folders/
+
+    Body:
+    {
+      "name": "child_folder",
+      "project_id": "test_project",
+      "service_id": "test_service",
+      "parent": "<optional_parent_uuid>"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data.copy()
+        data['user'] = request.user.id  # bind folder to user
+
+        serializer = FolderSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        folder = serializer.save()
+        return Response(FolderSerializer(folder).data, status=status.HTTP_201_CREATED)
+
+
+
+
+class TrashSingleFileView(APIView):
+    """
+    PATCH /api/v1/documents/files/<pk>/trash/
+
+    Moves a single file to trash.
+    """
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    def patch(self, request, pk):
+        file = get_object_or_404(File, pk=pk)
+        self.check_object_permissions(request, file)
+        file.is_trashed = True
+        file.save()
+        return Response({"message": f"File {pk} moved to trash."}, status=200)
+
+
+# In document_operations/views.py
+
+class FolderListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = Folder.objects.filter(user=request.user, parent__isnull=True)
+
+        project_id      = request.query_params.get("project_id")
+        service_id      = request.query_params.get("service_id")
+        include_trashed = request.query_params.get("include_trashed", "false").lower() == "true"
+        include_files   = request.query_params.get("include_files",  "true").lower() == "true"
+
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+
+        if not include_trashed:
+            qs = qs.filter(is_trashed=False)
+
+        ctx = {"include_files": include_files, "request": request}
+        serializer = RecursiveFolderSerializer(qs, many=True, context=ctx)
+        return Response(serializer.data, status=200)
+
+    def post(self, request):
+        data = request.data.copy()
+        data['user'] = request.user.id
+        serializer = FolderSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        folder = serializer.save()
+        return Response(FolderSerializer(folder).data, status=201)
 

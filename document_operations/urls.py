@@ -10,11 +10,16 @@ from .views import (
     ListFileVersionsView, RestoreFileVersionView,
     ShareFileView, UnshareFileView, SharedFilesView,
     FilePreviewView, FileAuditLogView,
-    PublicSharedFileView
+    PublicSharedFileView, FolderListView,
+    FolderCreateView, TrashSingleFileView, FolderListCreateView
 )
 
 urlpatterns = [
     # 📁 FOLDER OPERATIONS
+    # path("folders/", FolderListView.as_view(), name="folder_list"),
+    # path("folders/", FolderCreateView.as_view(), name="create-folder"),
+    path("folders/", FolderListCreateView.as_view(), name="folder_list_create"),
+    path("files/<int:pk>/trash/", TrashSingleFileView.as_view(), name="trash-file"),
     path("folders/<uuid:pk>/", FolderDetailView.as_view(), name="folder_detail"),
     path("folders/<uuid:pk>/rename/", RenameFolderView.as_view(), name="folder_rename"),
     path("folders/<uuid:pk>/delete/", DeleteFolderView.as_view(), name="folder_delete"),

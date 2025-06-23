@@ -73,6 +73,9 @@ urlpatterns = [
     # Include document operations app routes
     path("api/v1/documents/", include("document_operations.urls")),
 
+    # 🔍 NEW: semantic search endpoints
+    path("api/v1/document-search/", include("document_search.urls")),
+
     # Swagger API Documentation URLs
     re_path(r"^api/v1/swagger(?P<format>\.json|\.yaml)$", schema_view.without_ui(cache_timeout=0), name="schema-json"),
     path("api/v1/swagger/", schema_view.with_ui("swagger", cache_timeout=0), name="schema-swagger-ui"),

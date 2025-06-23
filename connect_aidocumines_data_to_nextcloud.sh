@@ -1,94 +1,135 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# connect_aidocumines_data_to_nextcloud.sh
+#   • Creates/updates one Nextcloud user per aiDocuMines user folder
+#   • Rsyncs each user’s uploads into Nextcloud
+#   • Stores generated credentials in nextcloud_user_passwords.txt
 
-# Base directory where Nextcloud data is stored on the host
-NEXTCLOUD_DATA="/home/aidocumines/Apps/nextcloud/data"
+set -euo pipefail
 
-# Base directory where aiDocuMines data is stored
+###############################################################################
+# USER CONFIGURATION
+###############################################################################
 AIDOCUMINES_DATA="/home/aidocumines/Apps/aiDocuMines/media/uploads"
-
-# Nextcloud Admin Credentials
-NEXTCLOUD_ADMIN_USER="michael.kateregga@datasqan.com"
-NEXTCLOUD_ADMIN_PASS="Micho#25"
+NEXTCLOUD_ADMIN_USER="admin"
 NEXTCLOUD_URL="https://nextcloud.aidocumines.com"
-
-# File to store generated passwords
 PASSWORD_FILE="nextcloud_user_passwords.txt"
-> "$PASSWORD_FILE"  # Clear the file before writing
 
-# Delete all non-admin users from Nextcloud
-echo "Deleting all non-admin users from Nextcloud..."
-for user in $(docker exec -u www-data nextcloud php occ user:list | awk -F: '{print $1}'); do
-    if [ "$user" != "admin" ] && [ "$user" != "$NEXTCLOUD_ADMIN_USER" ]; then
-        echo "Deleting Nextcloud user: $user"
-        docker exec -u www-data nextcloud php occ user:delete "$user"
-        sudo rm -rf "$NEXTCLOUD_DATA/data/$user"
-    else
-        echo "Skipping admin user: $user"
-    fi
+###############################################################################
+# UTILITY: debug-style colored print (like `icecream`)
+###############################################################################
+ic() {
+  local varname="$1"
+  local value="${!varname}"
+  echo "🧊  $varname=$value"
+}
+
+###############################################################################
+# 1. Locate CapRover-managed Nextcloud container
+###############################################################################
+echo "🔍  Locating CapRover Nextcloud container…"
+NC_CONTAINER=$(docker ps \
+  --filter "ancestor=nextcloud:latest" \
+  --filter "name=srv-captain--nextcloud" \
+  --format "{{.Names}}" | head -n 1)
+
+ic NC_CONTAINER
+[[ -z "$NC_CONTAINER" ]] && { echo "❌  Nextcloud container not found."; exit 1; }
+echo "✅  Using container: $NC_CONTAINER"
+
+###############################################################################
+# 2. Detect host path for /var/www/html
+###############################################################################
+echo -n "📂  Detecting host path of /var/www/html … "
+NC_DATA_HOST=$(docker inspect "$NC_CONTAINER" |
+  jq -r '.[0].Mounts[] | select(.Destination=="/var/www/html") | .Source')
+ic NC_DATA_HOST
+[[ -z "$NC_DATA_HOST" ]] && { echo "❌  Could not resolve host path."; exit 1; }
+echo "OK"
+
+###############################################################################
+# 3. Helper wrappers
+###############################################################################
+occ()        { docker exec -u www-data "$NC_CONTAINER" php occ "$@"; }
+within_nc()  { docker exec -u www-data "$NC_CONTAINER" bash -c "$*"; }
+
+###############################################################################
+# 4. Check if Nextcloud is installed
+###############################################################################
+echo -n "📝  Verifying Nextcloud install… "
+occ status | grep -q "installed: true" && echo "OK" || {
+  echo "❌  Nextcloud is not installed – aborting."; exit 1; }
+
+###############################################################################
+# 5. Delete all users except admin
+###############################################################################
+echo "🧹  Purging non-admin accounts…"
+mapfile -t EXISTING_USERS < <(occ user:list --output=json | jq -r 'keys[]')
+ic EXISTING_USERS
+for u in "${EXISTING_USERS[@]}"; do
+  [[ "$u" == "$NEXTCLOUD_ADMIN_USER" ]] && continue
+  occ user:delete "$u" >/dev/null || true
+  rm -rf "$NC_DATA_HOST/data/$u"  || true
 done
-echo "All non-admin users deleted."
+echo "✅  Finished purging."
 
-# Loop through each user directory in aiDocuMines
-for user_dir in "$AIDOCUMINES_DATA"/*; do
-    if [ -d "$user_dir" ]; then
-        user_id=$(basename "$user_dir")
+###############################################################################
+# 6. Sync aiDocuMines user folders into Nextcloud
+###############################################################################
+echo "🔐  New credentials will be written to $PASSWORD_FILE"
+: > "$PASSWORD_FILE"
 
-        # Define the Nextcloud username and email
-        nextcloud_username="user_$user_id"
-        user_email="${nextcloud_username}@aidocumines.com"
-        nextcloud_user_dir="$NEXTCLOUD_DATA/data/$nextcloud_username/files"
+shopt -s nullglob
+for SRC_DIR in "$AIDOCUMINES_DATA"/*; do
+  [[ -d "$SRC_DIR" ]] || continue
+  USER_ID=$(basename "$SRC_DIR")
+  NC_USER="user_${USER_ID}"
+  NC_EMAIL="${NC_USER}@aidocumines.com"
+  NC_FILES="$NC_DATA_HOST/data/$NC_USER/files"
 
-        # Generate a random password for the user
-        user_password=$(openssl rand -base64 12)
+  ic USER_ID
+  echo "👤  Syncing $NC_USER …"
+  PASS=$(openssl rand -base64 12)
 
-        echo "Creating Nextcloud user: $nextcloud_username with email: $user_email"
-        docker exec -u www-data nextcloud bash -c "export OC_PASS=\"$user_password\" && php occ user:add --password-from-env --display-name=\"$nextcloud_username\" --email=\"$user_email\" \"$nextcloud_username\""
+  if occ user:info "$NC_USER" &>/dev/null; then
+    echo "   ↺ user exists – resetting password"
+    echo "$PASS" | occ user:resetpassword "$NC_USER" --password-from-env
+    occ user:setting "$NC_USER" settings email "$NC_EMAIL"
+  else
+    echo "   ➕ creating"
+    within_nc "export OC_PASS='$PASS'; php occ user:add --password-from-env \
+               --display-name='$NC_USER' --email='$NC_EMAIL' '$NC_USER'"
+  fi
 
-        if [ $? -eq 0 ]; then
-            echo "User $nextcloud_username created successfully with email: $user_email and password: $user_password"
-            echo "$nextcloud_username:$user_password:$user_email" >> "$PASSWORD_FILE"
-        else
-            echo "Error: Failed to create user $nextcloud_username."
-            continue
-        fi
+  echo "$NC_USER:$PASS:$NC_EMAIL" >> "$PASSWORD_FILE"
 
-        # Remove admin privileges from the user (if any)
-        docker exec -u www-data nextcloud php occ group:remove "$nextcloud_username" admin
-        docker exec -u www-data nextcloud php occ user:disable "$nextcloud_username"
-        docker exec -u www-data nextcloud php occ user:enable "$nextcloud_username"
+  occ group:remove "$NC_USER" admin || true
+  occ user:disable "$NC_USER"      || true
+  occ user:enable  "$NC_USER"      || true
 
-        # Create the user's Nextcloud directory
-        echo "Creating Nextcloud directory for User ID: $user_id"
-        sudo mkdir -p "$nextcloud_user_dir"
-        sudo chown -R www-data:www-data "$NEXTCLOUD_DATA/data/$nextcloud_username"
-        sudo chmod -R 755 "$NEXTCLOUD_DATA/data/$nextcloud_username"
+  mkdir -p "$NC_FILES"
+  chown -R www-data:www-data "$NC_DATA_HOST/data/$NC_USER"
+  chmod -R 755               "$NC_DATA_HOST/data/$NC_USER"
 
-        # Set permissions on the aiDocuMines data to prevent deletions
-        echo "Setting permissions for aiDocuMines data for User ID: $user_id"
-        sudo find "$user_dir" -type d -exec chmod 555 {} \;  # Read and execute (no write) for directories
-        sudo find "$user_dir" -type f -exec chmod 444 {} \;  # Read-only for files
-        sudo chown -R www-data:www-data "$user_dir"
+  echo "   ↳ syncing $USER_ID → Nextcloud"
+  find "$SRC_DIR" -type d -exec chmod 555 {} +   # dirs: r-x
+  find "$SRC_DIR" -type f -exec chmod 444 {} +   # files: r--
+  chown -R www-data:www-data "$SRC_DIR"
 
-        # Sync the aiDocuMines data to Nextcloud folder
-        echo "Syncing data for User ID $user_id..."
-        sudo rsync -av --delete "$user_dir/" "$nextcloud_user_dir/"
-        sudo chown -R www-data:www-data "$nextcloud_user_dir"
+  rsync -a --delete "$SRC_DIR/" "$NC_FILES/"
+  chown -R www-data:www-data "$NC_FILES"
 
-        # Fixing permissions inside the container
-        docker exec -u www-data nextcloud bash -c "
-            chown -R www-data:www-data /var/www/html/data &&
-            chmod -R 755 /var/www/html/data
-        "
-
-        # Rescan files to update Nextcloud file index
-        echo "Rescanning Nextcloud files for User ID: $user_id"
-        docker exec -u www-data nextcloud php occ files:scan "$nextcloud_username"
-    fi
+  occ files:scan "$NC_USER" >/dev/null
 done
 
-# Restart Nextcloud Docker container to recognize new files
-docker restart nextcloud
-echo "Nextcloud containers restarted to recognize new directories."
+###############################################################################
+# 7. Permissions and full scan
+###############################################################################
+echo "🔧  Final permission fix inside container…"
+within_nc 'chown -R www-data:www-data /var/www/html/data && chmod -R 755 /var/www/html/data'
 
-echo "User passwords saved in: $PASSWORD_FILE"
+echo "🔄  Running occ files:scan --all (quick)…"
+occ files:scan --all >/dev/null
+
+echo "🎉  Done.  Credentials saved to $PASSWORD_FILE"
 

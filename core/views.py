@@ -63,305 +63,186 @@ def health_check(request):
     return JsonResponse({"status": "ok"}, status=200)
 
 
+
+# views.py  ────────────────────────────────────────────────────────────────────
 @method_decorator(csrf_exempt, name="dispatch")
 class FileUploadView(APIView):
     """
     Upload files securely using OAuth2 authentication.
+
+    • Blocks accidental re-uploads by the SAME user (md5 + user scope)
+    • Re-uses storage when a DIFFERENT user uploads the same file
+    • Allows intentional clones when   clone_file=true   is sent
     """
     parser_classes = [MultiPartParser, FormParser]
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
 
     @swagger_auto_schema(
-        operation_description="Upload multiple files securely using OAuth2 authentication. Run ID is generated automatically.",
+        operation_description="Upload multiple files securely using OAuth2 authentication. "
+                              "Set clone_file=true to create an intentional copy.",
         tags=["File Upload"],
         manual_parameters=[client_id_param, project_id_param, service_id_param, file_param],
         responses={201: "Upload Successful", 400: "Bad Request", 403: "Forbidden"},
     )
     def post(self, request, *args, **kwargs):
+        # ── Auth & basic params ───────────────────────────────────────────────
         client_id = request.headers.get("X-Client-ID")
-        access_token_string = request.headers.get("Authorization", "").split("Bearer ")[-1]
+        access_token = request.headers.get("Authorization", "").split("Bearer ")[-1]
 
-        # ✅ Enforce OAuth2 Authentication
-        if not access_token_string:
-            return Response({"error": "Authorization token missing"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not access_token:
+            return Response({"error": "Authorization token missing"}, status=401)
 
         user = get_user_from_client_id(client_id)
         if not user:
-            return Response({"error": "Invalid client ID"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Invalid client ID"}, status=401)
 
         project_id = request.data.get("project_id")
         service_id = request.data.get("service_id")
-        files = request.FILES.getlist("file")
+        files      = request.FILES.getlist("file")
+        clone_file = request.data.get("clone_file", "false").lower() == "true"
 
-        if not all([client_id, project_id, service_id]) or not files:
-            return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
+        if not all([project_id, service_id]) or not files:
+            return Response({"error": "Missing required fields"}, status=400)
 
-        user_id = str(user.id)
+        # ── Per-upload run & path scaffold ───────────────────────────────────
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        run_id = str(uuid.uuid4())  # ✅ Generated Internally
-
-        # ✅ Create Run instance
-        run = Run.objects.create(run_id=run_id, user=user, status="Pending")
-
-        file_data = []
-        upload_dir = os.path.join(settings.MEDIA_ROOT, "uploads", user_id, timestamp, client_id, project_id, service_id, run_id)
-        os.makedirs(upload_dir, exist_ok=True)
-        
-        for file in files:
-            try:
-                temp_dir = os.path.join(upload_dir, "temp")
-                os.makedirs(temp_dir, exist_ok=True)
-            
-                # Temporarily save the file to compute MD5 only
-                temp_details = save_uploaded_file(file, temp_dir)
-            
-                # ✅ Check for existing file BEFORE permanently saving
-                existing_file = File.objects.filter(md5_hash=temp_details["md5_hash"]).first()
-            
-                if existing_file:
-                    if existing_file.user == user:
-                        logger.info(f"📎 Duplicate file by same user: {temp_details['filename']}")
-                        # Clean up the temporary file
-                        os.remove(temp_details["file_path"])
-                        return Response({
-                            "message": "Duplicate file already exists under your account.",
-                            "file_id": existing_file.id,
-                            "filename": temp_details["filename"],
-                            "md5_hash": existing_file.md5_hash,
-                            "project_id": existing_file.project_id,
-                            "service_id": existing_file.service_id,
-                            "filepath": existing_file.filepath,
-                        }, status=status.HTTP_200_OK)
-                    else:
-                        logger.info(f"🔗 Sharing existing file {existing_file.id} with new user {user.id}")
-                        os.remove(temp_details["file_path"])  # Clean up the temporary file
-            
-                        # Use existing file but link to this user/project/service
-                        storage = existing_file.storage
-                        file_instance = File.objects.create(
-                            run=run,
-                            storage=storage,
-                            filename=existing_file.filename,
-                            filepath=existing_file.filepath,
-                            file_size=existing_file.file_size,
-                            file_type=existing_file.file_type,
-                            md5_hash=existing_file.md5_hash,
-                            user=user,
-                            project_id=project_id,
-                            service_id=service_id,
-                        )
-            
-                        # Link to folder
-                        folder, _ = Folder.objects.get_or_create(
-                            name=project_id,
-                            user=user,
-                            project_id=project_id,
-                            service_id=service_id,
-                            defaults={"created_at": timezone.now()}
-                        )
-                        FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-            
-                        return Response({
-                            "message": "Duplicate file reused from another user and linked to your account.",
-                            "file_id": file_instance.id,
-                            "filename": file_instance.filename,
-                            "md5_hash": file_instance.md5_hash,
-                            "project_id": project_id,
-                            "service_id": service_id,
-                            "filepath": file_instance.filepath,
-                        }, status=status.HTTP_201_CREATED)
-            
-                # ✅ No duplicate: save permanently
-                final_path = os.path.join(upload_dir, temp_details["filename"])
-                os.rename(temp_details["file_path"], final_path)
-                temp_details["file_path"] = final_path
-            
-                # Save storage & DB entry
-                #storage = Storage.objects.create(user=user, run=run, upload_storage_location=final_path)
-                storage = Storage.objects.create(user=user, content_type=ContentType.objects.get_for_model(run.__class__), upload_storage_location=final_path)
-    
-                # ✅ No duplicate: create a preliminary File instance to get file_id
-                #storage = Storage.objects.create(user=user, run=run)  # Temp storage, we'll update upload path after
-                storage = Storage.objects.create(user=user, content_type=ContentType.objects.get_for_model(run.__class__))  # Temp storage, we'll update upload path after
-
-                file_instance = File.objects.create(
-                    run=run,
-                    storage=storage,
-                    filename=temp_details["filename"],
-                    filepath="",  # temp placeholder
-                    file_size=temp_details["file_size"],
-                    file_type=temp_details["file_type"],
-                    md5_hash=temp_details["md5_hash"],
-                    user=user,
-                    project_id=project_id,
-                    service_id=service_id,
-                )
-
-                # ✅ Now we have the file_id; compute final path
-                final_upload_dir = os.path.join(settings.MEDIA_ROOT, "uploads", user_id, timestamp, client_id, project_id, service_id, run_id, str(file_instance.id))
-                os.makedirs(final_upload_dir, exist_ok=True)
-
-                # Move file to final location
-                final_path = os.path.join(final_upload_dir, temp_details["filename"])
-                os.rename(temp_details["file_path"], final_path)
-                temp_details["file_path"] = final_path
-
-                # ✅ Update File and Storage with correct filepath
-                file_instance.filepath = final_path
-                file_instance.save()
-
-                storage.upload_storage_location = final_path
-                storage.save()
-
-                # Record file info for response
-                file_data.append({
-                    "file_id": file_instance.id,
-                    "filename": temp_details["filename"],
-                    "file_size": temp_details["file_size"],
-                    "mime_type": temp_details["file_type"],
-                    "message": "File successfully uploaded.",
-                })
-
-                # ✅ Link to folder
-                folder, _ = Folder.objects.get_or_create(
-                    name=project_id,
-                    user=user,
-                    project_id=project_id,
-                    service_id=service_id,
-                    defaults={"created_at": timezone.now()}
-                )
-                FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-
-
-                '''
-                file_instance = File.objects.create(
-                    run=run,
-                    storage=storage,
-                    filename=temp_details["filename"],
-                    filepath=final_path,
-                    file_size=temp_details["file_size"],
-                    file_type=temp_details["file_type"],
-                    md5_hash=temp_details["md5_hash"],
-                    user=user,
-                    project_id=project_id,
-                    service_id=service_id,
-                )
-            
-                file_data.append({
-                    "file_id": file_instance.id,
-                    "filename": temp_details["filename"],
-                    "file_size": temp_details["file_size"],
-                    "mime_type": temp_details["file_type"],
-                    "message": "File successfully uploaded.",
-                })
-            
-                folder, _ = Folder.objects.get_or_create(
-                    name=project_id,
-                    user=user,
-                    project_id=project_id,
-                    service_id=service_id,
-                    defaults={"created_at": timezone.now()}
-                )
-                FileFolderLink.objects.get_or_create(file=file_instance, folder=folder) 
-                '''
-
-            except IntegrityError as e:
-                if 'core_file_md5_hash_key' in str(e):
-                    existing_file = File.objects.filter(md5_hash=file_details["md5_hash"]).first()
-            
-                    if existing_file:
-                        if existing_file.user == user:
-                            # ✅ Duplicate by same user – just return existing info
-                            logger.info(f"📎 Duplicate file by same user: {file_details['filename']}")
-                            return Response({
-                                "message": "Duplicate file already exists under your account.",
-                                "file_id": existing_file.id,
-                                "filename": file_details["filename"],
-                                "md5_hash": existing_file.md5_hash,
-                                "project_id": existing_file.project_id,
-                                "service_id": existing_file.service_id,
-                                "filepath": existing_file.filepath,
-                            }, status=status.HTTP_200_OK)
-                        else:
-                            # ✅ Duplicate file but uploaded by another user – link to current user
-                            logger.info(f"🔗 Sharing existing file {existing_file.id} with new user {user.id}")
-                            
-                            # Link the file to the current user (e.g. via folder or permission)
-                            file_instance = File.objects.create(
-                                run=run,
-                                storage=existing_file.storage,
-                                filename=existing_file.filename,
-                                filepath=existing_file.filepath,
-                                file_size=existing_file.file_size,
-                                file_type=existing_file.file_type,
-                                md5_hash=existing_file.md5_hash,
-                                user=user,
-                                project_id=project_id,
-                                service_id=service_id,
-                            )
-            
-                            # Link to folder
-                            folder, _ = Folder.objects.get_or_create(
-                                name=project_id,
-                                user=user,
-                                project_id=project_id,
-                                service_id=service_id,
-                                defaults={"created_at": timezone.now()}
-                            )
-                            FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
-                            
-                            # Clean up temp file and run_id directory if unused
-                            import shutil  # make sure it's imported at the top
-
-                            # Clean up the temporary file
-                            try:
-                                os.remove(temp_details["file_path"])
-                                
-                                # ✅ Delete empty /temp directory
-                                temp_dir = os.path.dirname(temp_details["file_path"])
-                                if os.path.exists(temp_dir) and not os.listdir(temp_dir):
-                                    os.rmdir(temp_dir)
-                                    logger.info(f"🧹 Cleaned up empty temp folder: {temp_dir}")
-
-                                # ✅ Delete run_id directory if empty or only had temp
-                                run_dir = os.path.dirname(temp_dir)
-                                contents = os.listdir(run_dir)
-                                if not contents or (contents == ["temp"] and not os.listdir(temp_dir)):
-                                    shutil.rmtree(run_dir)
-                                    logger.info(f"🧹 Cleaned up unused run directory: {run_dir}")
-                            except Exception as cleanup_err:
-                                logger.warning(f"⚠️ Cleanup failed: {cleanup_err}")
-
-                                    
-                            except Exception as cleanup_err:
-                                logger.warning(f"⚠️ Cleanup failed: {cleanup_err}")
-            
-                            return Response({
-                                "message": "Duplicate file reused from another user and linked to your account.",
-                                "file_id": file_instance.id,
-                                "filename": file_instance.filename,
-                                "md5_hash": file_instance.md5_hash,
-                                "project_id": project_id,
-                                "service_id": service_id,
-                                "filepath": file_instance.filepath,
-                            }, status=status.HTTP_201_CREATED)
-                            
-                    else:
-                        logger.error(f"❌ Integrity error but no matching file found for hash: {file_details['md5_hash']}")
-                        return Response({"error": "Duplicate hash but no matching file record found."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-                else:
-                    logger.error(f"❌ Database error during file upload: {e}")
-                    return Response({"error": "An unexpected database error occurred."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return Response(
-            {
-                "message": "File upload received, processing in background.",
-                "run_id": run_id,
-                "files": file_data,
-            },
-            status=status.HTTP_201_CREATED,
+        run       = Run.objects.create(user=user, status="Pending")
+        base_dir  = os.path.join(
+            settings.MEDIA_ROOT, "uploads", str(user.id), timestamp,
+            client_id, project_id, service_id, str(run.run_id)
         )
+        os.makedirs(base_dir, exist_ok=True)
+
+        file_payload = []
+
+        # ── Iterate through each uploaded file ───────────────────────────────
+        for uploaded in files:
+            temp_dir = os.path.join(base_dir, "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+
+            meta = save_uploaded_file(uploaded, temp_dir)     # md5, size, etc.
+
+            # ---- 1️⃣ same-user duplicate check -----------------------------
+            dup_self = File.objects.filter(user=user, md5_hash=meta["md5_hash"]).first()
+            if dup_self:
+                if not clone_file:
+                    os.remove(meta["file_path"])
+                    return Response({
+                        "message"   : "Duplicate file already exists under your account.",
+                        "file_id"   : dup_self.id,
+                        "filename"  : dup_self.filename,
+                        "md5_hash"  : dup_self.md5_hash,
+                        "project_id": dup_self.project_id,
+                        "service_id": dup_self.service_id,
+                        "filepath"  : dup_self.filepath,
+                    }, status=200)
+
+                # clone requested
+                logger.info("📄 Cloning file for user %s : %s", user.id, meta["filename"])
+                os.remove(meta["file_path"])  # cleanup temp
+                clone = File.objects.create(
+                    run=run,
+                    storage=dup_self.storage,
+                    filename=dup_self.filename,
+                    filepath=dup_self.filepath,
+                    file_size=dup_self.file_size,
+                    file_type=dup_self.file_type,
+                    md5_hash=dup_self.md5_hash,
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                    origin_file=dup_self,
+                )
+                _link_to_folder(clone, user, project_id, service_id)
+                file_payload.append(_resp(clone, "File cloned for reuse."))
+                continue  # next upload
+
+            # ---- 2️⃣ cross-user duplicate check ----------------------------
+            dup_other = File.objects.exclude(user=user).filter(md5_hash=meta["md5_hash"]).first()
+            if dup_other:
+                logger.info("🔗 Re-using storage from user %s for user %s", dup_other.user_id, user.id)
+                os.remove(meta["file_path"])
+                reused = File.objects.create(
+                    run=run,
+                    storage=dup_other.storage,
+                    filename=dup_other.filename,
+                    filepath=dup_other.filepath,
+                    file_size=dup_other.file_size,
+                    file_type=dup_other.file_type,
+                    md5_hash=dup_other.md5_hash,
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                )
+                _link_to_folder(reused, user, project_id, service_id)
+                file_payload.append(_resp(reused, "Duplicate file reused from another user."))
+                continue
+
+            # ---- 3️⃣ brand-new upload --------------------------------------
+            final_dir  = os.path.join(base_dir, str(uuid.uuid4()))
+            os.makedirs(final_dir, exist_ok=True)
+            final_path = os.path.join(final_dir, meta["filename"])
+            os.rename(meta["file_path"], final_path)
+
+            storage = Storage.objects.create(
+                user=user,
+                content_type=ContentType.objects.get_for_model(run),
+                upload_storage_location=final_path
+            )
+
+            fresh = File.objects.create(
+                run=run,
+                storage=storage,
+                filename=meta["filename"],
+                filepath=final_path,
+                file_size=meta["file_size"],
+                file_type=meta["file_type"],
+                md5_hash=meta["md5_hash"],
+                user=user,
+                project_id=project_id,
+                service_id=service_id,
+            )
+            _link_to_folder(fresh, user, project_id, service_id)
+            file_payload.append(_resp(fresh, "File uploaded successfully."))
+
+        return Response({"run_id": str(run.run_id), "files": file_payload}, status=201)
+
+
+# ── helper utilities (keep near the view or in utils.py) ─────────────────────
+'''
+def _link_to_folder(file_obj, user, project_id, service_id):
+    folder, _ = Folder.objects.get_or_create(
+        name=project_id,
+        user=user,
+        project_id=project_id,
+        service_id=service_id,
+        defaults={"created_at": timezone.now()},
+    )
+    FileFolderLink.objects.get_or_create(file=file_obj, folder=folder)
+'''
+
+def _link_to_folder(file_obj, user, project_id, service_id):
+    from document_operations.utils import get_or_create_folder_tree, link_file_to_folder
+
+    # Build relative path from final file location
+    try:
+        relative_path = file_obj.filepath.split(f"{project_id}/{service_id}/", 1)[-1]
+        folder_parts = os.path.dirname(relative_path).split("/")
+        leaf_folder = get_or_create_folder_tree(folder_parts, user=user, project_id=project_id, service_id=service_id)
+        link_file_to_folder(file_obj, leaf_folder)
+    except Exception as e:
+        logger.warning(f"Failed to link file {file_obj.id} to folder tree: {e}")
+
+
+def _resp(f, message):
+    return {
+        "file_id"  : f.id,
+        "filename" : f.filename,
+        "file_size": f.file_size,
+        "mime_type": f.file_type,
+        "message"  : message,
+    }
 
 
 class UniversalTaskStatusView(APIView):

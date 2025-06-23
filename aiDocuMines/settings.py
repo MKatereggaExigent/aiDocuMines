@@ -21,10 +21,6 @@ FIELD_ENCRYPTION_KEY = os.getenv("FIELD_ENCRYPTION_KEY")
 # ✅ Explicitly tell dotenv where to find the file
 load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
 
-
-print("✅ Loaded ALLOWED_HOSTS from .env:", os.getenv("ALLOWED_HOSTS"))
-
-
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default")
 DEBUG = os.getenv("DEBUG", "True") == "True"
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "aidocumines.com,41.76.109.131,127.0.0.1,localhost,0.0.0.0").split(",")
@@ -53,7 +49,8 @@ INSTALLED_APPS = [
     "grid_documents_interrogation",
     "document_operations",
     "file_system",
-    "system_settings"
+    "system_settings",
+    "document_search"
 ]
 
 MIDDLEWARE = [
@@ -152,6 +149,16 @@ LOGGING = {
     },
 }
 
+
+# caching backed by the same Redis you already run for Celery
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/1"),  # use DB-1
+        "TIMEOUT": 60 * 60 * 6,      # 6-hour TTL – tune to taste
+        "KEY_PREFIX": "ds",          # document-search
+    }
+}
 
 CORS_ALLOWED_ORIGINS = [
     "http://aidocumines.com",

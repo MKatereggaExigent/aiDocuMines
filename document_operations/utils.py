@@ -197,3 +197,31 @@ def revoke_public_link(file_link: FileFolderLink):
 def log_file_activity(file: File, user: User, action: str, notes=None):
     FileAuditLog.objects.create(file=file, user=user, action=action, notes=notes)
 
+
+# 📁📁 Create nested folders based on a path list
+def get_or_create_folder_tree(path_parts, *, user, project_id, service_id):
+    """
+    Ensure each part in `path_parts` exists as a Folder, nested parent->child.
+    Returns the final (leaf) Folder object.
+    """
+    parent = None
+    for name in path_parts:
+        folder, _ = Folder.objects.get_or_create(
+            name=name,
+            parent=parent,
+            user=user,
+            project_id=project_id,
+            service_id=service_id,
+            defaults={"is_trashed": False}
+        )
+        parent = folder
+    return parent
+
+
+# 🔗 Link a File to its folder (used after file creation)
+def link_file_to_folder(file, folder):
+    """
+    One-to-one link between File and Folder.
+    """
+    return FileFolderLink.objects.get_or_create(file=file, folder=folder)
+

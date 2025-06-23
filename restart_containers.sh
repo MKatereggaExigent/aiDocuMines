@@ -7,4 +7,4 @@ docker restart aidocumines_web
 docker restart aidocumines_celery
 docker restart aidocumines_celery_beat
 docker restart aidocumines_file_monitor
-
+docker restart aidocumines_milvus

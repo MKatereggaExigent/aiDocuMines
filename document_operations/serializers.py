@@ -60,3 +60,63 @@ class FileVersionSerializer(serializers.ModelSerializer):
             'uploaded_by_email',
         ]
 
+
+
+class RecursiveFolderSerializer(serializers.ModelSerializer):
+    subfolders = serializers.SerializerMethodField()
+    files      = serializers.SerializerMethodField()
+
+    class Meta:
+        model  = Folder
+        fields = [
+            "id", "name", "project_id", "service_id", "parent",
+            "created_at", "subfolders", "files",
+        ]
+
+    # ──────────────────────────────────────────
+    def get_subfolders(self, obj):
+        children = obj.subfolders.all().order_by("name")
+        # pass self.context to keep request in nested levels
+        return RecursiveFolderSerializer(
+            children, many=True, context=self.context
+        ).data
+
+    def get_files(self, obj):
+        if not self.context.get("include_files", True):
+            return []
+
+        links = obj.files.filter(is_trashed=False).select_related("file")
+        # forward context here as well
+        return FileFolderLinkSerializer(
+            links, many=True, context=self.context
+        ).data
+
+
+
+
+'''
+class RecursiveFolderSerializer(serializers.ModelSerializer):
+    subfolders = serializers.SerializerMethodField()
+    files = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Folder
+        fields = [
+            'id', 'name', 'project_id', 'service_id', 'parent',
+            'created_at', 'subfolders', 'files'
+        ]
+
+    def get_subfolders(self, obj):
+        # Use reverse relation 'subfolders' or 'children' depending on your related_name
+        children = obj.subfolders.all().order_by("name")  # adjust if your related_name differs
+        return RecursiveFolderSerializer(children, many=True, context=self.context).data
+
+    def get_files(self, obj):
+        include = self.context.get("include_files", True)
+        if not include:
+            return []
+
+        # Avoid returning trashed or unrelated files
+        links = obj.filefolderlink_set.filter(is_trashed=False).select_related("file")
+        return FileFolderLinkSerializer(links, many=True).data
+'''
