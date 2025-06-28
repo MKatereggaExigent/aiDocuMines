@@ -32,6 +32,8 @@ from core.models import File
 from document_search.models import VectorChunk
 from document_search.utils import compute_chunks
 
+from document_search.utils import preview_for_file
+
 # ───────────────────────────── Config & constants ───────────────────────────
 try:
     from document_search import config
@@ -73,6 +75,7 @@ def _ensure_collection() -> Collection:
             [
                 FieldSchema("pk",        DataType.INT64, is_primary=True, auto_id=True),
                 FieldSchema("file_id",   DataType.INT64),
+                FieldSchema("chunk_hash", DataType.INT64),  # 👈 new field for dedup
                 FieldSchema("source",    DataType.VARCHAR, max_length=100),     # filename
                 FieldSchema("chunk_text", DataType.VARCHAR, max_length=2000),   # <- rename!
                 FieldSchema("vector",    DataType.FLOAT_VECTOR, dim=VECTOR_DIM),
@@ -100,7 +103,7 @@ def _ensure_partition(coll: Collection, name: str) -> None:
 
 def _insert_batches(
     coll: Collection,
-    rows: List[Tuple[int, str, str, List[float]]],   # file_id, src, text, vec
+    rows: List[Tuple[int, int, str, str, List[float]]],   # file_id, src, text, vec
     partition: str,
     batch: int = BATCH_SZ,
 ) -> None:
@@ -111,9 +114,10 @@ def _insert_batches(
             coll.insert(
                 [
                     [r[0] for r in slice_],  # file_id
-                    [r[1] for r in slice_],  # source  (filename)
-                    [r[2] for r in slice_],  # chunk_text
-                    [r[3] for r in slice_],  # vector
+                    [r[1] for r in slice_],  # chunk_hash
+                    [r[2] for r in slice_],  # source  (filename)
+                    [r[3] for r in slice_],  # chunk_text
+                    [r[4] for r in slice_],  # vector
                 ],
                 partition_name=partition,
             )
@@ -175,13 +179,27 @@ def index_file(file_id: int, force: bool = False) -> dict:
     part = _partition_name(file.user_id)
     _ensure_partition(coll, part)
     coll.load(partition_names=[part])          # memory-friendly
-    _insert_batches(
-        coll,
-        [
-            (file.id, file.filename, txt, vec) for txt, vec in zip(chunks, vectors)
-        ],
-        partition=part,
-    )
+
+    # _insert_batches(
+    #     coll,
+    #     [
+    #         (file.id, file.filename, txt, vec) for txt, vec in zip(chunks, vectors)
+    #     ],
+    #     partition=part,
+    # )
+
+
+    seen = set()
+    rows = []
+    for txt, vec in zip(chunks, vectors):
+        h = hash(txt)
+        if h in seen:
+            continue
+        seen.add(h)
+        rows.append((file.id, h, file.filename, txt, vec))
+
+    _insert_batches(coll, rows, partition=part)
+
     coll.flush()
     coll.release()
 
@@ -234,8 +252,12 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
     _ensure_partition(coll, part)           # ✅ add this line
     coll.load(partition_names=[part])       # avoids load failure
 
-    expr = f"file_id == {file_id}" if file_id else ""
-
+    if isinstance(file_id, list):
+        expr = f"file_id in {tuple(file_id)}"
+    elif file_id:
+        expr = f"file_id == {file_id}"
+    else:
+        expr = ""
 
     import time
     t0 = time.time()                                        # ⏱️ start
@@ -251,21 +273,44 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
     duration = int((time.time() - t0) * 1000)               # ⏱️ ms
     coll.release()
 
-    hits = [
-        {
-            "file_id": int(hit.entity.get("file_id")),
-            "chunk_text": hit.entity.get("chunk_text", ""),
+    seen = set()
+    hits = []
+    for hit in res[0]:
+        fid   = int(hit.entity.get("file_id"))
+        ctext = hit.entity.get("chunk_text", "")
+        preview = preview_for_file(fid)
+        chash = hash(ctext)
+        if chash in seen:
+            continue
+        seen.add(chash)
+
+        snippet = (ctext[:297] + "…") if len(ctext) > 300 else ctext
+        snippet = snippet.replace("\n", "  \n")  # Markdown line breaks
+
+        hits.append({
+            "file_id": fid,
+            "snippet_md": snippet,
             "score": float(hit.score),
-        }
-        for hit in res[0]
-    ]
+            "preview": preview,
+        })
+        if len(hits) >= top_k:
+            break
+
+   # hits = [
+   #     {
+   #         "file_id": int(hit.entity.get("file_id")),
+   #         "chunk_text": hit.entity.get("chunk_text", ""),
+   #         "score": float(hit.score),
+   #     }
+   #     for hit in res[0]
+   # ]
 
     # ── cache & DB log ──────────────────────────────────────────────────
     cache.set(cache_key, hits, timeout=60 * 60 * 6)  # 6 h
 
     SearchQueryLog.objects.create(
         user_id=user_id,
-        file_id=file_id,
+        file_id=file_id if File.objects.filter(id=file_id).exists() else None,
         query_text=query,
         top_k=top_k,
         duration_ms=duration,

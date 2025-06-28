@@ -25,6 +25,10 @@ from django.contrib.auth import get_user_model
 # The File model lives in the existing core app.
 from core.models import File
 
+from django.db.models.functions import Length
+
+import hashlib
+
 User = get_user_model()
 
 
@@ -73,14 +77,28 @@ class VectorChunk(models.Model):
         ]
         ordering = ["file_id", "chunk_index"]
 
+    chunk_hash = models.CharField(
+        max_length=64,
+        unique=False,  # not globally unique, only dedup by file/user if needed
+        db_index=True,
+        help_text="SHA256 hash of chunk_text for deduplication.",
+    )
+
     # --------------------------------------------------------------------- #
     # Helper properties
     # --------------------------------------------------------------------- #
     def save(self, *args, **kwargs):
-        # Sync user from File automatically on first save
         if not self.user_id:
             self.user_id = self.file.user_id
+        if self.chunk_text and not self.chunk_hash:
+            self.chunk_hash = hashlib.sha256(self.chunk_text.encode()).hexdigest()
         super().save(*args, **kwargs)
+
+    #def save(self, *args, **kwargs):
+    #    # Sync user from File automatically on first save
+    #    if not self.user_id:
+    #        self.user_id = self.file.user_id
+    #    super().save(*args, **kwargs)
 
     @property
     def partition_name(self) -> str:

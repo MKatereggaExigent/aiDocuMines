@@ -4,10 +4,26 @@ from rest_framework import serializers
 from document_search.models import VectorChunk
 
 
+#class VectorChunkSerializer(serializers.ModelSerializer):
+#    class Meta:
+#        model = VectorChunk
+#        fields = ['id', 'file', 'chunk_index', 'chunk_text', 'created_at']
+
+
 class VectorChunkSerializer(serializers.ModelSerializer):
     class Meta:
         model = VectorChunk
-        fields = ['id', 'file', 'chunk_index', 'chunk_text', 'created_at']
+        fields = [
+            'id',
+            'file',
+            'chunk_index',
+            'chunk_text',
+            'chunk_hash',       # ✅ add this line
+            'created_at',
+        ]
+        extra_kwargs = {
+            'chunk_hash': {'read_only': True},  # ✅ optional: prevent client from setting it
+        }
 
 
 class SearchRequestSerializer(serializers.Serializer):

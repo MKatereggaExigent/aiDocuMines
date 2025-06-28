@@ -30,6 +30,20 @@ import os
 from pathlib import Path
 from functools import lru_cache
 from typing import List, Tuple
+from core.models import File
+from unstructured.partition.pdf import partition_pdf
+import nltk
+from nltk.tokenize import sent_tokenize
+nltk.download('punkt')
+
+from pathlib import Path
+import os
+import logging
+from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.docx import partition_docx
+from unstructured.partition.html import partition_html
+
+LOGGER = logging.getLogger(__name__)
 
 # ─────────── Optional dependencies (fail-safe) ─────────────
 try:
@@ -82,6 +96,26 @@ except ImportError:
 
 LOGGER = logging.getLogger(__name__)
 
+
+def safe_metadata_to_dict(metadata):
+    """
+    Recursively converts unstructured metadata objects to JSON-safe dicts.
+    """
+    if metadata is None:
+        return None
+    if hasattr(metadata, "to_dict"):
+        return safe_metadata_to_dict(metadata.to_dict())
+    elif isinstance(metadata, dict):
+        return {k: safe_metadata_to_dict(v) for k, v in metadata.items()}
+    elif isinstance(metadata, (list, tuple)):
+        return [safe_metadata_to_dict(item) for item in metadata]
+    elif isinstance(metadata, (str, int, float, bool)):
+        return metadata
+    else:
+        # fallback to string representation
+        return str(metadata)
+
+
 # ─────────────── Embeddings ────────────────────────────────
 @lru_cache(maxsize=1)
 def _get_model() -> SentenceTransformer:
@@ -101,6 +135,7 @@ def embed_text(text: str) -> List[float]:
 
 
 # ─────────────── Chunking ──────────────────────────────────
+'''
 def split_text(text: str, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP) -> List[str]:
     """Split long text into overlapping chunks with optional truncation."""
     if not text:
@@ -117,6 +152,26 @@ def split_text(text: str, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP) -> List[
         if chunk:
             chunks.append(chunk[:1000])  # truncate to Milvus VARCHAR limit
         start += chunk_size - overlap
+
+    return chunks
+'''
+
+
+def split_text(text: str, chunk_size=500, overlap=100) -> List[str]:
+    sentences = sent_tokenize(text)
+    chunks = []
+    chunk = ""
+
+    for sentence in sentences:
+        if len(chunk) + len(sentence) <= chunk_size:
+            chunk += " " + sentence
+        else:
+            chunks.append(chunk.strip())
+            # Add overlap
+            chunk = sentence[-overlap:] if len(sentence) > overlap else sentence
+
+    if chunk:
+        chunks.append(chunk.strip())
 
     return chunks
 
@@ -241,7 +296,7 @@ _EXTRACTORS = {
     ".png":   _extract_image,
 }
 
-
+'''
 def extract_text(path: str | os.PathLike) -> str:
     """Extract raw text from supported filetypes. Returns '' if unsupported."""
     p = Path(path)
@@ -253,6 +308,42 @@ def extract_text(path: str | os.PathLike) -> str:
         return ""
 
     return extractor(p)
+'''
+
+
+def extract_text(path: str | os.PathLike) -> str:
+    """Extract raw text from supported filetypes using unstructured or fallback extractors."""
+    p = Path(path)
+    ext = p.suffix.lower()
+
+    try:
+        if ext == ".pdf":
+            elements = partition_pdf(filename=str(p))
+            return "\n\n".join(el.text for el in elements if el.text)
+
+        elif ext == ".docx":
+            elements = partition_docx(filename=str(p))
+            return "\n\n".join(el.text for el in elements if el.text)
+
+        elif ext in [".html", ".htm"]:
+            elements = partition_html(filename=str(p))
+            return "\n\n".join(el.text for el in elements if el.text)
+
+        elif ext == ".txt":
+            with p.open("r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        elif ext == ".md":
+            with p.open("r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        else:
+            LOGGER.info("ℹ️ Unsupported extension '%s'; skipping %s", ext, p.name)
+            return ""
+
+    except Exception as e:
+        LOGGER.error("❌ Failed to extract text from [%s]: %s", p.name, e)
+        return ""
 
 
 # ─────────────── High-level pipeline ───────────────────────
@@ -274,4 +365,23 @@ def compute_chunks(
     chunks = split_text(text, chunk_size, overlap)
     vectors = embed_texts(chunks)
     return chunks, vectors
+
+
+# document_search/utils.py
+
+
+def preview_for_file(file_id: int) -> dict:
+    f = File.objects.filter(pk=file_id).first()
+    
+    from django.core.signing import Signer
+    signer = Signer()
+
+    if not f:
+        return {}
+    return {
+        "filename": f.filename,
+        "signed_url": f"/api/download/?token=" + signer.sign(f.id),         # optionally wrap with signer for security
+        "size": f.file_size,
+        "mime": f.file_type,
+    }
 

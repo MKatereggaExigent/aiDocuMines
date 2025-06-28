@@ -253,3 +253,13 @@ tzdata
 ujson
 urllib3
 
+unstructured
+unstructured[all-docs]
+
+unstructured[local-inference,pdf]
+beautifulsoup4
+markdown-it-py
+mdurl
+markdown
+rich
+fonttools

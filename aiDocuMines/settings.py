@@ -50,7 +50,8 @@ INSTALLED_APPS = [
     "document_operations",
     "file_system",
     "system_settings",
-    "document_search"
+    "document_search",
+    "document_structures"
 ]
 
 MIDDLEWARE = [
@@ -138,6 +139,7 @@ SWAGGER_SETTINGS = {
     "SECURITY": [{"oauth2": ["read", "write"]}],
 }
 
+'''
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -146,6 +148,29 @@ LOGGING = {
     },
     "loggers": {
         "django": {"handlers": ["console"], "level": "INFO", "propagate": True},
+    },
+}
+'''
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "level": "DEBUG",
+            "class": "logging.StreamHandler",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": True,
+        },
     },
 }
 

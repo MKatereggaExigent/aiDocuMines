@@ -30,6 +30,9 @@ from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 import mimetypes
 
+from document_search.tasks import index_file  # at the top of views.py
+
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +208,38 @@ class FileUploadView(APIView):
             )
             _link_to_folder(fresh, user, project_id, service_id)
             file_payload.append(_resp(fresh, "File uploaded successfully."))
+
+
+            def trigger_indexing():
+                try:
+                    from core.models import EndpointResponseTable
+
+                    endpoint_response = EndpointResponseTable.objects.create(
+                        run=run,
+                        client=user,  # ✅ correct field name in model
+                        endpoint_name="/api/v1/document-search/index/",
+                        response_data={"auto_trigger": True},  # ✅ corresponds to JSONField
+                        status="Pending"  # ✅ must match one of the allowed choices
+                    )
+                    logger.info("✅ Created EndpointResponseTable entry with ID: %s for file_id=%s", endpoint_response.id, fresh.id)
+
+                    index_file.apply_async((fresh.id,), {"force": True}, task_id=str(endpoint_response.id))
+                    logger.info("🚀 Indexing task successfully queued for file_id=%s", fresh.id)
+
+                except Exception as e:
+                    logger.exception("❌ Failed to trigger indexing for file_id=%s. Error: %s", fresh.id, str(e))
+
+
+            if fresh.file_type.lower() not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+                logger.info("⏭️   Skipping indexing for unsupported type: %s", fresh.file_type)
+            elif not getattr(getattr(user, "settings", None), "auto_index_enabled", True):
+                logger.info("⚙️ Auto-indexing disabled for user %s", user.id)
+            elif File.objects.filter(md5_hash=fresh.md5_hash, vector_chunks__isnull=False).exclude(id=fresh.id).exists():
+                logger.info("♻️ Skipping indexing – vector chunks already exist for file with same MD5: %s", fresh.md5_hash)
+            else:
+                logger.info("🧠 Queueing indexing to happen after transaction commit")
+                transaction.on_commit(trigger_indexing)
+
 
         return Response({"run_id": str(run.run_id), "files": file_payload}, status=201)
 
