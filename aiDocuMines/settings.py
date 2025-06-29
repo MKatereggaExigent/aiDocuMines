@@ -139,19 +139,51 @@ SWAGGER_SETTINGS = {
     "SECURITY": [{"oauth2": ["read", "write"]}],
 }
 
-'''
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "handlers": {
-        "console": {"level": "DEBUG", "class": "logging.StreamHandler"},
+        # Console Handler for standard logs
+        "console": {
+            "level": "DEBUG",
+            "class": "logging.StreamHandler",
+        },
+        # File Handler for Celery logs (optional)
+        "file": {
+            "level": "INFO",
+            "class": "logging.FileHandler",
+            "filename": "celery_logs.log",  # specify the file where Celery logs will be written
+        },
     },
     "loggers": {
-        "django": {"handlers": ["console"], "level": "INFO", "propagate": True},
+        # Default Django logger
+        "django": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": True,
+        },
+        # Celery logger
+        "celery": {
+            "handlers": ["console", "file"],  # Celery logs go to both console and file
+            "level": "INFO",  # Celery logs at INFO level or higher
+            "propagate": False,  # Prevent logs from propagating to the root logger
+        },
+        # Other loggers, e.g., for your application
+        "myapp": {
+            "handlers": ["console"],
+            "level": "DEBUG",  # Or set to INFO depending on your app's needs
+            "propagate": False,
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": "INFO",
     },
 }
-'''
 
+
+'''
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -173,7 +205,7 @@ LOGGING = {
         },
     },
 }
-
+'''
 
 # caching backed by the same Redis you already run for Celery
 CACHES = {

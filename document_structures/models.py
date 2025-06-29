@@ -191,3 +191,54 @@ class SectionEdit(models.Model):
     def __str__(self):
         return f"Edit for Element {self.element_id}"
 
+
+class DocumentElementPairComparison(models.Model):
+    """
+    Stores the similarity score between two specific document elements
+    during a document comparison run.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    comparison = models.ForeignKey(
+        DocumentComparison,
+        on_delete=models.CASCADE,
+        related_name="element_pairs",
+    )
+
+    element_type = models.CharField(max_length=100, blank=True, null=True)
+
+    element_1 = models.ForeignKey(
+        DocumentElement,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="as_element_1_in_comparisons"
+    )
+    element_2 = models.ForeignKey(
+        DocumentElement,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="as_element_2_in_comparisons"
+    )
+
+    text1 = models.TextField(blank=True, null=True)
+    text2 = models.TextField(blank=True, null=True)
+
+    lexical_similarity = models.FloatField(blank=True, null=True)
+    semantic_similarity = models.FloatField(blank=True, null=True)
+
+    note = models.TextField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["comparison", "element_type"]),
+        ]
+
+    def __str__(self):
+        return f"PairComparison {self.id} ({self.element_type})"
+

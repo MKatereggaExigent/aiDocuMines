@@ -1,9 +1,10 @@
-# document_structures/tasks.py
-
 from celery import shared_task
 from document_structures import utils, models
 from core.models import File, Run, User
-from django.db import transaction
+import traceback
+import logging
+
+logger = logging.getLogger("document_structures.tasks")
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -15,25 +16,22 @@ def run_document_partition_task(
     """
     Background task that performs partitioning and extraction on a single document.
     """
-
     try:
-        # Look up the DocumentStructureRun object
         ds_run = models.DocumentStructureRun.objects.get(id=document_structure_run_id)
         ds_run.status = "Processing"
         ds_run.save()
 
-        # Get references to linked objects
         file = ds_run.file
         run = ds_run.run
         user = ds_run.user
 
-        # Run partitioning
         utils.process_document_structures(
             file=file,
             run=run,
             user=user,
             partition_strategy=ds_run.partition_strategy,
             store_embeddings=store_embeddings,
+            ds_run=ds_run,
         )
 
         ds_run.status = "Completed"
@@ -41,6 +39,8 @@ def run_document_partition_task(
         ds_run.save()
 
     except Exception as e:
+        logger.error(f"🔥 Error running partition task: {e}", exc_info=True)
+        traceback.print_exc()
         ds_run.status = "Failed"
         ds_run.error_message = str(e)
         ds_run.save()
@@ -48,12 +48,9 @@ def run_document_partition_task(
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def run_document_comparison_task(
-    self,
-    comparison_id: str,
-):
+def run_document_comparison_task(self, comparison_id: str):
     """
-    Background task to compare two document structure runs
+    Background task to compare two document structure runs.
     """
 
     try:
@@ -64,16 +61,19 @@ def run_document_comparison_task(
         run1 = comparison.run_1
         run2 = comparison.run_2
 
-        # Run the comparison
-        result = utils.compare_document_runs(run1, run2)
+        # Call optimized utils function
+        comparison_obj = utils.compare_document_runs(run1, run2)
 
-        comparison.lexical_similarity = result.lexical_similarity
-        comparison.semantic_similarity = result.semantic_similarity
-        comparison.deviation_report = result.deviation_report or {}
+        comparison.lexical_similarity = comparison_obj.lexical_similarity
+        comparison.semantic_similarity = comparison_obj.semantic_similarity
+        comparison.deviation_report = comparison_obj.deviation_report or {}
         comparison.status = "Completed"
         comparison.save()
 
+        logger.warning(f"✅ Comparison {comparison.id} complete.")
+
     except Exception as e:
+        logger.error(f"🔥 Error running comparison task: {e}", exc_info=True)
         comparison.status = "Failed"
         comparison.save()
         raise

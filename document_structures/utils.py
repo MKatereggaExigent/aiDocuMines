@@ -15,6 +15,10 @@ import numpy as np
 
 import logging
 
+from collections import defaultdict
+
+logger = logging.getLogger(__name__)
+
 logger = logging.getLogger(__name__)
 
 # Load once for efficiency if embeddings enabled
@@ -74,6 +78,196 @@ def run_partition(file: File, partition_strategy: str) -> list:
     return elements
 
 
+def compute_batch_embeddings(texts: list[str]) -> dict[str, list[float]]:
+    """
+    Compute embeddings for a list of texts in a batch.
+
+    Returns:
+        embedding_map = {
+            text -> embedding_vector (list of floats)
+        }
+    """
+    unique_texts = list({t for t in texts if t and t.strip()})
+    if not unique_texts:
+        return {}
+
+    vectors = EMBEDDING_MODEL.encode(
+        unique_texts,
+        batch_size=128,
+        show_progress_bar=True,
+        normalize_embeddings=True,
+    )
+    return dict(zip(unique_texts, vectors.tolist()))
+
+
+def generate_comparison_pairs(run1, run2):
+    """
+    Generate pairwise comparison jobs between all matching element types.
+    Returns a list of dicts:
+        {
+            id: unique pair id
+            type: element type
+            text1: ...
+            text2: ...
+        }
+    """
+    elems1 = list(models.DocumentElement.objects.filter(run=run1))
+    elems2 = list(models.DocumentElement.objects.filter(run=run2))
+
+    logger.warning(f"Run1 - total elements: {len(elems1)}")
+    logger.warning(f"Run2 - total elements: {len(elems2)}")
+
+    def group_by_type(elements):
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for el in elements:
+            grouped[el.element_type].append(el)
+        return grouped
+
+    grouped1 = group_by_type(elems1)
+    grouped2 = group_by_type(elems2)
+
+    all_types = set(grouped1.keys()) | set(grouped2.keys())
+
+    pairs = []
+    pair_id_counter = 0
+
+    for el_type in all_types:
+        list1 = grouped1.get(el_type, [])
+        list2 = grouped2.get(el_type, [])
+
+        for el1 in list1:
+            for el2 in list2:
+                pairs.append({
+                    "id": f"pair_{pair_id_counter}",
+                    "type": el_type,
+                    "text1": el1.text or "",
+                    "text2": el2.text or "",
+                })
+                pair_id_counter += 1
+
+        # Handle extra elements (unmatched)
+        if not list2:
+            for el1 in list1:
+                pairs.append({
+                    "id": f"pair_{pair_id_counter}",
+                    "type": el_type,
+                    "text1": el1.text or "",
+                    "text2": None,
+                    "note": "No matching element found in run2"
+                })
+                pair_id_counter += 1
+
+        if not list1:
+            for el2 in list2:
+                pairs.append({
+                    "id": f"pair_{pair_id_counter}",
+                    "type": el_type,
+                    "text1": None,
+                    "text2": el2.text or "",
+                    "note": "Extra element in run2"
+                })
+                pair_id_counter += 1
+
+    return pairs
+
+
+def aggregate_comparison_results(results):
+    lexical_scores = []
+    semantic_scores = []
+    deviations = []
+
+    for r in results:
+        if "error" in r:
+            deviations.append({
+                "pair_id": r["pair_id"],
+                "error": r["error"]
+            })
+            continue
+
+        # Determine the category
+        semantic_sim = r["semantic_similarity"]
+
+        if semantic_sim >= 0.8:
+            category = "HIGH"
+        elif semantic_sim >= 0.5:
+            category = "MEDIUM"
+        else:
+            category = "LOW"
+
+        deviation_data = {
+            "pair_id": r["pair_id"],
+            "element_type": r["element_type"],
+            "text1": r["text1"][:250] if r["text1"] else None,
+            "text2": r["text2"][:250] if r["text2"] else None,
+            "lexical_similarity": r["lexical_similarity"],
+            "semantic_similarity": r["semantic_similarity"],
+            "note": r.get("note"),
+            "category": category,
+        }
+
+        deviations.append(deviation_data)
+
+        lexical_scores.append(r["lexical_similarity"])
+        semantic_scores.append(r["semantic_similarity"])
+
+    # Sort deviations descending by semantic similarity
+    deviations_sorted = sorted(
+        deviations,
+        key=lambda x: x.get("semantic_similarity", 0.0),
+        reverse=True
+    )
+
+    avg_lexical = round(float(np.mean(lexical_scores)), 4) if lexical_scores else 0.0
+    avg_semantic = round(float(np.mean(semantic_scores)), 4) if semantic_scores else 0.0
+
+    return {
+        "avg_lexical": avg_lexical,
+        "avg_semantic": avg_semantic,
+        "deviations": deviations_sorted,
+    }
+
+
+
+'''
+def aggregate_comparison_results(results):
+    lexical_scores = []
+    semantic_scores = []
+    deviations = []
+
+    for r in results:
+        if "error" in r:
+            deviations.append({
+                "pair_id": r["pair_id"],
+                "error": r["error"]
+            })
+            continue
+
+        if r["lexical_similarity"] < 0.8 or r["semantic_similarity"] < 0.8:
+            deviations.append({
+                "pair_id": r["pair_id"],
+                "element_type": r["element_type"],
+                "text1": r["text1"][:250] if r["text1"] else None,
+                "text2": r["text2"][:250] if r["text2"] else None,
+                "lexical_similarity": r["lexical_similarity"],
+                "semantic_similarity": r["semantic_similarity"],
+                "note": r.get("note"),
+            })
+
+        lexical_scores.append(r["lexical_similarity"])
+        semantic_scores.append(r["semantic_similarity"])
+
+    avg_lexical = round(float(np.mean(lexical_scores)), 4) if lexical_scores else 0.0
+    avg_semantic = round(float(np.mean(semantic_scores)), 4) if semantic_scores else 0.0
+
+    return {
+        "avg_lexical": avg_lexical,
+        "avg_semantic": avg_semantic,
+        "deviations": deviations,
+    }
+'''
+
+
 @transaction.atomic
 def process_document_structures(
     file: File,
@@ -81,6 +275,7 @@ def process_document_structures(
     user: User,
     partition_strategy: str = "partition_auto",
     store_embeddings: bool = True,
+    ds_run: models.DocumentStructureRun = None,  # Add ds_run as a parameter
 ) -> models.DocumentStructureRun:
     """
     Main entry point to:
@@ -91,14 +286,19 @@ def process_document_structures(
 
     logger.warning(f"📝 Starting processing of file_id={file.id}, run_id={run.run_id}")
 
-    # Create the DocumentStructureRun
-    ds_run = models.DocumentStructureRun.objects.create(
-        run=run,
-        file=file,
-        user=user,
-        partition_strategy=partition_strategy,
-        status="Processing",
-    )
+    if ds_run is None:
+        # If no DocumentStructureRun is passed, create a new one
+        ds_run = models.DocumentStructureRun.objects.create(
+            run=run,
+            file=file,
+            user=user,
+            partition_strategy=partition_strategy,
+            status="Processing",
+        )
+    else:
+        # If the DocumentStructureRun already exists, update its status
+        ds_run.status = "Processing"
+        ds_run.save()
 
     try:
         elements = run_partition(file, partition_strategy)
@@ -119,7 +319,6 @@ def process_document_structures(
 
     for el in elements:
         order_counter += 1
-
         el_type = el.category if hasattr(el, "category") else None
         el_text = el.text if hasattr(el, "text") else None
         el_metadata = safe_metadata_to_dict(el.metadata) if hasattr(el, "metadata") else None
@@ -232,38 +431,128 @@ def process_document_structures(
     return ds_run
 
 
+
 def compare_document_runs(run1: models.DocumentStructureRun, run2: models.DocumentStructureRun):
     """
-    Computes lexical and semantic similarity between two document structure runs.
-    Stores DocumentComparison record.
+    Optimized version:
+    - generates all pairs
+    - computes embeddings in batch
+    - computes semantic similarities efficiently
+    - stores comparison result
     """
 
     logger.warning(f"🔍 Comparing runs {run1.id} vs {run2.id}")
 
-    elems1 = models.DocumentElement.objects.filter(run=run1).order_by("order")
-    elems2 = models.DocumentElement.objects.filter(run=run2).order_by("order")
+    # Generate all pair combinations
+    pairs = generate_comparison_pairs(run1, run2)
+    logger.warning(f"✅ Generated {len(pairs)} comparison pairs.")
 
-    text1 = " ".join([el.text for el in elems1 if el.text])
-    text2 = " ".join([el.text for el in elems2 if el.text])
+    # Collect all unique texts to embed
+    all_texts = []
 
-    lexical_sim = lexical_similarity_score(text1, text2)
-    semantic_sim = semantic_similarity_score(text1, text2)
+    all_texts = list({
+        pair["text1"] for pair in pairs if pair["text1"]
+    }.union({
+        pair["text2"] for pair in pairs if pair["text2"]
+    }))
 
+
+    #for pair in pairs:
+    #    if pair["text1"]:
+    #        all_texts.append(pair["text1"])
+    #    if pair["text2"]:
+    #        all_texts.append(pair["text2"])
+
+    # Compute embeddings in one go
+    embedding_map = compute_batch_embeddings(all_texts)
+    logger.warning(f"✅ Computed embeddings for {len(embedding_map)} unique text blocks.")
+
+    # Compute similarities
+    results = []
+    for pair in pairs:
+        text1 = pair["text1"] or ""
+        text2 = pair["text2"] or ""
+
+        if not text1.strip() and not text2.strip():
+            results.append({
+                "pair_id": pair["id"],
+                "lexical_similarity": 0.0,
+                "semantic_similarity": 0.0,
+                "element_type": pair["type"],
+                "text1": text1,
+                "text2": text2,
+                "note": "Both texts empty.",
+            })
+            continue
+
+        # Compute similarities
+        lexical_sim = lexical_similarity_score(text1, text2)
+        semantic_sim = semantic_similarity_score_batch(text1, text2, embedding_map)
+
+        results.append({
+            "pair_id": pair["id"],
+            "lexical_similarity": lexical_sim,
+            "semantic_similarity": semantic_sim,
+            "element_type": pair["type"],
+            "text1": text1,
+            "text2": text2,
+            "note": pair.get("note"),
+        })
+
+    logger.warning(f"✅ Completed pairwise similarity scoring for {len(results)} pairs.")
+
+    # Aggregate results
+    agg = aggregate_comparison_results(results)
+
+    # Store comparison
     comparison = models.DocumentComparison.objects.create(
         run_1=run1,
         run_2=run2,
-        lexical_similarity=lexical_sim,
-        semantic_similarity=semantic_sim,
-        deviation_report={},
-        status="Completed"
+        lexical_similarity=agg["avg_lexical"],
+        semantic_similarity=agg["avg_semantic"],
+        deviation_report={"deviations": agg["deviations"]},
+        status="Completed",
     )
 
-    logger.warning(f"✅ Comparison complete. Lexical={lexical_sim:.3f}, Semantic={semantic_sim:.3f}")
+
+    # Save all pair-level results
+    pair_objects = []
+    for result in results:
+        pair_obj = models.DocumentElementPairComparison(
+            comparison=comparison,
+            element_type=result["element_type"],
+            text1=result["text1"],
+            text2=result["text2"],
+            lexical_similarity=result["lexical_similarity"],
+            semantic_similarity=result["semantic_similarity"],
+            note=result.get("note"),
+        )
+        pair_objects.append(pair_obj)
+
+    if pair_objects:
+        models.DocumentElementPairComparison.objects.bulk_create(pair_objects)
+        logger.warning(f"✅ Saved {len(pair_objects)} DocumentElementPairComparison records.")
+    else:
+        logger.warning("⚠️ No pair-level comparisons to save.")
+
+
+    logger.warning(
+        f"✅ Comparison finished. "
+        f"Avg Lexical={agg['avg_lexical']:.4f} | "
+        f"Avg Semantic={agg['avg_semantic']:.4f}"
+    )
+    logger.warning(f"Total deviations stored: {len(agg['deviations'])}")
 
     return comparison
 
 
 def lexical_similarity_score(text1: str, text2: str) -> float:
+    logger.warning(
+        f"→ lexical_similarity_score() called\n"
+        f"    text1: {repr(text1[:300])}\n"
+        f"    text2: {repr(text2[:300])}"
+    )
+
     tokens1 = set(text1.lower().split())
     tokens2 = set(text2.lower().split())
 
@@ -276,12 +565,16 @@ def lexical_similarity_score(text1: str, text2: str) -> float:
     return len(intersection) / len(union)
 
 
-def semantic_similarity_score(text1: str, text2: str) -> float:
-    if not text1.strip() or not text2.strip():
-        return 0.0
 
-    emb1 = embed_text(text1)
-    emb2 = embed_text(text2)
+def semantic_similarity_score_batch(text1: str, text2: str, embedding_map: dict[str, list[float]]) -> float:
+    """
+    Compute cosine similarity between two texts using pre-computed embeddings.
+
+    Returns:
+        float between -1.0 and 1.0
+    """
+    emb1 = embedding_map.get(text1)
+    emb2 = embedding_map.get(text2)
 
     if emb1 is None or emb2 is None:
         return 0.0
@@ -289,7 +582,12 @@ def semantic_similarity_score(text1: str, text2: str) -> float:
     v1 = np.array(emb1)
     v2 = np.array(emb2)
 
-    cosine_sim = float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
 
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+
+    cosine_sim = float(np.dot(v1, v2) / (norm1 * norm2))
     return cosine_sim
 
