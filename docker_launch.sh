@@ -30,7 +30,7 @@ docker system prune -af || echo "⚠️ Warning: Failed to prune unused images a
 docker volume prune -af || echo "⚠️ Warning: Failed to prune unused volumes."
 
 echo "🚀 Starting Docker containers..."
-docker-compose build --no-cache || { echo "❌ ERROR: Build failed!"; exit 1; }
+docker-compose build || { echo "❌ ERROR: Build failed!"; exit 1; }
 docker-compose up --build -d || { echo "❌ ERROR: Failed to start containers!"; exit 1; }
 
 # 2️⃣ **Wait for PostgreSQL & Redis to be Healthy**

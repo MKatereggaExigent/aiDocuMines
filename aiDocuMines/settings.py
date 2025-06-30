@@ -40,7 +40,8 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "oauth2_provider",
     "corsheaders",
-    "core",
+    #"core",
+    "core.apps.CoreConfig",
     "file_monitor",
     "document_ocr",
     "document_anonymizer",
@@ -51,7 +52,7 @@ INSTALLED_APPS = [
     "file_system",
     "system_settings",
     "document_search",
-    "document_structures"
+    "document_structures",
 ]
 
 MIDDLEWARE = [
@@ -137,6 +138,14 @@ SWAGGER_SETTINGS = {
         }
     },
     "SECURITY": [{"oauth2": ["read", "write"]}],
+}
+
+# Elasticsearch DSL config (modern elasticsearch-dsl)
+ELASTICSEARCH_DSL = {
+    'default': {
+        'hosts': 'http://aidocumines_elasticsearch:9200',
+        'http_auth': ('elastic', 'changeme'),
+    }
 }
 
 

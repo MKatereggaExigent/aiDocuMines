@@ -300,6 +300,25 @@ services:
     networks:
       - captain-overlay-network
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.0
+    container_name: aidocumines_elasticsearch
+    environment:
+      - discovery.type=single-node  # Run Elasticsearch as a single node
+      - ELASTIC_PASSWORD=changeme  # Set a password for security
+    ports:
+      - "9200:9200"  # Expose port for HTTP communication
+      - "9300:9300"  # Expose port for transport communication (optional)
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data  # Persist data
+    networks:
+      - captain-overlay-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=90s"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:
@@ -309,6 +328,7 @@ volumes:
   milvus-etcd-data:
   milvus-minio-data:
   milvus-data:
+  elasticsearch_data:
 
 networks:
   captain-overlay-network:

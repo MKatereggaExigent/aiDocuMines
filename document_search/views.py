@@ -32,6 +32,9 @@ from document_search.tasks import exec_search
 
 import time
 
+from django.db.models import Q
+from datetime import datetime
+
 import logging
 
 logger = logging.getLogger(__name__)
@@ -164,48 +167,6 @@ class BulkReindexMissingView(APIView):
             status=status.HTTP_202_ACCEPTED,
         )
 
-'''
-class ChunkedFileSearchView(APIView):
-    """
-    POST /api/v1/document-search/search/
-    {
-        "query":  "...",
-        "top_k":  8,
-        "file_id": 123   # optional
-    }
-    """
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        ser = SearchRequestSerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
-
-        user      = request.user
-        query     = ser.validated_data["query"]
-        file_id   = ser.validated_data.get("file_id")
-        top_k     = ser.validated_data["top_k"]
-
-        cache_key = f"search:{user.id}:{file_id}:{top_k}:{hash(query)}"
-        cached    = cache.get(cache_key)
-        if cached:                                     # ⚡ 0-ms hit
-            return Response(SearchResultSerializer(cached, many=True).data)
-
-        # off-load to Celery, wait ≤ 5 s (fast in-RAM Milvus call)
-        async_res: AsyncResult = exec_search.apply_async(
-            args=[user.id, query, file_id, top_k]
-        )
-        try:
-            hits = async_res.get(timeout=5)            # quick path
-            return Response(SearchResultSerializer(hits, many=True).data)
-        except Exception:
-            # still running – tell client to poll later
-            return Response(
-                AsyncSearchResponse({"task_id": async_res.id}).data,
-                status=status.HTTP_202_ACCEPTED,
-            )
-'''
-
-
 class ChunkedFileSearchView(APIView):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [IsAuthenticated]
@@ -240,4 +201,83 @@ class ChunkedFileSearchView(APIView):
                 "status": "error",
                 "detail": str(task.result) if task.result else "search-failed"
             }, status=500)
+
+
+
+
+class AdvancedDocumentSearchView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        query = request.data.get("query")
+        top_k = int(request.data.get("top_k", 10))
+        filters = request.data.get("filters", {})
+
+        if not query:
+            return Response({"error": "Query is required"}, status=400)
+
+        # Step 1: run vector search
+        embed_model = _get_model()
+        query_vector = embed_model.encode([query])[0]
+
+        collection = _get_collection()
+        results = collection.search(
+            data=[query_vector],
+            anns_field="vector",
+            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            limit=top_k,
+            output_fields=["file_id", "chunk_text"],
+        )
+
+        file_ids = list({hit.entity.get("file_id") for hit in results[0]})
+
+        # Step 2: build Postgres filters
+        q = Q(user=user)
+
+        if filters.get("created_from"):
+            q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
+        if filters.get("created_to"):
+            q &= Q(created_at__lte=datetime.fromisoformat(filters["created_to"]))
+        if filters.get("author"):
+            q &= Q(metadata__author__icontains=filters["author"])
+        if filters.get("project_id"):
+            q &= Q(project_id=filters["project_id"])
+        if filters.get("service_id"):
+            q &= Q(service_id=filters["service_id"])
+
+        # Apply file_id constraint if we have vector hits
+        if file_ids:
+            q &= Q(id__in=file_ids)
+        else:
+            return Response({"count": 0, "results": []}, status=200)
+
+        files = File.objects.filter(q).prefetch_related("metadata")
+
+        results_out = []
+        for file in files:
+            metadata = file.metadata.first()
+            results_out.append({
+                "file_id": file.id,
+                "filename": file.filename,
+                "file_size": file.file_size,
+                "file_type": file.file_type,
+                "created_at": file.created_at,
+                "author": metadata.author if metadata else None,
+                "keywords": metadata.keywords if metadata else None,
+                "chunk_text": next(
+                    (hit.entity.get("chunk_text") for hit in results[0] if hit.entity.get("file_id") == file.id),
+                    ""
+                ),
+                "score": next(
+                    (hit.score for hit in results[0] if hit.entity.get("file_id") == file.id),
+                    None
+                )
+            })
+
+        return Response({
+            "count": len(results_out),
+            "results": results_out
+        }, status=200)
 

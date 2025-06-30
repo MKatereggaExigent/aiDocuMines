@@ -263,3 +263,7 @@ mdurl
 markdown
 rich
 fonttools
+
+elasticsearch=7.17.12
+elasticsearch-dsl=7.4.1
+urllib3=1.26.20

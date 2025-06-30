@@ -11,7 +11,8 @@ if typing.TYPE_CHECKING:
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 
-
+from elasticsearch_dsl import Document, Date, Keyword, Text, Integer
+from elasticsearch_dsl.connections import connections
 
 User = get_user_model()
 
@@ -312,3 +313,4 @@ class Webhook(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s webhook"
+
