@@ -30,6 +30,8 @@ from document_operations.models import Folder, FileFolderLink
 from django.utils import timezone
 
 from django.contrib.contenttypes.models import ContentType
+import pandas as pd
+from tika import parser
 
 logger = logging.getLogger(__name__)
 
@@ -566,4 +568,51 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
 
     return file_instance
 
+
+
+def extract_document_text(path, mime_type=None):
+    """
+    Extract text from various file types.
+    """
+    import os
+    import pandas as pd
+
+    if not os.path.exists(path):
+        return ""
+
+    ext = os.path.splitext(path)[-1].lower()
+
+    try:
+        if ext == ".pdf":
+            import fitz
+            text = ""
+            doc = fitz.open(path)
+            for page in doc:
+                text += page.get_text()
+            return text
+
+        elif ext == ".docx":
+            from docx import Document
+            doc = Document(path)
+            return "\n".join(p.text for p in doc.paragraphs)
+
+        elif ext == ".txt":
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+
+        elif ext == ".csv":
+            df = pd.read_csv(path, nrows=1000)
+            return df.to_string()
+
+        elif ext == ".xlsx":
+            df = pd.read_excel(path, nrows=1000)
+            return df.to_string()
+
+        else:
+            from tika import parser
+            parsed = parser.from_file(path)
+            return parsed.get("content", "").strip()
+
+    except Exception as e:
+        return f"Error extracting text: {str(e)}"
 

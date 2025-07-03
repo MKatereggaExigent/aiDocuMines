@@ -30,6 +30,8 @@ from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 import mimetypes
 
+from core.tasks import extract_document_text_task
+
 from document_search.tasks import index_file  # at the top of views.py
 
 from django.db import transaction
@@ -240,6 +242,8 @@ class FileUploadView(APIView):
                 logger.info("🧠 Queueing indexing to happen after transaction commit")
                 transaction.on_commit(trigger_indexing)
 
+            # NEW:
+            transaction.on_commit(lambda: extract_document_text_task.delay(fresh.id))
 
         return Response({"run_id": str(run.run_id), "files": file_payload}, status=201)
 

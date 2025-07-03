@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 from .utils import extract_metadata
 
 
-
 @shared_task(bind=True)
 def process_metadata(self, file_id, run_id):
     """Celery task to extract metadata asynchronously and store in DB."""
@@ -268,6 +267,24 @@ def process_file(file_id):
             }
         )
         logger.error(f"❌ File processing failed for file_id: {file_id} - Error: {str(e)}")
+
+
+
+
+
+@shared_task
+def extract_document_text_task(file_id):
+    from core.utils import extract_document_text
+
+    try:
+        file_obj = File.objects.get(id=file_id)
+    except File.DoesNotExist:
+        return
+
+    text = extract_document_text(file_obj.filepath, file_obj.file_type)
+    file_obj.content = text
+    file_obj.save(update_fields=["content"])
+
 
 
 # @shared_task

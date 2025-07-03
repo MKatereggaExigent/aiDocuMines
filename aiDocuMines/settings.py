@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     "system_settings",
     "document_search",
     "document_structures",
+    "file_elasticsearch"
 ]
 
 MIDDLEWARE = [

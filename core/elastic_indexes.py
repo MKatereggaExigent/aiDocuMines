@@ -18,8 +18,8 @@ class RunIndex(Document):
 
 class FileIndex(Document):
     id = Keyword()
-    filename = Text()
-    filepath = Text()
+    filename = Text(analyzer="standard")
+    filepath = Text(analyzer="standard")
     file_size = Integer()
     status = Keyword()
     project_id = Keyword()
@@ -28,6 +28,7 @@ class FileIndex(Document):
     updated_at = Date()
     md5_hash = Keyword()
     user_id = Integer()
+    content = Text(analyzer="english")
 
     class Index:
         name = 'files'
