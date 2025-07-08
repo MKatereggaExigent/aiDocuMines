@@ -29,9 +29,20 @@ from core.models import File
 from document_anonymizer.utils import export_to_markdown, export_to_docx, summarize_blocks, update_structured_block
 from document_anonymizer.tasks import compute_risk_score_task
 import uuid
+from document_anonymizer.tasks import compute_anonymization_stats_task
+from celery.result import AsyncResult
+from rest_framework.pagination import PageNumberPagination
+from rest_framework import generics
+from document_anonymizer.models import AnonymizationStats
+from document_anonymizer.serializers import AnonymizationStatsSerializer
+from document_anonymizer.pagination import StandardResultsSetPagination
 
 import json
 import os
+
+from django.core.cache import cache
+from datetime import datetime
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -44,6 +55,8 @@ service_id_param = openapi.Parameter("service_id", openapi.IN_QUERY, type=openap
 file_type_param = openapi.Parameter("file_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="plain or structured")
 file_type_param = openapi.Parameter("file_type", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="plain or structured")
 variant_param = openapi.Parameter("variant", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="Either 'original' or 'anonymized'")
+
+
 
 def health_check(request):
     from django.http import JsonResponse
@@ -563,4 +576,111 @@ class DownloadRedactionReadyJSONView(APIView):
                 })
 
         return Response(redaction_targets)
+
+
+# document_anonymizer/views.py
+
+from django.core.cache import cache
+from datetime import datetime
+
+class AnonymizationStatsView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            openapi.Parameter("client_name", openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter("service_id", openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter("date_from", openapi.IN_QUERY, type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
+            openapi.Parameter("date_to", openapi.IN_QUERY, type=openapi.TYPE_STRING, format=openapi.FORMAT_DATE),
+        ],
+        operation_description="Triggers computation of anonymization stats with optional filters."
+    )
+    def get(self, request):
+
+        client_name = request.query_params.get("client_name")
+        project_id = request.query_params.get("project_id")
+        service_id = request.query_params.get("service_id")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
+
+        cache_key = f"stats:{client_name}:{project_id}:{service_id}:{date_from}:{date_to}"
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            return Response({
+                "cached": True,
+                "data": cached_result
+            })
+
+        # launch Celery task
+        task = compute_anonymization_stats_task.delay(
+            client_name=client_name,
+            project_id=project_id,
+            service_id=service_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        return Response({
+            "task_id": task.id,
+            "status": "Computation started"
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class AnonymizationStatsResultView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            openapi.Parameter("task_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+        ],
+        operation_description="Fetches result of anonymization stats computation."
+    )
+    def get(self, request):
+        task_id = request.query_params.get("task_id")
+        if not task_id:
+            return Response({"error": "task_id is required"}, status=400)
+
+        result = AsyncResult(task_id)
+        if not result.ready():
+            return Response({"status": "Pending"}, status=202)
+
+        if result.failed():
+            return Response({"status": "Failed", "error": str(result.result)}, status=500)
+
+        stats_data = result.result
+
+        # Cache result for repeated queries
+        cache_key = f"stats:{stats_data.get('client_name')}:{stats_data.get('project_id')}:{stats_data.get('service_id')}:{stats_data.get('date_from')}:{stats_data.get('date_to')}"
+        cache.set(cache_key, stats_data, timeout=60 * 60)  # cache 1 hour
+
+        return Response({
+            "status": "Completed",
+            "data": stats_data
+        }, status=200)
+
+
+
+
+class AnonymizationStatsHistoryView(generics.ListAPIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+    serializer_class = AnonymizationStatsSerializer
+    # pagination_class = PageNumberPagination  # Uses Django's default pagination
+    pagination_class = StandardResultsSetPagination
+
+    def get_queryset(self):
+        qs = AnonymizationStats.objects.all().order_by("-created_at")
+
+        client_name = self.request.query_params.get("client_name")
+        project_id = self.request.query_params.get("project_id")
+        service_id = self.request.query_params.get("service_id")
+        if client_name:
+            qs = qs.filter(client_name=client_name)
+        if project_id:
+            qs = qs.filter(project_id=project_id)
+        if service_id:
+            qs = qs.filter(service_id=service_id)
+        return qs
 

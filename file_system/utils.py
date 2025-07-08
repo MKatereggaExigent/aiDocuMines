@@ -6,11 +6,97 @@ from core.models import File
 def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
     """
     Returns the full nested tree of user's uploaded files and folders,
+    including download URLs and DB file IDs.
+    Matches the NEW upload path structure:
+      uploads/<client_id>/<user_id>/<project_id>/<service_id>/<yyyymmdd>/
+    """
+    if not base_upload_dir:
+        base_upload_dir = os.path.abspath(os.path.join("media", "uploads"))
+
+    file_tree = []
+
+    # Pre-fetch all file records for this user
+    all_files = File.objects.filter(user_id=user_id)
+    file_map = {os.path.normpath(os.path.abspath(f.filepath)): f.id for f in all_files}
+
+    fallback_id_counter = {"counter": -1}
+
+    def get_or_assign_id(filepath):
+        norm_path = os.path.normpath(os.path.abspath(filepath))
+        if norm_path in file_map:
+            return file_map[norm_path]
+        else:
+            new_id = fallback_id_counter["counter"]
+            fallback_id_counter["counter"] -= 1
+            return new_id
+
+    def build_tree(abs_dir, rel_path_parts):
+        items = []
+        try:
+            entries = os.listdir(abs_dir)
+        except FileNotFoundError:
+            return []
+
+        for entry in sorted(entries):
+            abs_path = os.path.join(abs_dir, entry)
+            rel_path = os.path.join(*rel_path_parts, entry)
+
+            if os.path.isdir(abs_path):
+                items.append({
+                    "id": entry,
+                    "name": entry,
+                    "type": "folder",
+                    "children": build_tree(abs_path, rel_path_parts + [entry])
+                })
+            else:
+                file_id = get_or_assign_id(abs_path)
+                download_url = f"/media/uploads/{rel_path}".replace("\\", "/")
+
+                items.append({
+                    "id": file_id,
+                    "name": entry,
+                    "type": "file",
+                    "download_url": download_url,
+                })
+
+        return items
+
+    # Scan base_upload_dir
+    try:
+        client_ids = os.listdir(base_upload_dir)
+    except FileNotFoundError:
+        client_ids = []
+
+    for client_id in client_ids:
+        client_dir = os.path.join(base_upload_dir, client_id)
+        if not os.path.isdir(client_dir):
+            continue
+
+        user_dir = os.path.join(client_dir, str(user_id))
+        if not os.path.isdir(user_dir):
+            continue
+
+        file_tree.append({
+            "id": client_id,
+            "name": client_id,
+            "type": "folder",
+            "children": build_tree(user_dir, [client_id, str(user_id)])
+        })
+
+    return file_tree
+
+
+
+'''
+def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
+    """
+    Returns the full nested tree of user's uploaded files and folders,
     including direct download URL and ID from database for each file.
     Files not in the DB are shown with a unique fallback ID but not saved.
     """
     if not base_upload_dir:
-        base_upload_dir = os.path.abspath(os.path.join("media", "uploads", str(user_id)))
+        # base_upload_dir = os.path.abspath(os.path.join("media", "uploads", str(user_id)))
+        base_upload_dir = os.path.abspath(os.path.join("media", "uploads"))
 
     if not base_url:
         base_url = f"/media/uploads/{user_id}"
@@ -110,3 +196,4 @@ def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
     #}
     return file_tree
 
+'''

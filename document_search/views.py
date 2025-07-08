@@ -12,6 +12,8 @@ from oauth2_provider.contrib.rest_framework import OAuth2Authentication
 
 from django.core.cache import cache
 
+from celery.result import AsyncResult
+
 from document_search.models import VectorChunk
 from document_search.serializers import (
     SearchRequestSerializer,
@@ -35,7 +37,11 @@ import time
 from django.db.models import Q
 from datetime import datetime
 
+from document_search.tasks import semantic_search_task 
+
 import logging
+
+from document_search.config import COLLECTION_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +50,38 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 def _get_collection() -> Collection:
     connections.connect(alias="default", host="localhost", port="19530")
-    collection = Collection("vector_chunks")  # must match tasks.py
+    # collection = Collection("vector_chunks")  # must match tasks.py
+    collection = Collection(COLLECTION_NAME)
     collection.load()
     return collection
+
+# -------------------------------------------------------------
+# Semantic File Search
+# -------------------------------------------------------------
+class SemanticFileSearchView(APIView):
+    """
+    Search using semantic embeddings (vector search in Milvus).
+    POST /api/v1/document-search/semantic-search/
+    body: {"query": "data science", "top_k": 5, "file_id": optional, "filters": optional}
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        query = request.data.get("query")
+        top_k = int(request.data.get("top_k", 5))
+        file_id = request.data.get("file_id")
+        filters = request.data.get("filters", {})
+
+        if not query:
+            return Response({"error": "Query is required"}, status=400)
+
+        # Enqueue the Celery task
+        task = semantic_search_task.apply_async(args=[user.id, query, top_k, file_id, filters])
+
+        # Respond with task ID for the client to poll for results
+        return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -280,4 +315,33 @@ class AdvancedDocumentSearchView(APIView):
             "count": len(results_out),
             "results": results_out
         }, status=200)
+
+
+
+class SearchResultView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, task_id, *args, **kwargs):
+        task_id = str(task_id)                         # ← ADD THIS
+        result = AsyncResult(task_id)
+
+        if result.state == "PENDING":
+            return Response({"status": "pending"}, status=202)
+
+        elif result.state == "FAILURE":
+            return Response({
+                "status": "error",
+                "error": str(result.result),
+            }, status=500)
+
+        elif result.state == "SUCCESS":
+            return Response({
+                "status": "ok",
+                "results": result.result,
+                "count": len(result.result) if result.result else 0,
+            })
+
+        else:
+            return Response({"status": result.state})
 

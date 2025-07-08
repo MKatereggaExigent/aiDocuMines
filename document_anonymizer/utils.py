@@ -8,6 +8,7 @@ import spacy
 from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
 from unstructured.partition.pdf import partition_pdf
+from document_anonymizer.models import Anonymize
 
 logger = logging.getLogger(__name__)
 
@@ -398,3 +399,72 @@ def export_to_docx(json_path):
     out_path = json_path.replace(".json", ".docx")
     doc.save(out_path)
     return out_path
+
+
+def compute_global_anonymization_stats(
+    client_name=None,
+    project_id=None,
+    service_id=None,
+    date_from=None,
+    date_to=None
+):
+    """
+    Computes anonymization stats, optionally filtered by client/project/service/date.
+    """
+
+    from django.db.models import Q
+
+    filters = Q(is_active=True)
+
+    if client_name:
+        filters &= Q(run__client_name=client_name)
+    if project_id:
+        filters &= Q(run__project_id=project_id)
+    if service_id:
+        filters &= Q(run__service_id=service_id)
+    if date_from:
+        filters &= Q(updated_at__date__gte=date_from)
+    if date_to:
+        filters &= Q(updated_at__date__lte=date_to)
+
+    queryset = Anonymize.objects.filter(filters)
+
+    files_with_entities = 0
+    files_without_entities = 0
+    total_entities_anonymized = 0
+    entity_type_breakdown = {}
+
+    for record in queryset:
+        combined_map = {}
+        if record.presidio_masking_map:
+            combined_map.update(record.presidio_masking_map)
+        if record.spacy_masking_map:
+            combined_map.update(record.spacy_masking_map)
+
+        entity_counts = {}
+        for mask, original in combined_map.items():
+            entity_type = mask.split("_MASKED_")[0]
+            entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
+
+        file_entity_total = sum(entity_counts.values())
+        total_entities_anonymized += file_entity_total
+
+        for entity_type, count in entity_counts.items():
+            entity_type_breakdown[entity_type] = (
+                entity_type_breakdown.get(entity_type, 0) + count
+            )
+
+        if file_entity_total > 0:
+            files_with_entities += 1
+        else:
+            files_without_entities += 1
+
+    result = {
+        "files_with_entities": files_with_entities,
+        "files_without_entities": files_without_entities,
+        "total_entities_anonymized": total_entities_anonymized,
+        "entity_type_breakdown": entity_type_breakdown,
+    }
+
+    return result
+

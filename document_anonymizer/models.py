@@ -2,7 +2,6 @@ from django.db import models
 from core.models import File
 import uuid
 
-
 class AnonymizationRun(models.Model):
     """
     Tracks each anonymization request.
@@ -118,4 +117,28 @@ class AnonymizationStorage(models.Model):
 
     def __str__(self):
         return f"Storage {self.storage_id} - {self.upload_storage_location}"
+
+
+
+class AnonymizationStats(models.Model):
+    """
+    Stores historical snapshots of anonymization statistics.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # Filters
+    client_name = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    project_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+    service_id = models.CharField(max_length=255, blank=True, null=True, db_index=True)
+
+    # Computed statistics
+    files_with_entities = models.PositiveIntegerField(default=0)
+    files_without_entities = models.PositiveIntegerField(default=0)
+    total_entities_anonymized = models.PositiveIntegerField(default=0)
+    entity_type_breakdown = models.JSONField(default=dict)
+
+    def __str__(self):
+        return f"AnonymizationStats {self.id} ({self.created_at.date()})"
 

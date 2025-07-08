@@ -16,6 +16,9 @@ from .views import (
     DocumentRiskScoreResultView,        # ✅ NEW
     DownloadStructuredDocxView,
     DownloadRedactionReadyJSONView,
+    AnonymizationStatsView,
+    AnonymizationStatsResultView,
+    AnonymizationStatsHistoryView,
     health_check
 )
 from .task_statuses import AnonymizationTaskStatusView
@@ -50,6 +53,11 @@ urlpatterns = [
     # Risk Score
     path("risk-score/", DocumentRiskScoreView.as_view(), name="risk-score"),
     path("risk-score-result/", DocumentRiskScoreResultView.as_view(), name="risk-score-result"),
+
+    # Anonymization Stats
+    path("anonymization-stats/", AnonymizationStatsView.as_view(), name="anonymization-stats"),
+    path("anonymization-stats-result/", AnonymizationStatsResultView.as_view(), name="anonymization-stats-result"),
+    path("anonymization-stats-history/", AnonymizationStatsHistoryView.as_view(), name="anonymization-stats-history"),
 
     # Health
     path("health/", health_check, name="health_check"),

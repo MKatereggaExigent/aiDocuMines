@@ -31,10 +31,12 @@ from django.contrib.contenttypes.models import ContentType
 import mimetypes
 
 from core.tasks import extract_document_text_task
-
 from document_search.tasks import index_file  # at the top of views.py
-
 from django.db import transaction
+
+from platform_data_insights.tasks import generate_insights_for_user
+from platform_data_insights.models import UserInsights
+
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +115,16 @@ class FileUploadView(APIView):
         # ── Per-upload run & path scaffold ───────────────────────────────────
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
         run       = Run.objects.create(user=user, status="Pending")
+        #base_dir  = os.path.join(
+        #    settings.MEDIA_ROOT, "uploads", str(user.id), timestamp,
+        #    client_id, project_id, service_id, str(run.run_id)
+        #)
+        # base_dir  = os.path.join(
+        #     settings.MEDIA_ROOT, "uploads", client_id, str(user.id), project_id, service_id, timestamp, str(run.run_id))
+        # os.makedirs(base_dir, exist_ok=True)
+        
         base_dir  = os.path.join(
-            settings.MEDIA_ROOT, "uploads", str(user.id), timestamp,
-            client_id, project_id, service_id, str(run.run_id)
-        )
+                settings.MEDIA_ROOT, "uploads", client_id, str(user.id), project_id, service_id, str(timestamp)[:8])
         os.makedirs(base_dir, exist_ok=True)
 
         file_payload = []
@@ -185,9 +193,10 @@ class FileUploadView(APIView):
                 continue
 
             # ---- 3️⃣ brand-new upload --------------------------------------
-            final_dir  = os.path.join(base_dir, str(uuid.uuid4()))
+            # final_dir  = os.path.join(base_dir, str(uuid.uuid4()))
+            final_dir  = base_dir
             os.makedirs(final_dir, exist_ok=True)
-            final_path = os.path.join(final_dir, meta["filename"])
+            final_path = os.path.join(final_dir, str(timestamp)[8:]+"_"+meta["filename"])
             os.rename(meta["file_path"], final_path)
 
             storage = Storage.objects.create(
@@ -244,6 +253,12 @@ class FileUploadView(APIView):
 
             # NEW:
             transaction.on_commit(lambda: extract_document_text_task.delay(fresh.id))
+
+            # Delete any old cached insights
+            UserInsights.objects.filter(user=request.user).delete()
+
+            # Launch async insights regeneration
+            generate_insights_for_user.delay(request.user.id)
 
         return Response({"run_id": str(run.run_id), "files": file_payload}, status=201)
 

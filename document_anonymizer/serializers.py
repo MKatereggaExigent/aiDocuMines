@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import AnonymizationRun, Anonymize, DeAnonymize
-
+from .models import AnonymizationStats
 
 class AnonymizationRunSerializer(serializers.ModelSerializer):
     """
@@ -39,4 +39,11 @@ class DeAnonymizeSerializer(serializers.ModelSerializer):
             "id", "file", "unmasked_text", "unmasked_filepath", "status",
             "created_at", "updated_at"
         ]
+
+
+
+class AnonymizationStatsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AnonymizationStats
+        fields = "__all__"
 

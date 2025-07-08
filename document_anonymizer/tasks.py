@@ -9,6 +9,9 @@ from core.models import File
 from document_anonymizer.models import AnonymizationRun, Anonymize, DeAnonymize
 from document_anonymizer.utils import AnonymizationService, generate_anonymized_html
 from core.utils import register_generated_file
+from document_anonymizer.utils import compute_global_anonymization_stats
+from document_anonymizer.models import AnonymizationStats
+
 
 logger = logging.getLogger(__name__)
 service = AnonymizationService()
@@ -256,5 +259,42 @@ def compute_risk_score_task(file_id):
         "risk_score": risk_result["risk_score"],
         "risk_level": risk_result["risk_level"],
         "breakdown": risk_result["breakdown"]
+    }
+
+
+@shared_task
+def compute_anonymization_stats_task(
+    client_name=None,
+    project_id=None,
+    service_id=None,
+    date_from=None,
+    date_to=None
+):
+    logger.info(f"📊 Computing anonymization stats...")
+
+    result = compute_global_anonymization_stats(
+        client_name=client_name,
+        project_id=project_id,
+        service_id=service_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    # Save to DB
+    stats_record = AnonymizationStats.objects.create(
+        client_name=client_name,
+        project_id=project_id,
+        service_id=service_id,
+        files_with_entities=result["files_with_entities"],
+        files_without_entities=result["files_without_entities"],
+        total_entities_anonymized=result["total_entities_anonymized"],
+        entity_type_breakdown=result["entity_type_breakdown"],
+    )
+
+    logger.info(f"✅ Stats saved to DB (id={stats_record.id})")
+
+    return {
+        "stats_id": str(stats_record.id),
+        **result,
     }
 

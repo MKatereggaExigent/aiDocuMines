@@ -80,7 +80,10 @@ urlpatterns = [
     path("api/v1/document-structures/", include("document_structures.urls")),   # ✅ ADD THIS LINE
 
     # Document Elasticsearch
-    path('api/v1/es/', include('file_elasticsearch.urls')),
+    path("api/v1/es/", include("file_elasticsearch.urls")),
+
+    # Platform Data Insights
+    path("api/v1/insights/", include("platform_data_insights.urls")),
 
     # Swagger API Documentation URLs
     re_path(r"^api/v1/swagger(?P<format>\.json|\.yaml)$", schema_view.without_ui(cache_timeout=0), name="schema-json"),

@@ -162,6 +162,7 @@ class File(models.Model):
     storage = models.ForeignKey(Storage, on_delete=models.CASCADE, related_name="files", null=True, blank=True)  # ✅ Ensure Storage is referenced correctly
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
+    document_type = models.CharField(max_length=255, null=True, blank=True, help_text="Predicted document type, e.g. Contract, Financial Report, etc.")
 
     def __str__(self):
         return f"File: {self.filename} ({self.status})"
