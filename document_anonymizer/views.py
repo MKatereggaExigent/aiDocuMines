@@ -36,6 +36,7 @@ from rest_framework import generics
 from document_anonymizer.models import AnonymizationStats
 from document_anonymizer.serializers import AnonymizationStatsSerializer
 from document_anonymizer.pagination import StandardResultsSetPagination
+from document_anonymizer.tasks import generate_anonymization_insights_task
 
 import json
 import os
@@ -683,4 +684,58 @@ class AnonymizationStatsHistoryView(generics.ListAPIView):
         if service_id:
             qs = qs.filter(service_id=service_id)
         return qs
+
+
+
+
+
+class AnonymizationInsightsView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Fetch or compute anonymization insights for the current user.",
+        tags=["Anonymization Insights"],
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter(
+                "async", openapi.IN_QUERY,
+                type=openapi.TYPE_BOOLEAN,
+                description="Run computation asynchronously"
+            ),
+        ],
+        responses={
+            200: openapi.Response(
+                description="Insights returned successfully."
+            ),
+            202: openapi.Response(
+                description="Insights computation queued."
+            ),
+        }
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        user = get_user_from_client_id(client_id)
+
+        if not user:
+            return Response({"error": "Invalid client ID"}, status=status.HTTP_403_FORBIDDEN)
+
+        async_flag = request.query_params.get("async", "false").lower() == "true"
+
+        if async_flag:
+            task = generate_anonymization_insights_task.delay(user.id)
+            return Response({
+                "message": "Anonymization insights computation queued.",
+                "task_id": task.id
+            }, status=status.HTTP_202_ACCEPTED)
+
+        # Otherwise compute synchronously
+        from document_anonymizer.utils import calculate_anonymization_insights
+
+        insights = calculate_anonymization_insights(user)
+
+        return Response({
+            "cached": False,
+            "data": insights
+        }, status=status.HTTP_200_OK)
 

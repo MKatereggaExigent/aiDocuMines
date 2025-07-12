@@ -10,6 +10,10 @@ from presidio_anonymizer import AnonymizerEngine
 from unstructured.partition.pdf import partition_pdf
 from document_anonymizer.models import Anonymize
 
+from django.db.models import Avg, Count, Q
+from document_anonymizer.models import AnonymizationRun, Anonymize, DeAnonymize
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -468,3 +472,44 @@ def compute_global_anonymization_stats(
 
     return result
 
+
+def calculate_anonymization_insights(user):
+    insights = {}
+
+    # Runs by status
+    runs = AnonymizationRun.objects.filter(client_name=user.username or user.email)
+    status_counts = runs.values("status").annotate(count=Count("id"))
+    insights["anonymization_status_counts"] = list(status_counts)
+
+    # Average duration
+    durations = []
+    for run in runs:
+        if run.updated_at and run.created_at:
+            delta = (run.updated_at - run.created_at).total_seconds()
+            durations.append(delta)
+    insights["average_anonymization_time_seconds"] = sum(durations)/len(durations) if durations else 0
+
+    # Risk levels
+    risk_counts = (
+        Anonymize.objects.filter(original_file__user=user)
+        .values("risk_level")
+        .annotate(count=Count("id"))
+    )
+    insights["risk_level_distribution"] = list(risk_counts)
+
+    # High-risk documents
+    high_risk_files = (
+        Anonymize.objects
+        .filter(original_file__user=user, risk_level="High")
+        .values("original_file__filename", "risk_score")
+        .order_by("-risk_score")[:10]
+    )
+    insights["top_high_risk_files"] = list(high_risk_files)
+
+    # De-anonymization count
+    deanonymize_count = (
+        DeAnonymize.objects.filter(file__user=user).count()
+    )
+    insights["deanonymization_count"] = deanonymize_count
+
+    return insights

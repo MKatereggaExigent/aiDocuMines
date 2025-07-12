@@ -126,3 +126,4 @@ def calculate_user_insights(user):
         "total_cost": float(total_cost),
     }
 
+

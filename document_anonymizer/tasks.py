@@ -11,6 +11,12 @@ from document_anonymizer.utils import AnonymizationService, generate_anonymized_
 from core.utils import register_generated_file
 from document_anonymizer.utils import compute_global_anonymization_stats
 from document_anonymizer.models import AnonymizationStats
+from django.contrib.auth import get_user_model
+# from platform_data_insights.utils import calculate_anonymization_insights
+from document_anonymizer.utils import calculate_anonymization_insights
+
+
+User = get_user_model()
 
 
 logger = logging.getLogger(__name__)
@@ -297,4 +303,25 @@ def compute_anonymization_stats_task(
         "stats_id": str(stats_record.id),
         **result,
     }
+
+
+
+
+@shared_task
+def generate_anonymization_insights_task(user_id):
+    """
+    Celery task to compute anonymization insights for a single user.
+    """
+    logger.info(f"📊 Generating anonymization insights for user_id={user_id}")
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        logger.error(f"❌ User not found: {user_id}")
+        return {"error": f"User {user_id} not found"}
+
+    insights = calculate_anonymization_insights(user)
+
+    logger.info(f"✅ Anonymization insights generated for user_id={user_id}")
+    return insights
 

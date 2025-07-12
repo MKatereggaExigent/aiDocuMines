@@ -19,6 +19,7 @@ from .views import (
     AnonymizationStatsView,
     AnonymizationStatsResultView,
     AnonymizationStatsHistoryView,
+    AnonymizationInsightsView,
     health_check
 )
 from .task_statuses import AnonymizationTaskStatusView
@@ -58,6 +59,9 @@ urlpatterns = [
     path("anonymization-stats/", AnonymizationStatsView.as_view(), name="anonymization-stats"),
     path("anonymization-stats-result/", AnonymizationStatsResultView.as_view(), name="anonymization-stats-result"),
     path("anonymization-stats-history/", AnonymizationStatsHistoryView.as_view(), name="anonymization-stats-history"),
+
+    # ✅ NEW: Anonymization Insights
+    path("anonymization-insights/", AnonymizationInsightsView.as_view(), name="anonymization-insights"),
 
     # Health
     path("health/", health_check, name="health_check"),
