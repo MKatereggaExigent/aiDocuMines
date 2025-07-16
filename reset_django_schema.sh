@@ -2,9 +2,9 @@
 set -e  # Exit on any error
 
 # === CONFIGURATION ===
-DB_NAME="aidocumines_backend"
-DB_USER="aidocu_admin"
-DB_PASSWORD="secure1234"
+DB_NAME="aidocumines_api_layer_database"
+DB_USER="aidocumines_administrator"
+DB_PASSWORD="SeCUREPassL0L6"
 DB_HOST="db"
 DB_PORT="5432"
 APPS=("core" "file_monitor" "document_ocr" "document_anonymizer" "document_translation" "custom_authentication")

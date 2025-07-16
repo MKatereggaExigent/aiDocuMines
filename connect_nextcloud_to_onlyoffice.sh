@@ -6,10 +6,12 @@ NEXTCLOUD_DATA="/home/aidocumines/Apps/nextcloud/data"
 # Nextcloud Admin Credentials
 NEXTCLOUD_ADMIN_USER="michael.kateregga@datasqan.com"
 NEXTCLOUD_ADMIN_PASS="Micho#25"
-NEXTCLOUD_URL="http://aidocumines.com:8080"
+#NEXTCLOUD_URL="http://aidocumines.com:8080"
+NEXTCLOUD_URL="https://nextcloud.aidocumines.com"
 
 # ONLYOFFICE Server Configuration
-ONLYOFFICE_URL="http://aidocumines.com:85"  # ONLYOFFICE server URL
+#ONLYOFFICE_URL="http://aidocumines.com:85"  # ONLYOFFICE server URL
+ONLYOFFICE_URL="https://onlyoffice.aidocumines.com"
 
 # Get the list of existing Nextcloud users
 existing_users=$(docker exec -u www-data nextcloud php occ user:list | awk -F: '{print $1}' | tr -d ' ' | sed 's/^-//')

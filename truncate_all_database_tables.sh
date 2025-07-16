@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Set your container, DB user and DB name
-CONTAINER_NAME="aidocumines_db"
-DB_USER="aidocu_admin"
-DB_NAME="aidocumines_backend"
+CONTAINER_NAME="aidocumines_api_layer_db"
+DB_USER="aidocumines_administrator"
+DB_NAME="aidocumines_api_layer_database"
 
 echo "🧹 Cleaning all tables in database: $DB_NAME inside container: $CONTAINER_NAME"
 

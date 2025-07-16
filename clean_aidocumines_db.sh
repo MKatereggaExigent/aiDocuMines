@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Configuration from .env
-DB_CONTAINER="aidocumines_db"
-DB_NAME="aidocumines_backend"
-DB_USER="aidocu_admin"
+DB_CONTAINER="aidocumines_api_layer_db"
+DB_NAME="aidocumines_api_layer_database"
+DB_USER="aidocumines_administrator"
 DB_PORT="5432"
 SUPERUSER_EMAIL="admin@aidocumines.com"
 

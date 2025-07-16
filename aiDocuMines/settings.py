@@ -101,9 +101,9 @@ OAUTH2_PROVIDER_REFRESH_TOKEN_MODEL = 'oauth2_provider.RefreshToken'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("POSTGRES_DB", "aiDocuMines"),
-        "USER": os.getenv("POSTGRES_USER", "admin"),
-        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "securepassword"),
+        "NAME": os.getenv("POSTGRES_DB", "aidocumines_api_layer_database"),
+        "USER": os.getenv("POSTGRES_USER", "aidocumines_administrator"),
+        "PASSWORD": os.getenv("POSTGRES_PASSWORD", "SeCUREPassL0L6"),
         "HOST": os.getenv("POSTGRES_HOST", "db"),
         "PORT": os.getenv("POSTGRES_PORT", "5432"),
     }

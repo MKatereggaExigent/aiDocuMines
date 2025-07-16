@@ -2,35 +2,38 @@
 
 set -e  # Stop on any error
 
-# 1️⃣ Ensure Docker is Running
+echo "🛑 Stopping any non-Docker processes using relevant ports..."
+PORTS=(8020 6381 15672 8050)  # Exclude Docker-managed ports like 5432 (PostgreSQL) and 6379 (Redis)
+
+for PORT in "${PORTS[@]}"; do
+    PIDS=$(lsof -t -i:$PORT || true)
+    if [[ ! -z "$PIDS" ]]; then
+        echo "🔪 Killing processes on port $PORT: $PIDS..."
+        for PID in $PIDS; do
+            kill -9 "$PID" 2>/dev/null || echo "⚠️ Failed to kill PID $PID"
+        done
+    else
+        echo "✅ No process running on port $PORT."
+    fi
+done  # 🔹 Closing loop properly
+
+
+# 1️⃣ **Ensure Docker is Running**
 if ! docker info >/dev/null 2>&1; then
     echo "❌ ERROR: Docker is not running. Please start Docker and try again."
     exit 1
 fi
 
-# ⭐️ NEW (ROBUST): Let Docker Compose handle the .env file ⭐️
-# Docker Compose natively reads the .env file in the project directory.
-# No manual export is needed.
-if [ ! -f .env ]; then
-    echo "⚠️ Warning: .env file not found. Docker Compose may fail to substitute variables."
-fi
-
 echo "🧹 Cleaning up Docker environment..."
-docker-compose down -v --remove-orphans || echo "⚠️ Warning: Failed to bring down containers."
+docker-compose down -v || echo "⚠️ Warning: Failed to bring down containers."
+docker system prune -af || echo "⚠️ Warning: Failed to prune unused images and containers."
+docker volume prune -af || echo "⚠️ Warning: Failed to prune unused volumes."
 
 echo "🚀 Starting Docker containers..."
-# The --build flag is included with 'up', so 'docker-compose build' separately is redundant.
+docker-compose build || { echo "❌ ERROR: Build failed!"; exit 1; }
 docker-compose up --build -d || { echo "❌ ERROR: Failed to start containers!"; exit 1; }
 
-# --- DEBUGGING STEP: Check environment inside the running container ---
-echo
-echo "🔍 DEBUG: Checking environment variables INSIDE the running 'db' container..."
-sleep 5 # Wait a few seconds for the container to initialize
-docker exec aidocumines_api_layer_db env | grep POSTGRES || echo "⚠️ Could not inspect environment of db container."
-echo "----------------------------------------------------"
-echo
-
-# 2️⃣ Wait for PostgreSQL & Redis to be Healthy
+# 2️⃣ **Wait for PostgreSQL & Redis to be Healthy**
 echo "⏳ Waiting for services to be healthy..."
 TRIES=20
 while [[ $TRIES -gt 0 ]]; do
@@ -49,8 +52,8 @@ done
 
 if [[ "$DB_STATUS" != "healthy" || "$REDIS_STATUS" != "healthy" ]]; then
     echo "❌ ERROR: Database or Redis did not become healthy in time!"
-    echo "--- LOGS FOR aidocumines_api_layer_db ---"
-    docker logs aidocumines_api_layer_db
+    docker logs aidocumines_api_layer_db || echo "⚠️ Could not retrieve DB logs."
+    docker logs aidocumines_redis || echo "⚠️ Could not retrieve Redis logs."
     exit 1
 fi
 
