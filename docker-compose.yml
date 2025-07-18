@@ -1,5 +1,5 @@
 services:
-  db:
+  aidocumines_api_layer_database:
     image: postgres:15
     container_name: aidocumines_api_layer_db
     restart: unless-stopped
@@ -12,7 +12,7 @@ services:
     networks:
       - captain-overlay-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h aidocumines_api_layer_database"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -68,7 +68,7 @@ services:
     container_name: aidocumines_db_prepare
     command: /app/entrypoint.sh
     depends_on:
-      db:
+      aidocumines_api_layer_database:
         condition: service_healthy
     volumes:
       - .:/app

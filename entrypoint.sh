@@ -125,7 +125,8 @@ elif [ "$SERVICE_NAME" = "celery_beat" ]; then
     echo "🕒 Waiting 10s to ensure Celery Worker is ready..."
     sleep 10
     echo "🚀 Starting Celery Beat..."
-    exec celery -A aiDocuMines beat --loglevel=info
+    exec celery -A aiDocuMines beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+ # celery -A aiDocuMines beat --loglevel=info
 fi
 
 # ✅ **Start Django Application (Only for web)**

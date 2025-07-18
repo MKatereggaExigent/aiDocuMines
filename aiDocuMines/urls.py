@@ -97,7 +97,9 @@ urlpatterns = [
 
     # System Settings
     path("api/v1/system-settings/", include("system_settings.urls")),
-
+    
+    # Integrations
+    path("api/v1/integrations/", include("integrations.urls", namespace="integrations")),
 ]
 
 # Serve static files for Swagger UI

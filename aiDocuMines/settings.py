@@ -54,7 +54,8 @@ INSTALLED_APPS = [
     "document_search",
     "document_structures",
     "file_elasticsearch",
-    "platform_data_insights"
+    "platform_data_insights",
+    "integrations"
 ]
 
 MIDDLEWARE = [
@@ -116,9 +117,19 @@ AUTHENTICATION_BACKENDS = [
 
 OAUTH2_PROVIDER = {
     "ACCESS_TOKEN_EXPIRE_SECONDS": 3600,
-    "SCOPES": {"read": "Read Scope", "write": "Write Scope"},
+    "SCOPES": {
+        "openid": "OpenID Connect scope",
+        "profile": "Access your profile info",
+        "email": "Access your email",
+        "read": "Read Scope", 
+        "write": "Write Scope"},
     "TOKEN_MODEL": "oauth2_provider.models.AccessToken",
+    "OIDC_ENABLED": True,
+    "OIDC_RSA_PRIVATE_KEY": open(os.path.join(BASE_DIR, "oidc-private-key.pem")).read(),
+    "RESOURCE_SERVER_INTROSPECTION_URL": "https://aidocumines-api.aidocumines.com/o/introspect/",
+    "RESOURCE_SERVER_INTROSPECTION_TOKEN": os.getenv("INTROSPECTION_TOKEN", ""),
 }
+
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -127,7 +138,25 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 25,
+    "DEFAULT_FILTER_BACKENDS": [
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
 }
+
+
+'''
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "oauth2_provider.contrib.rest_framework.OAuth2Authentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
+'''
 
 SWAGGER_SETTINGS = {
     "USE_SESSION_AUTH": False,
@@ -193,6 +222,7 @@ LOGGING = {
     },
 }
 
+NEXTCLOUD_ADMIN_PASS = os.getenv('NEXTCLOUD_ADMIN_PASS', 'default_admin_password')
 
 # caching backed by the same Redis you already run for Celery
 CACHES = {
@@ -214,6 +244,9 @@ CORS_ALLOWED_ORIGINS = [
     "https://aidocumines-frontend.aidocumines.com",
     "https://ai-docu-mines-frontend.vercel.app"
 ]
+
+SESSION_COOKIE_SECURE = True  # Optional but recommended
+CSRF_COOKIE_SECURE = True     # Optional but recommended
 
 # CORS_ALLOW_ALL_ORIGINS = True
 
