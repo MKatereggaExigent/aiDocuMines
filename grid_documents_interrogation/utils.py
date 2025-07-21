@@ -91,13 +91,17 @@ def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
         return response.choices[0].message.content
 
     elif provider == "ollama":
-        chat = ChatOllama(model=model)
-        context = ""
-        if previous_messages:
-            for msg in previous_messages:
-                context += f"User: {msg.get('query')}\nAssistant: {msg.get('response')}\n"
-        context += f"Document: {chunk}\n\nQuestion: {query_text}"
-        return chat.invoke(context)
+        try:
+            # Use service name as internal DNS hostname inside Docker
+            chat = ChatOllama(model=model, base_url="http://ollama:11434")
+            context = ""
+            if previous_messages:
+                for msg in previous_messages:
+                    context += f"User: {msg.get('query')}\nAssistant: {msg.get('response')}\n"
+            context += f"Document: {chunk}\n\nQuestion: {query_text}"
+            return chat.invoke(context)
+        except Exception as e:
+            raise RuntimeError(f"Ollama invocation failed: {e}")
 
     elif provider == "langchain":
         raise NotImplementedError("LangChain support is not yet implemented.")

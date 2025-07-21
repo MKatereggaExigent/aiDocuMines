@@ -1,113 +1,132 @@
-import os
-import requests
-import subprocess
-from oauthlib.common import generate_token
-from django.core.exceptions import ImproperlyConfigured
-from .models import IntegrationLog
+# integrations/utils.py
 
-def generate_nextcloud_autologin_url(user) -> str:
-    """
-    Ensures the user exists in Nextcloud, sets (or resets) the password, and returns the auto-login URL.
-    Additionally, syncs the user's data from aiDocuMines to Nextcloud.
-    Logs the integration activity using IntegrationLog.
-    """
-    if not user.is_active:
-        raise Exception("Inactive users cannot be provisioned into Nextcloud.")
+import secrets
+from django.views import View
+from django.shortcuts import redirect
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponseServerError
 
-    if not user.email:
-        raise Exception("Nextcloud provisioning requires a valid email address.")
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework import status, generics, filters
 
-    # Use a deterministic or random login username (you may switch this later)
-    username = f"user_{user.id}"
-    email = user.email
-    password = generate_token()[:12]  # Temporary password for login
+from integrations.oidc_utils import (
+    get_or_create_nextcloud_oidc_user,
+    generate_nextcloud_oidc_url,
+)
+from integrations.models import IntegrationLog
+from .serializers import IntegrationLogSerializer
+from integrations.tasks import (
+    generate_nextcloud_url_async,
+    sync_user_to_nextcloud_host
+)
 
-    NEXTCLOUD_ADMIN_USER = os.getenv("NEXTCLOUD_ADMIN_USER", "admin")
-    NEXTCLOUD_ADMIN_PASS = os.getenv("NEXTCLOUD_ADMIN_PASS")
-    NEXTCLOUD_URL = os.getenv("NEXTCLOUD_URL", "https://nextcloud.aidocumines.com")
-    AIDOCUMINES_DATA = os.getenv("AIDOCUMINES_DATA", "/home/aidocumines/Apps/aiDocuMines/media/uploads")
+# 🔐 In-memory state/nonce registry (used in OIDC callbacks)
+from integrations.registry import STATE_REGISTRY, NONCE_REGISTRY
 
-    if not NEXTCLOUD_ADMIN_PASS:
-        raise ImproperlyConfigured("Missing NEXTCLOUD_ADMIN_PASS in environment.")
 
-    headers = {
-        "OCS-APIRequest": "true",
-        "Accept": "application/json"
-    }
+class NextcloudRedirectView(LoginRequiredMixin, View):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super().dispatch(*args, **kwargs)
 
-    try:
-        # 1. Check if user exists in Nextcloud
-        check_url = f"{NEXTCLOUD_URL}/ocs/v1.php/cloud/users/{username}"
-        resp = requests.get(check_url, auth=(NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASS), headers=headers)
+    def get(self, request):
+        user = request.user
+        try:
+            # Generate secure state and nonce
+            state = secrets.token_urlsafe(16)
+            nonce = secrets.token_urlsafe(16)
 
-        if resp.status_code == 404:
-            # 2. Create user if not exists
-            create_url = f"{NEXTCLOUD_URL}/ocs/v1.php/cloud/users"
-            data = {"userid": username, "password": password, "email": email}
-            create_resp = requests.post(create_url, auth=(NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASS), data=data, headers=headers)
+            # Register them for validation during callback
+            STATE_REGISTRY[user.id] = state
+            NONCE_REGISTRY[user.id] = nonce
 
-            if create_resp.status_code >= 400:
-                IntegrationLog.objects.create(
-                    user=user,
-                    connector="nextcloud",
-                    status="failed",
-                    details=f"User creation failed: {create_resp.text}"
-                )
-                raise Exception(f"Nextcloud user creation failed: {create_resp.text}")
-            else:
-                IntegrationLog.objects.create(
-                    user=user,
-                    connector="nextcloud",
-                    status="created",
-                    details=f"User {username} created in Nextcloud"
-                )
-        elif resp.status_code == 200:
-            # 3. Reset password for existing user
-            reset_url = f"{NEXTCLOUD_URL}/ocs/v1.php/cloud/users/{username}/password"
-            reset_resp = requests.put(reset_url, auth=(NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASS),
-                                      data={"password": password}, headers=headers)
+            # Ensure user has registered client app
+            get_or_create_nextcloud_oidc_user(user)
 
-            if reset_resp.status_code >= 400:
-                raise Exception(f"Password reset failed: {reset_resp.text}")
+            # Construct login URL
+            url = generate_nextcloud_oidc_url(user, state=state, nonce=nonce)
+            return redirect(url)
 
+        except Exception as e:
             IntegrationLog.objects.create(
                 user=user,
                 connector="nextcloud",
-                status="reset",
-                details=f"Password reset for existing user {username}"
+                status="error",
+                details=f"Redirect error: {str(e)}"
             )
-        else:
-            raise Exception(f"Unexpected response checking user: {resp.text}")
+            return HttpResponseServerError(f"Nextcloud autologin failed: {str(e)}")
 
-        # 4. Synchronize the user's data from aiDocuMines to Nextcloud
-        # Using rsync or similar to transfer data without mixing user data
-        user_data_path = os.path.join(AIDOCUMINES_DATA, str(user.id))  # Local directory for user data
-        nextcloud_user_dir = f"{NEXTCLOUD_URL}/data/{username}/files"  # Nextcloud user folder for their data
 
-        if not os.path.exists(user_data_path):
-            raise Exception(f"No data found for user {user.id} at {user_data_path}")
+class NextcloudAutologinView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        # Sync data using rsync (may need to customize the command based on your environment)
-        sync_command = f"rsync -avz {user_data_path}/ {nextcloud_user_dir}/"
-        subprocess.run(sync_command, shell=True, check=True)
+    def get(self, request):
+        user = request.user
+        try:
+            # Ensure user's OIDC client exists
+            get_or_create_nextcloud_oidc_user(user)
 
-        IntegrationLog.objects.create(
-            user=user,
-            connector="nextcloud",
-            status="success",
-            details=f"Data synced for user {username} to Nextcloud"
-        )
+            # Generate state and nonce
+            state = secrets.token_urlsafe(16)
+            nonce = secrets.token_urlsafe(16)
+            STATE_REGISTRY[user.id] = state
+            NONCE_REGISTRY[user.id] = nonce
 
-        # 5. Return autologin URL with the correct username and password
-        autologin_url = f"https://{username}:{password}@{NEXTCLOUD_URL.replace('https://', '')}"
-        return autologin_url
+            # Return direct OIDC URL
+            url = generate_nextcloud_oidc_url(user, state=state, nonce=nonce)
+            return Response({"nextcloud_url": url})
 
-    except Exception as e:
-        IntegrationLog.objects.create(
-            user=user,
-            connector="nextcloud",
-            status="error",
-            details=str(e)
-        )
-        raise
+        except Exception as e:
+            # Fallback: defer to background provisioning
+            IntegrationLog.objects.create(
+                user=user,
+                connector="nextcloud",
+                status="processing",
+                details=f"OIDC fallback for user {user.id}: {str(e)}"
+            )
+
+            generate_nextcloud_url_async.delay(user.id)
+            sync_user_to_nextcloud_host.delay(user.id, user.username)
+
+            return Response({
+                "message": "We’re setting up your Nextcloud account.",
+                "error": str(e)
+            }, status=status.HTTP_202_ACCEPTED)
+
+
+class IntegrationLogListView(generics.ListAPIView):
+    queryset = IntegrationLog.objects.select_related('user').order_by('-timestamp')
+    serializer_class = IntegrationLogSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['user__email', 'user__username', 'connector', 'status', 'details']
+    ordering_fields = ['timestamp', 'status', 'connector']
+
+
+class CustomOIDCMetadataView(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        base_url = "https://aidocumines-api-layer.aidocumines.com/o"
+        return Response({
+            "issuer": base_url,
+            "authorization_endpoint": f"{base_url}/authorize/",
+            "token_endpoint": f"{base_url}/token/",
+            "userinfo_endpoint": f"{base_url}/userinfo/",
+            "jwks_uri": f"{base_url}/.well-known/jwks.json",
+            "scopes_supported": ["openid", "profile", "email", "read", "write"],
+            "response_types_supported": [
+                "code", "token", "id_token", "id_token token",
+                "code token", "code id_token", "code id_token token"
+            ],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256", "HS256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+            "code_challenge_methods_supported": ["plain", "S256"],
+            "claims_supported": ["sub"]
+        })
 

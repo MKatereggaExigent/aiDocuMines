@@ -54,4 +54,25 @@ if [[ "$DB_STATUS" != "healthy" || "$REDIS_STATUS" != "healthy" ]]; then
     exit 1
 fi
 
+
+echo "⏳ Waiting for Ollama to be ready..."
+TRIES=20
+while [[ $TRIES -gt 0 ]]; do
+    STATUS=$(curl -s http://localhost:11434/api/tags || echo "fail")
+    if [[ "$STATUS" != "fail" ]]; then
+        echo "✅ Ollama is ready!"
+        break
+    fi
+    echo "⏳ Waiting on Ollama... ($TRIES retries left)"
+    ((TRIES--))
+    sleep 3
+done
+
+if [[ "$STATUS" == "fail" ]]; then
+    echo "❌ ERROR: Ollama failed to become available!"
+    docker logs aidocumines_ollama
+    exit 1
+fi
+
+
 echo "✅ All services started successfully!"

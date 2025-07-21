@@ -234,6 +234,8 @@ CACHES = {
     }
 }
 
+OIDC_ISS_ENDPOINT = "https://aidocumines-api-layer.aidocumines.com/o"
+
 CORS_ALLOWED_ORIGINS = [
     "http://aidocumines.com",
     "https://aidocumines.aidocumines.com",

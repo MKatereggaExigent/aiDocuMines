@@ -7,6 +7,9 @@ from django.http import JsonResponse
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.conf import settings
 from rest_framework.permissions import AllowAny
+from integrations.views import CustomOIDCMetadataView
+
+
 
 # Swagger schema configuration
 schema_view = swagger_get_schema_view(
@@ -89,6 +92,9 @@ urlpatterns = [
     re_path(r"^api/v1/swagger(?P<format>\.json|\.yaml)$", schema_view.without_ui(cache_timeout=0), name="schema-json"),
     path("api/v1/swagger/", schema_view.with_ui("swagger", cache_timeout=0), name="schema-swagger-ui"),
     path("api/v1/redoc/", schema_view.with_ui("redoc", cache_timeout=0), name="schema-redoc"),
+
+    # 🔥 Add this line FIRST
+    path("o/.well-known/openid-configuration", CustomOIDCMetadataView.as_view(), name="custom-oidc-metadata"),
 
     # OAuth2 Endpoints
     path("o/", include("oauth2_provider.urls", namespace="oauth2_provider")),
