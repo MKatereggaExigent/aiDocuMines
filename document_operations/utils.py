@@ -9,6 +9,16 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 import uuid
 import secrets
+from .models import FileAccessEntry
+from django.shortcuts import get_object_or_404
+from .models import FileAccessEntry
+from document_operations.models import FileFolderLink, Folder
+from document_operations.models import Folder, FileFolderLink
+
+import logging
+from document_operations.models import FileFolderLink, FileAuditLog
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -48,21 +58,27 @@ def delete_folder(folder: Folder):
 
 
 # 📄 File Operations
-def rename_file(file_id, new_name):
+def rename_file(file_id, new_name, actor=None):
     file = File.objects.get(id=file_id)
-
     old_path = file.filepath
     dir_path = os.path.dirname(old_path)
     new_path = os.path.join(dir_path, new_name)
 
-    # Physically rename the file on disk
     if os.path.exists(old_path):
         os.rename(old_path, new_path)
 
-    # Update the model fields
     file.filename = new_name
     file.filepath = new_path
     file.save()
+
+    if actor:
+        FileAuditLog.objects.create(
+            file=file,
+            user=actor,
+            action="renamed",
+            extra={"new_name": new_name}
+        )
+
 
     return {"message": f"File renamed to {new_name}", "file_id": file.id}
 
@@ -73,18 +89,38 @@ def move_file_to_folder(file_link: FileFolderLink, new_folder: Folder):
     return file_link
 
 
-def restore_file_from_trash(file_link_id):
+def restore_file_from_trash(file_link_id, actor=None):
     link = FileFolderLink.objects.get(id=file_link_id)
     link.is_trashed = False
     link.save()
+
+    if actor:
+        FileAuditLog.objects.create(
+            file=link.file,
+            user=actor,
+            action="restored",
+            extra={"file_link_id": link.id}
+        )
+
     return {"message": f"Restored file {link.file.filename}"}
 
 
-def delete_file(file_link_id):
+def delete_file(file_link_id, actor=None):
     link = FileFolderLink.objects.get(id=file_link_id)
     file = link.file
+
+    # Log deletion before actual delete
+    if actor:
+        FileAuditLog.objects.create(
+            file=file,
+            user=actor,
+            action="deleted",
+            extra={"file_link_id": file_link_id}
+        )
+
     file.delete()
     link.delete()
+
     return {"message": f"Deleted file {file_link_id}"}
 
 
@@ -131,8 +167,152 @@ def protect_file_with_password(file_link_id, password_hint):
     return {"message": f"File {link.file.filename} password protected."}
 
 
+def get_user_accessible_file_ids(user, min_level="read"):
+    """
+    Returns a list of file IDs the user has access to based on access level.
+    """
+    owned = File.objects.filter(user=user).values_list("id", flat=True)
+
+    access_entries = FileAccessEntry.objects.filter(user=user)
+    if min_level == "write":
+        access_entries = access_entries.filter(access_level__in=["write", "owner"])
+    elif min_level == "owner":
+        access_entries = access_entries.filter(access_level="owner")
+
+    shared = access_entries.select_related("file_link__file").values_list("file_link__file__id", flat=True)
+
+    return list(set(owned).union(shared))
+
+
+def has_file_access(user, file: File, level="read") -> bool:
+    if file.user == user:
+        return True
+
+    file_link = getattr(file, "folder_link", None)
+    if not file_link:
+        return False
+
+    try:
+        entry = FileAccessEntry.objects.get(file_link=file_link, user=user)
+        if entry.expires_at and entry.expires_at < timezone.now():
+            return False
+        if level == "read":
+            return entry.can_read
+        if level == "write":
+            return entry.can_write
+        if level == "delete":
+            return entry.can_delete
+        if level == "share":
+            return entry.can_share
+        return False
+    except FileAccessEntry.DoesNotExist:
+        return False
+
+'''
+def has_file_access(user, file: File, level="read") -> bool:
+    if file.user == user:
+        return True
+    try:
+        entry = FileAccessEntry.objects.get(file_link=file.folder_link, user=user)
+        if level == "read":
+            return entry.access_level in ["read", "write", "owner"]
+        if level == "write":
+            return entry.access_level in ["write", "owner"]
+        if level == "owner":
+            return entry.access_level == "owner"
+        return False
+    except FileAccessEntry.DoesNotExist:
+        return False
+'''
+
+def get_file_access_audit(file: File):
+    file_link = getattr(file, "folder_link", None)
+    if not file_link:
+        return []
+
+    return FileAccessEntry.objects.filter(file_link=file_link).select_related("user", "granted_by")
+
+
+'''
+def get_user_accessible_file_ids(user):
+    owned = File.objects.filter(user=user).values_list("id", flat=True)
+    shared = FileFolderLink.objects.filter(shared_with=user).values_list("file_id", flat=True)
+    return list(set(owned).union(shared))
+'''
+
+
+'''
+def user_has_access(user, file_id, level='read') -> bool:
+    file = File.objects.filter(id=file_id, user=user).exists()
+    shared = FileFolderLink.objects.filter(file_id=file_id, shared_with=user).exists()
+    return file or shared
+'''
+
+def user_has_access(user, file_id, level="read") -> bool:
+    try:
+        file = File.objects.get(id=file_id)
+    except File.DoesNotExist:
+        return False
+
+    if file.user == user:
+        return True
+
+    file_link = getattr(file, "folder_link", None)
+    if not file_link:
+        return False
+
+    try:
+        entry = FileAccessEntry.objects.get(file_link=file_link, user=user)
+        if entry.expires_at and entry.expires_at < timezone.now():
+            return False
+        if level == "read":
+            return entry.can_read
+        if level == "write":
+            return entry.can_write
+        if level == "delete":
+            return entry.can_delete
+        if level == "share":
+            return entry.can_share
+        return False
+    except FileAccessEntry.DoesNotExist:
+        return False
+
+
+'''
+def user_has_access(user, file_id, level="read") -> bool:
+    try:
+        file = File.objects.get(id=file_id)
+    except File.DoesNotExist:
+        return False
+
+    # Owner (uploader) has full access
+    if file.user == user:
+        return True
+
+    # Access entries define granular permissions
+    file_link = getattr(file, "folder_link", None)
+    if not file_link:
+        return False
+
+    try:
+        entry = FileAccessEntry.objects.get(file_link=file_link, user=user)
+
+        if entry.expires_at and entry.expires_at < timezone.now():
+            return False
+
+        if level == "read":
+            return entry.access_level in ["read", "write", "owner"]
+        if level == "write":
+            return entry.access_level in ["write", "owner"]
+        if level == "owner":
+            return entry.access_level == "owner"
+        return False
+    except FileAccessEntry.DoesNotExist:
+        return False
+'''
+
 # 🔄 Bulk Operations
-def move_files_to_trash(file_link_ids):
+def move_files_to_trash(file_link_ids, actor=None):
     count = 0
     for link_id in file_link_ids:
         link = FileFolderLink.objects.filter(id=link_id).first()
@@ -140,6 +320,14 @@ def move_files_to_trash(file_link_ids):
             link.is_trashed = True
             link.save()
             count += 1
+
+            if actor:
+                FileAuditLog.objects.create(
+                    file=link.file,
+                    user=actor,
+                    action="trashed",
+                    extra={"file_link_id": link.id}
+                )
     return count
 
 
@@ -177,12 +365,21 @@ def generate_share_token():
     return secrets.token_urlsafe(32)
 
 
-def generate_public_link(file_link: FileFolderLink):
+def generate_public_link(file_link: FileFolderLink, actor=None):
     if not file_link.public_token:
         file_link.public_token = generate_share_token()
         file_link.shared_link_created_at = timezone.now()
         file_link.is_public = True
         file_link.save()
+
+        if actor:
+            FileAuditLog.objects.create(
+                file=file_link.file,
+                user=actor,
+                action="public_link",
+                extra={"file_link_id": file_link.id, "public_token": file_link.public_token}
+            )
+
     return file_link.public_token
 
 
@@ -224,4 +421,109 @@ def link_file_to_folder(file, folder):
     One-to-one link between File and Folder.
     """
     return FileFolderLink.objects.get_or_create(file=file, folder=folder)
+
+
+def update_access_level_for_user(file_link, user_id, access_level, granted_by):
+    perms = {
+        "read":  {"can_read": True, "can_write": False, "can_share": False, "is_owner": False},
+        "write": {"can_read": True, "can_write": True,  "can_share": False, "is_owner": False},
+        "owner": {"can_read": True, "can_write": True,  "can_share": True,  "is_owner": True},
+    }.get(access_level, {"can_read": True})
+
+    user = get_object_or_404(User, pk=user_id)
+
+    FileAccessEntry.objects.update_or_create(
+        file_link=file_link,
+        user=user,
+        defaults={**perms, "granted_by": granted_by}
+    )
+
+    # ✅ Audit log for permission update
+    FileAuditLog.objects.create(
+        file=file_link.file,
+        user=granted_by,
+        action="access_updated",
+        extra={
+            "target_user": user.email,
+            "new_access_level": access_level,
+            "permissions": perms
+        }
+    )
+
+    return {
+        "message": f"Access level updated to {access_level}",
+        "user": user.email,
+        "level": access_level
+    }
+
+
+
+def set_password_protection(file_id, password_hint, actor=None):
+    """
+    Set password protection metadata on a file.
+    
+    Args:
+        file_id (int): ID of the file to protect
+        password_hint (str): The hint to show to the user
+        actor (User or None): User who triggered the protection (optional)
+        
+    Returns:
+        dict: result with status and message
+    """
+    try:
+        file_link = FileFolderLink.objects.get(file_id=file_id)
+
+        file_link.password_hint = password_hint
+        file_link.password_protected = True
+        file_link.save()
+
+        # Optional audit log entry
+        if actor:
+            FileAuditLog.objects.create(
+                file=file_link.file,
+                user=actor,
+                action="password_set",
+                extra={"password_hint": password_hint}
+            )
+        return {
+            "success": True,
+            "message": f"Password protection applied to file_id={file_id}."
+        }
+
+    except FileFolderLink.DoesNotExist:
+        logger.error(f"[Password Protect] FileFolderLink not found for file_id={file_id}")
+        return {
+            "success": False,
+            "message": f"FileFolderLink does not exist for file_id={file_id}."
+        }
+    except Exception as e:
+        logger.exception(f"[Password Protect] Unexpected error for file_id={file_id}: {e}")
+        return {
+            "success": False,
+            "message": f"Unexpected error: {str(e)}"
+        }
+
+
+
+
+def register_file_folder_link(file_obj):
+    """
+    Derives folder from file.path and links the file to it.
+    Guarantees one-to-one FileFolderLink creation.
+    """
+    from document_operations.utils import get_or_create_folder_tree, link_file_to_folder
+
+    if hasattr(file_obj, "folder_link"):
+        return  # already linked
+
+    project_id, service_id = file_obj.project_id, file_obj.service_id
+    try:
+        relative_path = file_obj.filepath.split(f"{project_id}/{service_id}/", 1)[-1]
+        folder_parts = os.path.dirname(relative_path).split("/")
+        folder = get_or_create_folder_tree(
+            folder_parts, user=file_obj.user, project_id=project_id, service_id=service_id
+        )
+        FileFolderLink.objects.create(file=file_obj, folder=folder)
+    except Exception as e:
+        raise Exception(f"Failed to register FileFolderLink for file {file_obj.id}: {e}")
 

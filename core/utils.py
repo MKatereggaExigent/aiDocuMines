@@ -32,6 +32,7 @@ from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 import pandas as pd
 from tika import parser
+from document_operations.utils import register_file_folder_link
 
 logger = logging.getLogger(__name__)
 
@@ -554,6 +555,7 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
         project_id=project_id,
         service_id=service_id,
     )
+    register_file_folder_link(file_instance)
 
     # ✅ Link to folder
     from document_operations.models import Folder, FileFolderLink

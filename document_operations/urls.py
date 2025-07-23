@@ -11,7 +11,8 @@ from .views import (
     ShareFileView, UnshareFileView, SharedFilesView,
     FilePreviewView, FileAuditLogView,
     PublicSharedFileView, FolderListView,
-    FolderCreateView, TrashSingleFileView, FolderListCreateView
+    FolderCreateView, TrashSingleFileView, FolderListCreateView,
+    ShareWithGroupView, SetAccessLevelView, GrantPublicLinkView
 )
 
 urlpatterns = [
@@ -56,5 +57,11 @@ urlpatterns = [
 
     # 🌐 PUBLIC ACCESS (if enabled)
     path("public/share/<uuid:share_token>/", PublicSharedFileView.as_view(), name="public_file_access"),
-]
+
+    # EXTRA FILE SHARING
+    path("files/<int:pk>/share/group/", ShareWithGroupView.as_view(), name="file_share_with_group"),
+    path("files/<int:pk>/access-level/", SetAccessLevelView.as_view(), name="file_access_level_update"),
+    path("files/<int:pk>/share/public/", GrantPublicLinkView.as_view(), name="file_grant_public_link"),
+
+    ]
 

@@ -12,7 +12,7 @@ from celery import group
 from .models import File, Metadata, Storage, Run, EndpointResponseTable
 from .utils import save_uploaded_file, extract_metadata, calculate_md5, convert_pdf_date, str_to_bool
 from .serializers import MetadataSerializer
-
+from document_operations.utils import register_file_folder_link
 
 logger = logging.getLogger(__name__)
 

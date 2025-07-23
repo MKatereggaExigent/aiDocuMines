@@ -1,8 +1,9 @@
 from django.db import models
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from core.models import File
 import uuid
-from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
@@ -70,7 +71,7 @@ class FileVersion(models.Model):
     def __str__(self):
         return f"{self.file.filename} - v{self.version_number}"
 
-
+'''
 class FileAuditLog(models.Model):
     ACTION_CHOICES = [
         ('created', 'Created'),
@@ -87,7 +88,101 @@ class FileAuditLog(models.Model):
     action = models.CharField(max_length=50, choices=ACTION_CHOICES)
     timestamp = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True, null=True)
+    # ✅ Add this field
+    extra = models.JSONField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.user.email if self.user else 'System'} - {self.file.filename} - {self.action} at {self.timestamp}"
+'''
+
+class FileAuditLog(models.Model):
+    ACTION_CHOICES = [
+        ('created', 'Created'),
+        ('updated', 'Updated'),
+        ('deleted', 'Deleted'),
+        ('renamed', 'Renamed'),
+        ('downloaded', 'Downloaded'),
+        ('shared', 'Shared'),
+        ('unshared', 'Unshared'),
+        ('trashed', 'Trashed'),
+        ('restored', 'Restored'),
+        ('version_restored', 'Version Restored'),
+        ('public_link', 'Public Link Generated'),
+        ('password_set', 'Password Protected'),
+        ('previewed', 'Previewed'),
+        ('access_updated', 'Access Level Updated'),
+    ]
+
+    file = models.ForeignKey(File, on_delete=models.CASCADE, related_name='audit_logs')
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    notes = models.TextField(blank=True, null=True)  # Optional human-readable explanation
+    extra = models.JSONField(blank=True, null=True)  # ✅ Structured metadata for API/debugging/audit
+
+    def __str__(self):
+        return f"{self.user.email if self.user else 'System'} - {self.file.filename} - {self.action} at {self.timestamp}"
+
+
+'''
+class FileAccessEntry(models.Model):
+    """
+    Granular access entry: maps a user to a FileFolderLink with a specific access level.
+    Useful for distinguishing 'read' vs 'write' vs 'owner' permissions.
+    """
+    file_link = models.ForeignKey(FileFolderLink, on_delete=models.CASCADE, related_name="access_entries")
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    access_level = models.CharField(max_length=10, choices=[
+        ("read", "Read"),
+        ("write", "Write"),
+        ("owner", "Owner"),
+    ])
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="access_grants")
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("file_link", "user")
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.file_link.file.filename} [{self.access_level}]"
+'''
+
+
+class FileAccessEntry(models.Model):
+    """
+    Granular access entry: maps a user or group to a FileFolderLink with detailed permissions.
+    Includes optional expiration and granter tracking.
+    """
+    file_link = models.ForeignKey(FileFolderLink, on_delete=models.CASCADE, related_name="access_entries")
+
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.CASCADE)
+    group = models.ForeignKey(Group, null=True, blank=True, on_delete=models.CASCADE)
+
+    can_read = models.BooleanField(default=True)
+    can_write = models.BooleanField(default=False)
+    can_delete = models.BooleanField(default=False)
+    can_share = models.BooleanField(default=False)
+
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    granted_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="access_grants")
+    granted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["file_link", "user"], name="unique_file_user_access"),
+            models.UniqueConstraint(fields=["file_link", "group"], name="unique_file_group_access"),
+            models.CheckConstraint(
+                check=(
+                    models.Q(user__isnull=False, group__isnull=True) |
+                    models.Q(user__isnull=True, group__isnull=False)
+                ),
+                name="only_user_or_group"
+            )
+        ]
+
+    def __str__(self):
+        target = self.user.email if self.user else f"[Group] {self.group.name}"
+        return f"{target} -> {self.file_link.file.filename} (R:{self.can_read}, W:{self.can_write})"
 

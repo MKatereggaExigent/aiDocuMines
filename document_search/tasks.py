@@ -38,6 +38,7 @@ from document_search.utils import _get_model
 
 from django.db.models import Q
 from datetime import datetime
+from document_operations.models import FileAccessEntry
 
 # ───────────────────────────── Config & constants ───────────────────────────
 try:
@@ -442,7 +443,42 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
         file_ids = list({hit.entity.get("file_id") for hit in results[0]})
 
         # Build Postgres filters
-        q = Q(user_id=user_id)
+        # q = Q(user_id=user_id)
+
+        # Get files owned by the user or shared with them
+
+        # 🔐 Get accessible file IDs (owned or shared)
+        accessible_file_ids = list(
+            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
+        ) + list(
+            FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
+        )
+
+        q = Q(id__in=accessible_file_ids)  # ✅ Base filter
+
+        # Optional: narrow to specific file_id(s)
+        if file_ids:
+            q &= Q(id__in=file_ids)  # intersection
+
+        # Apply additional filters
+        if filters.get("created_from"):
+            q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
+        if filters.get("created_to"):
+            q &= Q(created_at__lte=datetime.fromisoformat(filters["created_to"]))
+        if filters.get("author"):
+            q &= Q(metadata__author__icontains=filters["author"])
+        if filters.get("project_id"):
+            q &= Q(project_id=filters["project_id"])
+        if filters.get("service_id"):
+            q &= Q(service_id=filters["service_id"])
+
+        '''
+        accessible_file_ids = list(
+            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
+        ) + list(
+            FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
+        )
+
         if filters.get("created_from"):
             q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
         if filters.get("created_to"):
@@ -455,6 +491,8 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
             q &= Q(service_id=filters["service_id"])
         if file_ids:
             q &= Q(id__in=file_ids)
+            q = Q(id__in=accessible_file_ids)
+        '''
 
         files = File.objects.filter(q).prefetch_related("metadata")
 

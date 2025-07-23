@@ -29,6 +29,7 @@ from document_operations.models import Folder, FileFolderLink
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 import mimetypes
+from document_operations.utils import register_file_folder_link
 
 from core.tasks import extract_document_text_task
 from document_search.tasks import index_file  # at the top of views.py
@@ -167,6 +168,7 @@ class FileUploadView(APIView):
                     service_id=service_id,
                     origin_file=dup_self,
                 )
+                register_file_folder_link(clone)
                 _link_to_folder(clone, user, project_id, service_id)
                 file_payload.append(_resp(clone, "File cloned for reuse."))
                 continue  # next upload
@@ -188,6 +190,7 @@ class FileUploadView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                 )
+                register_file_folder_link(reused)
                 _link_to_folder(reused, user, project_id, service_id)
                 file_payload.append(_resp(reused, "Duplicate file reused from another user."))
                 continue
@@ -217,6 +220,7 @@ class FileUploadView(APIView):
                 project_id=project_id,
                 service_id=service_id,
             )
+            register_file_folder_link(fresh)
             _link_to_folder(fresh, user, project_id, service_id)
             file_payload.append(_resp(fresh, "File uploaded successfully."))
 
@@ -541,6 +545,7 @@ class BulkFolderUploadView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                 )
+                register_file_folder_link(file_instance)
 
                 uploaded_files_data.append({
                     "file_id": file_instance.id,

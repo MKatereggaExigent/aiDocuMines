@@ -93,6 +93,7 @@ class SubmitOCRAPIView(APIView):
             ocr_run = OCRRun.objects.filter(project_id=file_obj.project_id, service_id=file_obj.service_id, client_name=file_obj.user.username).first()
             return Response({
                 "ocr_run_id": str(ocr_run.id) if ocr_run else "N/A",
+                "file_id": file_obj.id,
                 "status": "Processing",
                 "message": "File has already been processed. Skipping OCR."
             }, status=status.HTTP_202_ACCEPTED)
@@ -110,8 +111,10 @@ class SubmitOCRAPIView(APIView):
         process_ocr.delay(ocr_run.id, file_id, ocr_option)
 
         return Response({
-            "ocr_run_id": str(ocr_run.id),
-            "status": "Processing"
+            "ocr_run_id": str(ocr_run.id) if ocr_run else "N/A",
+            "file_id": file_obj.id,
+            "status": "Processing",
+            "message": "File has already been processed. Skipping OCR."
         }, status=status.HTTP_202_ACCEPTED)
 
 

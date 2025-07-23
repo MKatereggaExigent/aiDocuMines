@@ -10,6 +10,27 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 
+
+# file_system/views.py
+class UserFileTreeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, user_id):
+        run_async = request.query_params.get("async", "false").lower() == "true"
+        user = request.user
+
+        if str(user.id) != str(user_id) and not user.is_superuser:
+            return Response({"detail": "Permission denied"}, status=403)
+
+        if run_async:
+            task = generate_user_file_tree_task.delay(user.id)
+            return Response({"message": "Task queued", "task_id": task.id}, status=202)
+
+        file_tree = get_user_file_tree(user)
+        return Response({"user_id": user.id, "structure": file_tree})
+
+
+'''
 class UserFileTreeView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -31,5 +52,5 @@ class UserFileTreeView(APIView):
             "user_id": user_id,
             "structure": file_tree
         })
-
+'''
 

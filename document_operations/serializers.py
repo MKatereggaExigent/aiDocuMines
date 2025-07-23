@@ -16,9 +16,7 @@ class FolderSerializer(serializers.ModelSerializer):
 class FileFolderLinkSerializer(serializers.ModelSerializer):
     file_name = serializers.CharField(source='file.filename', read_only=True)
     file_id = serializers.IntegerField(source='file.id', read_only=True)
-    shared_with = serializers.SlugRelatedField(
-        many=True, slug_field="email", read_only=True
-    )
+    shared_with = serializers.SerializerMethodField()
 
     class Meta:
         model = FileFolderLink
@@ -26,6 +24,20 @@ class FileFolderLinkSerializer(serializers.ModelSerializer):
             'id', 'file_id', 'file_name', 'folder', 'is_trashed',
             'is_shared', 'password_protected', 'password_hint',
             'shared_with'
+        ]
+
+    def get_shared_with(self, obj):
+        access_entries = obj.access_entries.select_related('user').all()
+        return [
+            {
+                "user_id": entry.user.id,
+                "email": entry.user.email,
+                "can_read": entry.can_read,
+                "can_write": entry.can_write,
+                "can_delete": entry.can_delete,
+                "can_share": entry.can_share,
+            }
+            for entry in access_entries if entry.user
         ]
 
 

@@ -33,6 +33,19 @@ from django.conf import settings
 from rest_framework.generics import RetrieveAPIView
 from .models import FileFolderLink
 from .serializers import FileFolderLinkSerializer
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
+
+from django.contrib.auth.models import Group
+from .tasks import async_grant_public_link
+from .utils import update_access_level_for_user
+from .models import FileAccessEntry
+from django.contrib.auth import get_user_model
+from document_operations.utils import set_password_protection
+from document_operations.models import FileAuditLog
+from rest_framework.parsers import JSONParser  # 🔁 Import this at the top
+
+User = get_user_model()
 
 '''
 class FolderDetailView(APIView):
@@ -91,6 +104,15 @@ class RenameFileView(APIView):
         if not new_name:
             return Response({"error": "Missing new_name"}, status=400)
 
+        # Audit log
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        FileAuditLog.objects.create(
+            file=file_link.file,
+            user=request.user,
+            action="renamed",
+            extra={"new_name": new_name}
+        )
+
         async_rename_file.delay(pk, new_name)
         return Response({"message": "File rename initiated."}, status=202)
 
@@ -144,6 +166,14 @@ class DeleteFileView(APIView):
     permission_classes = [IsAuthenticated, IsOwner, HasEffectiveAccess]
 
     def delete(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+
+        FileAuditLog.objects.create(
+            file=file_link.file,
+            user=request.user,
+            action="deleted"
+        )
+
         async_delete_file.delay(pk)
         return Response({"message": "File deletion initiated."}, status=202)
 
@@ -196,6 +226,15 @@ class ProtectFileView(APIView):
         if not password_hint:
             return Response({"error": "Missing password_hint"}, status=400)
 
+        # Audit log
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        FileAuditLog.objects.create(
+            file=file_link.file,
+            user=request.user,
+            action="updated",
+            extra={"protection": "password", "hint": password_hint}
+        )
+
         async_password_protect_file.delay(pk, password_hint)
         return Response({"message": "Password protection initiated."}, status=202)
 
@@ -204,6 +243,14 @@ class RestoreFileView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+
+        FileAuditLog.objects.create(
+            file=file_link.file,
+            user=request.user,
+            action="restored"
+        )
+
         async_restore_file.delay(pk)
         return Response({"message": "File restore initiated."}, status=202)
 
@@ -229,9 +276,6 @@ class ListFileVersionsView(APIView):
             "file_path": v.file_path,
         } for v in versions]
         return Response(data, status=200)
-
-
-
 
 
 class RestoreFileVersionView(APIView):
@@ -274,10 +318,13 @@ class SharedFilesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        shared = FileFolderLink.objects.filter(shared_with=request.user)
-        serializer = FileFolderLinkSerializer(shared, many=True)
-        return Response(serializer.data, status=200)
+        access_links = FileAccessEntry.objects.filter(user=request.user).select_related("file_link__file")
+        file_links = [entry.file_link for entry in access_links]
+        serializer = FileFolderLinkSerializer(file_links, many=True)
+        return Response(serializer.data)
 
+
+'''
 class ShareFileView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
@@ -297,6 +344,57 @@ class ShareFileView(APIView):
         file_link.save()
 
         return Response({"message": "File shared successfully."}, status=200)
+'''
+
+
+class ShareFileView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+    parser_classes = [JSONParser] 
+
+    @swagger_auto_schema(
+        operation_description="Share a file with users",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "user_ids": openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_INTEGER)),
+                "access_level": openapi.Schema(type=openapi.TYPE_STRING, enum=["read", "write", "owner"], default="read")
+            }
+        ),
+        responses={200: "Success"}
+    )
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+
+        user_ids = request.data.get("user_ids", [])
+        level = request.data.get("access_level", "read")
+
+        access_map = {
+            "read":  {"can_read": True},
+            "write": {"can_read": True, "can_write": True},
+            "owner": {"can_read": True, "can_write": True, "can_share": True, "is_owner": True}
+        }
+        perms = access_map.get(level, {"can_read": True})
+
+        if not user_ids:
+            return Response({"error": "No users provided."}, status=400)
+
+        for uid in user_ids:
+            user = get_object_or_404(User, pk=uid)
+            FileAccessEntry.objects.update_or_create(
+                file_link=file_link,
+                user=user,
+                defaults={**perms, "granted_by": request.user}
+            )
+
+        file_link.is_shared = True
+        file_link.save()
+
+        return Response({
+            "message": "File shared successfully.",
+            "shared_with": user_ids,
+            "access_level": level
+        }, status=200)
 
 
 class UnshareFileView(APIView):
@@ -306,7 +404,7 @@ class UnshareFileView(APIView):
         file_link = get_object_or_404(FileFolderLink, pk=pk)
         self.check_object_permissions(request, file_link)
 
-        file_link.shared_with.clear()
+        FileAccessEntry.objects.filter(file_link=file_link).delete()
         file_link.is_shared = False
         file_link.save()
 
@@ -327,19 +425,81 @@ class FilePreviewView(APIView):
         })
 
 
+
+class FileAuditLogView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    def get(self, request, pk):
+        # Logs from FileAuditLog model
+        logs = FileAuditLog.objects.filter(file_id=pk).order_by("-timestamp")
+
+        # Access entries from sharing
+        access_entries = FileAccessEntry.objects.filter(file_link__file_id=pk)
+
+        log_data = [
+            {
+                "type": "Log",
+                "action": log.action,
+                "user": log.user.email if log.user else None,
+                "extra": log.extra,
+                "timestamp": log.timestamp,
+            }
+            for log in logs
+        ]
+
+        access_data = [
+            {
+                "type": "Access",
+                "user": e.user.email,
+                "granted_by": e.granted_by.email if e.granted_by else None,
+                "access": {
+                    "read": e.can_read,
+                    "write": e.can_write,
+                    "share": e.can_share,
+                    "owner": getattr(e, "is_owner", False),  # fallback safe
+                },
+                "granted_at": e.granted_at,
+            }
+            for e in access_entries
+        ]
+
+        return Response(log_data + access_data, status=200)
+
+
+
+'''
 class FileAuditLogView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def get(self, request, pk):
         logs = FileAuditLog.objects.filter(file_id=pk).order_by("-timestamp")
-        data = [{
+        access_entries = FileAccessEntry.objects.filter(file_link__file_id=pk)
+
+        access_log_data = [
+            {
+                "type": "Access",
+                "user": e.user.email,
+                "granted_by": e.granted_by.email if e.granted_by else None,
+                "access": {
+                    "read": e.can_read,
+                    "write": e.can_write,
+                    "share": e.can_share,
+                    "owner": e.can_write and e.can_share and not e.expires_at,  # inferred owner
+                },
+                "granted_at": e.granted_at
+            }
+            for e in access_entries
+        ]
+
+        file_logs = [{
+            "type": "Log",
             "action": log.action,
             "user": log.user.email,
             "timestamp": log.timestamp,
         } for log in logs]
 
-        return Response(data, status=200)
-
+        return Response(file_logs + access_log_data, status=200)
+'''
 
 class PublicSharedFileView(RetrieveAPIView):
     permission_classes = []  # public access
@@ -446,7 +606,6 @@ class TrashSingleFileView(APIView):
         return Response({"message": f"File {pk} moved to trash."}, status=200)
 
 
-# In document_operations/views.py
 
 class FolderListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -479,4 +638,89 @@ class FolderListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         folder = serializer.save()
         return Response(FolderSerializer(folder).data, status=201)
+
+
+
+class ShareWithGroupView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    @swagger_auto_schema(
+        operation_description="Share file with a group",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "group_name": openapi.Schema(type=openapi.TYPE_STRING),
+                "access_level": openapi.Schema(type=openapi.TYPE_STRING, enum=["read", "write", "owner"]),
+            }
+        ),
+        responses={200: "Shared successfully"}
+    )
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+
+        group_name = request.data.get("group_name")
+        level = request.data.get("access_level", "read")
+        group = get_object_or_404(Group, name=group_name)
+
+        perms = {
+            "read":  {"can_read": True},
+            "write": {"can_read": True, "can_write": True},
+            "owner": {"can_read": True, "can_write": True, "can_share": True, "is_owner": True}
+        }.get(level, {"can_read": True})
+
+        for user in group.user_set.all():
+            FileAccessEntry.objects.update_or_create(
+                file_link=file_link,
+                user=user,
+                defaults={**perms, "granted_by": request.user}
+            )
+
+        file_link.is_shared = True
+        file_link.save()
+
+        return Response({"message": f"Shared with group {group_name}"}, status=200)
+
+
+class SetAccessLevelView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    @swagger_auto_schema(
+        operation_description="Update a user's access level for a file",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "user_id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                "access_level": openapi.Schema(type=openapi.TYPE_STRING, enum=["read", "write", "owner"]),
+            }
+        ),
+        responses={200: "Updated"}
+    )
+    def patch(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+
+        user_id = request.data.get("user_id")
+        level = request.data.get("access_level", "read")
+
+        result = update_access_level_for_user(file_link, user_id, level, request.user)
+        return Response(result, status=200)
+
+
+class GrantPublicLinkView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+
+        FileAuditLog.objects.create(
+            file=file_link.file,
+            user=request.user,
+            action="shared",
+            extra={"shared_as": "public"}
+        )
+
+        async_grant_public_link.delay(file_link.id)
+        return Response({"message": "Public access link is being generated."}, status=202)
 
