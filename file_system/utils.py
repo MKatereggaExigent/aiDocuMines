@@ -79,16 +79,30 @@ def get_user_file_tree(user, base_upload_dir=None):
         if not os.path.isdir(client_dir):
             continue
 
-        user_dir = os.path.join(client_dir, str(user.id))
-        if not os.path.isdir(user_dir):
-            continue
+        #user_dir = os.path.join(client_dir, str(user.id))
+        #if not os.path.isdir(user_dir):
+        #    continue
 
-        file_tree.append({
-            "id": client_id,
-            "name": client_id,
-            "type": "folder",
-            "children": build_tree(user_dir, [client_id, str(user.id)])
-        })
+        #file_tree.append({
+        #    "id": client_id,
+        #    "name": client_id,
+        #    "type": "folder",
+        #    "children": build_tree(user_dir, [client_id, str(user.id)])
+        #})
+
+        # Instead of diving into the user_id level, scan all subdirs below client_dir
+        for subdir in sorted(os.listdir(client_dir)):
+            project_root = os.path.join(client_dir, subdir)
+            if not os.path.isdir(project_root):
+                continue
+
+            file_tree.append({
+                "id": f"{client_id}/{subdir}",
+                "name": subdir,
+                "type": "folder",
+                "children": build_tree(project_root, [client_id, subdir])
+            })
+
 
     # 2️⃣ Virtual folders for shared files
     seen_virtual_paths = set()
@@ -319,7 +333,8 @@ def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
         base_upload_dir = os.path.abspath(os.path.join("media", "uploads"))
 
     if not base_url:
-        base_url = f"/media/uploads/{user_id}"
+        # base_url = f"/media/uploads/{user_id}"
+        base_url = f"/media/uploads"
 
     file_tree = []
 
@@ -329,8 +344,6 @@ def get_user_file_tree(user_id, base_upload_dir=None, base_url=None):
 
     # Start fallback counter one above max existing file ID
     # fallback_id_counter = {"counter": max(file_map.values(), default=0) + 1}
-
-
 
     fallback_id_counter = {"counter": -1}
 

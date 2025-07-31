@@ -31,6 +31,7 @@ def generate_insights_for_user(user_id):
         insights_data=insights_data,
         generated_at=timezone.now(),
         generated_async=True,
+        task_id=generate_insights_for_user.request.id,  # NEW
     )
 
     return insights_data

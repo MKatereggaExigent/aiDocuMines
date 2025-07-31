@@ -1,129 +1,154 @@
 # platform_data_insights/utils.py
 
 from core.models import File, Metadata, Run, Storage
-from django.db.models import Count, Sum, Avg
+from django.db.models import Count, Sum, Avg, Max, Min, Q
 from django.utils import timezone
 from datetime import timedelta
+from django.db.models.functions import TruncDate
+
 
 def calculate_user_insights(user):
     """
-    Perform all data aggregation for a single user.
-    Returns a single dict with all insights data.
+    Perform efficient, scalable data aggregation for a single user.
+    Returns a dict with useful platform usage insights.
     """
 
-    # --- pending / failed documents
-    pending_files = File.objects.filter(
-        user=user,
-        status__in=["Pending", "Failed"]
-    ).values("id", "filename", "status", "file_size", "created_at")
+    # 1. File summary counts
+    file_qs = File.objects.filter(user=user)
+    total_file_count = file_qs.count()
+    pending_file_count = file_qs.filter(status="Pending").count()
+    failed_file_count = file_qs.filter(status="Failed").count()
+    processing_file_count = file_qs.filter(status="Processing").count()
 
-    # --- recent documents
-    # recent_files = File.objects.filter(user=user).order_by("-created_at")[:10].values(
-    #     "id", "filename", "status", "created_at"
-    # )
-
-    recent_files_raw = File.objects.filter(user=user).order_by("-created_at")[:10].values(
-        "id", "filename", "status", "created_at"
+    # 2. Recent files (sample only)
+    recent_files = list(
+        file_qs.order_by("-created_at")
+        .values("id", "filename", "status", "created_at")[:10]
     )
-    recent_files = []
-    for f in recent_files_raw:
+    for f in recent_files:
         f["created_at"] = f["created_at"].isoformat() if f["created_at"] else None
-        recent_files.append(f)
 
-    # --- document type distribution
-    doc_type_distribution = (
-        File.objects.filter(user=user)
-        .values("document_type")
+    # 3. Document type distribution
+    doc_type_distribution = list(
+        file_qs.values("document_type")
         .annotate(count=Count("id"))
         .order_by("-count")
     )
 
-    # --- document volume trend
-    thirty_days_ago = timezone.now() - timedelta(days=30)
-    volume_trend = (
-        File.objects.filter(user=user, created_at__gte=thirty_days_ago)
-        .extra(select={"date": "date(created_at)"})
+    # 4. Daily volume trend (last 30 days)
+    today = timezone.now()
+    past_30 = today - timedelta(days=30)
+    volume_trend = list(
+        file_qs.filter(created_at__gte=past_30)
+        .annotate(date=TruncDate("created_at"))
         .values("date")
         .annotate(count=Count("id"))
         .order_by("date")
     )
+    for v in volume_trend:
+        v["date"] = v["date"].isoformat()
 
-    # --- encrypted documents
-    encrypted_docs_count = Metadata.objects.filter(file__user=user, is_encrypted=True).count()
-
-    # --- flagged docs
-    flagged_docs_count = File.objects.filter(user=user, status="Failed").count()
-
-    # --- avg document length
-    avg_pages = Metadata.objects.filter(file__user=user).aggregate(
-        avg_pages=Avg("page_count")
-    )["avg_pages"] or 0
-
-    # --- duplicate files
-    duplicates = (
-        File.objects.filter(user=user)
-        .values("md5_hash", "filename")
+    # 5. Duplicate detection (MD5)
+    duplicate_files = list(
+        file_qs.values("md5_hash", "filename")
         .annotate(count=Count("id"))
         .filter(count__gt=1)
+        .order_by("-count")[:10]
     )
-    duplicate_list = [
-        {"filename": d["filename"], "count": d["count"]}
-        for d in duplicates
-    ]
 
-    # --- metadata compliance
-    issues = []
+    # 6. Encrypted files count
+    encrypted_count = Metadata.objects.filter(file__user=user, is_encrypted=True).count()
+
+    # 7. Metadata completeness
     meta_qs = Metadata.objects.filter(file__user=user)
-    if meta_qs.filter(author__isnull=True).exists():
-        issues.append("Missing author in some documents.")
-    if meta_qs.filter(title__isnull=True).exists():
-        issues.append("Missing title in some documents.")
-    if meta_qs.filter(page_count__lte=0).exists():
-        issues.append("Documents with 0 pages detected.")
+    total_meta = meta_qs.count() or 1  # prevent division by zero
 
-    # --- storage locations
-    storages = list(Storage.objects.filter(user=user).values(
-        "upload_storage_location", "output_storage_location"
-    ))
+    completeness = {
+        "has_author": round(100 * meta_qs.filter(author__isnull=False).count() / total_meta, 2),
+        "has_title": round(100 * meta_qs.filter(title__isnull=False).count() / total_meta, 2),
+        "has_page_count": round(100 * meta_qs.filter(page_count__gt=0).count() / total_meta, 2),
+    }
 
-    # --- avg processing time
-    avg_processing_time = None
-    runs = Run.objects.filter(user=user).values("created_at", "updated_at")
-    if runs:
-        durations = []
-        for r in runs:
-            if r["updated_at"] and r["created_at"]:
-                duration = (r["updated_at"] - r["created_at"]).total_seconds()
-                durations.append(duration)
-        if durations:
-            avg_processing_time = sum(durations) / len(durations)
+    metadata_issues = []
+    if completeness["has_author"] < 100:
+        metadata_issues.append("Some documents are missing authors.")
+    if completeness["has_title"] < 100:
+        metadata_issues.append("Some documents are missing titles.")
+    if completeness["has_page_count"] < 100:
+        metadata_issues.append("Some documents have 0 pages.")
 
-    # --- delayed files
-    delayed_files_count = File.objects.filter(
-        user=user,
+    # 8. Storage locations used
+    #storages = list(
+    #    Storage.objects.filter(user=user)
+    #    .values("upload_storage_location", "output_storage_location")
+    #    .annotate(count=Count("id"))
+    #)
+
+    storages = list(
+        Storage.objects.filter(user=user)
+        .values("upload_storage_location", "output_storage_location")
+        .annotate(count=Count("upload_storage_location"))
+    )
+
+    # 9. Average document size
+    size_summary = file_qs.aggregate(
+        avg_size=Avg("file_size"),
+        min_size=Min("file_size"),
+        max_size=Max("file_size")
+    )
+    document_size_summary = {
+        "average_kb": round((size_summary["avg_size"] or 0) / 1024, 2),
+        "min_kb": round((size_summary["min_size"] or 0) / 1024, 2),
+        "max_kb": round((size_summary["max_size"] or 0) / 1024, 2),
+    }
+
+    # 10. Top file types by extension
+    top_file_types = list(
+        file_qs.values("extension")
+        .annotate(count=Count("id"))
+        .order_by("-count")[:10]
+    )
+
+    # 11. Delayed processing (>1hr)
+    delayed_files_count = file_qs.filter(
         status="Processing",
         created_at__lt=timezone.now() - timedelta(hours=1)
     ).count()
 
-    # --- total cost
-    total_cost = Run.objects.filter(user=user).aggregate(
-        total=Sum("cost")
-    )["total"] or 0
+    # 12. Run stats
+    runs = Run.objects.filter(user=user)
+    avg_processing_time = None
+    if runs.exists():
+        durations = runs.exclude(updated_at__isnull=True).annotate(
+            duration=Sum("updated_at") - Sum("created_at")
+        )
+        times = []
+        for r in runs:
+            if r.created_at and r.updated_at:
+                times.append((r.updated_at - r.created_at).total_seconds())
+        if times:
+            avg_processing_time = round(sum(times) / len(times), 2)
+
+    total_cost = runs.aggregate(total=Sum("cost"))["total"] or 0
 
     return {
-        "pending_files": list(pending_files),
-        "recent_files": list(recent_files),
-        "doc_type_distribution": list(doc_type_distribution),
-        "volume_trend": list(volume_trend),
-        "encrypted_docs_count": encrypted_docs_count,
-        "flagged_docs_count": flagged_docs_count,
-        "avg_pages": avg_pages,
-        "duplicates": duplicate_list,
-        "metadata_issues": issues,
+        "total_file_count": total_file_count,
+        "pending_file_count": pending_file_count,
+        "failed_file_count": failed_file_count,
+        "processing_file_count": processing_file_count,
+        "recent_files": recent_files,
+        "doc_type_distribution": doc_type_distribution,
+        "top_file_types": top_file_types,
+        "volume_trend": volume_trend,
+        "duplicate_files": duplicate_files,
+        "encrypted_docs_count": encrypted_count,
+        "metadata_completeness": completeness,
+        "metadata_issues": metadata_issues,
         "storages": storages,
-        "avg_processing_time": avg_processing_time,
+        "document_size_summary": document_size_summary,
+        "avg_pages": meta_qs.aggregate(avg=Avg("page_count"))["avg"] or 0,
+        "avg_processing_time_seconds": avg_processing_time,
         "delayed_files_count": delayed_files_count,
-        "total_cost": float(total_cost),
+        "total_cost": round(float(total_cost), 2),
     }
-
 

@@ -118,6 +118,7 @@ class File(models.Model):
     filepath = models.CharField(max_length=1024)  # ✅ Store absolute file path
     file_size = models.BigIntegerField(default=0)  # ✅ Store file size in bytes
     file_type = models.CharField(max_length=255, blank=True, null=True)  # ✅ Increased max_length to 255
+    extension = models.CharField(max_length=10, null=True, blank=True)
     
     # md5_hash = models.CharField(max_length=32, unique=True, null=True, blank=True, help_text="MD5 checksum for duplicate detection")
 
@@ -157,8 +158,8 @@ class File(models.Model):
     content = models.TextField(null=True, blank=True, help_text="Extracted plain text content of the file.")
     topic = models.ForeignKey("grid_documents_interrogation.Topic", on_delete=models.SET_NULL, null=True, blank=True, related_name="primary_files")
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="files")
-    project_id = models.CharField(max_length=255, db_index=True)
-    service_id = models.CharField(max_length=255, db_index=True)
+    project_id = models.CharField(max_length=255, db_index=True, blank=False)
+    service_id = models.CharField(max_length=255, db_index=True, blank=False)
     storage = models.ForeignKey(Storage, on_delete=models.CASCADE, related_name="files", null=True, blank=True)  # ✅ Ensure Storage is referenced correctly
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

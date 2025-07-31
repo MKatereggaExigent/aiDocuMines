@@ -38,6 +38,10 @@ from django.db import transaction
 from platform_data_insights.tasks import generate_insights_for_user
 from platform_data_insights.models import UserInsights
 
+from core.tasks import process_bulk_metadata
+
+import mimetypes
+
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +114,10 @@ class FileUploadView(APIView):
         files      = request.FILES.getlist("file")
         clone_file = request.data.get("clone_file", "false").lower() == "true"
 
-        if not all([project_id, service_id]) or not files:
+        #if not all([project_id, service_id]) or not files:
+        #    return Response({"error": "Missing required fields"}, status=400)
+
+        if not (project_id and project_id.strip()) or not (service_id and service_id.strip()) or not files:
             return Response({"error": "Missing required fields"}, status=400)
 
         # ── Per-upload run & path scaffold ───────────────────────────────────
@@ -150,6 +157,7 @@ class FileUploadView(APIView):
                         "project_id": dup_self.project_id,
                         "service_id": dup_self.service_id,
                         "filepath"  : dup_self.filepath,
+                        "extension" : dup_self.extension
                     }, status=200)
 
                 # clone requested
@@ -167,6 +175,7 @@ class FileUploadView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                     origin_file=dup_self,
+                    extension=dup_self.extension,
                 )
                 register_file_folder_link(clone)
                 _link_to_folder(clone, user, project_id, service_id)
@@ -189,6 +198,7 @@ class FileUploadView(APIView):
                     user=user,
                     project_id=project_id,
                     service_id=service_id,
+                    extension=dup_other.extension
                 )
                 register_file_folder_link(reused)
                 _link_to_folder(reused, user, project_id, service_id)
@@ -208,17 +218,25 @@ class FileUploadView(APIView):
                 upload_storage_location=final_path
             )
 
+            _, guessed_ext = mimetypes.guess_type(meta["filename"])
+            if guessed_ext:
+                extension = guessed_ext.split("/")[-1].lower()
+            else:
+                extension = os.path.splitext(meta["filename"])[-1].replace('.', '').lower() or "unknown"
+
             fresh = File.objects.create(
                 run=run,
                 storage=storage,
                 filename=meta["filename"],
                 filepath=final_path,
                 file_size=meta["file_size"],
-                file_type=meta["file_type"],
+                # file_type=meta["file_type"],
+                file_type = meta.get("file_type") or mimetypes.guess_type(meta["filename"])[0] or "application/octet-stream",
                 md5_hash=meta["md5_hash"],
                 user=user,
                 project_id=project_id,
                 service_id=service_id,
+                extension=extension
             )
             register_file_folder_link(fresh)
             _link_to_folder(fresh, user, project_id, service_id)
@@ -263,6 +281,8 @@ class FileUploadView(APIView):
 
             # Launch async insights regeneration
             generate_insights_for_user.delay(request.user.id)
+
+            process_bulk_metadata.delay(str(run.run_id))
 
         return Response({"run_id": str(run.run_id), "files": file_payload}, status=201)
 
@@ -510,8 +530,11 @@ class BulkFolderUploadView(APIView):
         service_id = request.data.get("service_id")
         files = request.FILES.getlist("file")
 
-        if not all([client_id, project_id, service_id]) or not files:
-            return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
+        #if not all([client_id, project_id, service_id]) or not files:
+        #    return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not (project_id and project_id.strip()) or not (service_id and service_id.strip()) or not files:
+            return Response({"error": "Missing required fields"}, status=400)
 
         user_id = str(user.id)
         timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")

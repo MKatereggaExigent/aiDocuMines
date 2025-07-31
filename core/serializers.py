@@ -39,6 +39,12 @@ class FileSerializer(serializers.ModelSerializer):
     run_id = serializers.UUIDField(source="run.run_id", read_only=True)  # ✅ Referencing `run_id`
     storage = serializers.SerializerMethodField()  # ✅ Include related storage information
 
+    # Add these fields with null-safe defaults
+    extension = serializers.SerializerMethodField()
+    document_type = serializers.SerializerMethodField()
+    project_id = serializers.SerializerMethodField()
+    service_id = serializers.SerializerMethodField()
+
     class Meta:
         model = File
         fields = [
@@ -53,7 +59,11 @@ class FileSerializer(serializers.ModelSerializer):
             "storage",
             "created_at",
             "updated_at",
-        ]
+            "extension",
+            "document_type",
+            "project_id",
+            "service_id"
+            ]
         read_only_fields = ["id", "unique_code", "created_at", "updated_at"]
 
     def get_storage(self, obj):
@@ -61,6 +71,18 @@ class FileSerializer(serializers.ModelSerializer):
         if hasattr(obj, "storage"):
             return StorageSerializer(obj.storage).data
         return None
+
+    def get_extension(self, obj):
+        return obj.extension or "unknown"
+
+    def get_document_type(self, obj):
+        return obj.document_type or "Unknown"
+
+    def get_project_id(self, obj):
+        return obj.project_id or "unknown_project"
+
+    def get_service_id(self, obj):
+        return obj.service_id or "unknown_service"
 
     def validate_status(self, value):
         """Ensure file status is a valid choice"""

@@ -23,7 +23,8 @@ class Folder(models.Model):
 
 
 class FileFolderLink(models.Model):
-    file = models.OneToOneField(File, on_delete=models.CASCADE, related_name="folder_link")
+    #file = models.OneToOneField(File, on_delete=models.CASCADE, related_name="folder_link")
+    file = models.ForeignKey(File, on_delete=models.CASCADE, related_name="folder_links")
     folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name="files")
     is_trashed = models.BooleanField(default=False)
     is_protected = models.BooleanField(default=False)
