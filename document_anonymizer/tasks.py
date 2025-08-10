@@ -27,9 +27,29 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
     logger.info(f"🔄 Starting anonymization for file_id={file_id} (type={file_type})")
     file_entry = get_object_or_404(File, id=file_id)
 
+    def mark_run_failed(msg: str):
+        logger.error(f"❌ {msg}")
+        if run_id:
+            try:
+                run = AnonymizationRun.objects.get(id=run_id)
+                run.status = "Failed"
+                # only if your model has error_message; if not, drop this line
+                if hasattr(run, "error_message"):
+                    run.error_message = msg
+                run.save(update_fields=["status"] + (["error_message"] if hasattr(run, "error_message") else []))
+            except AnonymizationRun.DoesNotExist:
+                logger.error(f"❌ AnonymizationRun {run_id} not found to mark as Failed")
+
     if not os.path.exists(file_entry.filepath):
         logger.error(f"❌ File not found: {file_entry.filepath}")
         return {"error": "File not found", "file_id": file_id}
+
+
+    # ✅ Normalize file_type
+    file_type = (file_type or "plain").lower().strip()
+    if file_type in {"txt", "text"}:
+        file_type = "plain"
+
 
     # ✅ EARLY EXIT: Already anonymized
     existing = Anonymize.objects.filter(original_file=file_entry, file_type=file_type, is_active=True).first()
@@ -53,14 +73,40 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
     structured_txt_path = os.path.join(anonymized_dir, f"{base_filename}_structured.txt")
     structured_html_path = os.path.join(anonymized_dir, f"{base_filename}_structured.html")
 
+    # ✅ Structured extraction (PDF/DOCX only)
+    '''
     try:
         structured_text, _, elements_json = service.extract_structured_text(file_entry.filepath)
     except Exception as e:
-        logger.exception(f"❌ Structured text extraction failed: {e}")
+        mark_run_failed(f"Structured text extraction crashed: {e}")
         return {"error": "Structured extraction crashed", "file_id": file_id}
 
     if not structured_text:
+        mark_run_failed("Empty structured content (unsupported type or zero text).")
         return {"error": "Empty structured content", "file_id": file_id}
+    '''
+
+    # after: graceful fallback to raw extraction
+    structured_text, elements, elements_json = service.extract_structured_text(file_entry.filepath)
+    raw_text = None
+
+    if not structured_text:
+        raw_text, _, _ = service.extract_text_from_file(file_entry.filepath)
+        if not raw_text:
+            mark_run_failed("No extractable content.")
+            return {"error": "No extractable content", "file_id": file_id}
+        # make a single synthetic block so the rest of the pipeline can run uniformly
+        elements_json = [{"element_id": "raw-0", "type": "Text", "text": raw_text}]
+
+
+    #try:
+    #    structured_text, _, elements_json = service.extract_structured_text(file_entry.filepath)
+    #except Exception as e:
+    #    logger.exception(f"❌ Structured text extraction failed: {e}")
+    #    return {"error": "Structured extraction crashed", "file_id": file_id}
+
+    # if not structured_text:
+    #    return {"error": "Empty structured content", "file_id": file_id}
 
     updated_blocks = []
     global_combined_map = {}
@@ -103,13 +149,25 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
         logger.warning(f"⚠️ Structured HTML generation failed: {e}")
         structured_html_path = None
 
-    risk_result = service.compute_risk_score(final_masked_doc, global_presidio_map, global_spacy_map)
+    # risk_result = service.compute_risk_score(final_masked_doc, global_presidio_map, global_spacy_map)
+
+
+    # Get original text from File model (prefer DB content, else read file)
+    original_for_risk = file_entry.content
+    if not original_for_risk:
+        try:
+            with open(file_entry.filepath, "r", encoding="utf-8") as f:
+                original_for_risk = f.read()
+        except Exception:
+            original_for_risk = final_masked_doc  # last resort fallback
+
+    risk_result = service.compute_risk_score(original_for_risk, global_presidio_map, global_spacy_map)
 
     if run_id:
         anonymization_run = get_object_or_404(AnonymizationRun, id=run_id)
         anonymization_run.status = "Completed"
         anonymization_run.save(update_fields=["status"])
-        run = file_entry.run 
+        # run = file_entry.run 
     else:
         anonymization_run = AnonymizationRun.objects.create(
                 project_id=file_entry.project_id,
@@ -119,7 +177,7 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
                 anonymization_type="Presidio-Spacy"
                 )
 
-        run = file_entry.run # ✅ Still fallback to the File’s Run
+        # run = file_entry.run # ✅ Still fallback to the File’s Run
 
     with transaction.atomic():
         
@@ -189,7 +247,8 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
 
     return {
         "file_id": file_id,
-        "anonymization_run_id": str(run.id),
+        #"anonymization_run_id": str(run.id),
+        "anonymization_run_id": str(anonymization_run.id),
         "file_type": file_type,
         "status": "Completed",
         "registered_outputs": registered_files
@@ -247,13 +306,30 @@ def compute_risk_score_task(file_id):
     if not instance.anonymized_filepath or not os.path.exists(instance.anonymized_filepath):
         return {"error": "Masked file not found"}
 
-    with open(instance.anonymized_filepath, "r", encoding="utf-8") as f:
-        masked_text = f.read()
+    # with open(instance.anonymized_filepath, "r", encoding="utf-8") as f:
+    #     masked_text = f.read()
+
+    # presidio_map = instance.presidio_masking_map or {}
+    # spacy_map = instance.spacy_masking_map or {}
+
+    # risk_result = service.compute_risk_score(masked_text, presidio_map, spacy_map)
 
     presidio_map = instance.presidio_masking_map or {}
     spacy_map = instance.spacy_masking_map or {}
 
-    risk_result = service.compute_risk_score(masked_text, presidio_map, spacy_map)
+    # Prefer original content from File, fallback to reading from disk
+    original_for_risk = file_entry.content
+    if not original_for_risk:
+        try:
+            with open(file_entry.filepath, "r", encoding="utf-8") as f:
+                original_for_risk = f.read()
+        except Exception:
+            original_for_risk = None
+
+    if not original_for_risk:
+        return {"error": "No source text available for risk scoring"}
+
+    risk_result = service.compute_risk_score(original_for_risk, presidio_map, spacy_map)
 
     instance.risk_score = risk_result["risk_score"]
     instance.risk_level = risk_result["risk_level"]

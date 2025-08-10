@@ -54,6 +54,73 @@ def get_user_from_client_id(client_id):
         return None
 
 
+
+class SubmitOCRAPIView(APIView):
+    """
+    Submit a file for OCR processing.
+    """
+
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Submit a file for OCR processing.",
+        tags=["OCR Processing"],
+        manual_parameters=[
+            client_id_param, client_secret_param,
+            file_id_param, project_id_param, service_id_param, ocr_option_param
+        ],
+    )
+    def post(self, request):
+        file_id = request.query_params.get("file_id")
+        ocr_option = request.query_params.get("ocr_option")
+
+        # Validate file
+        file_obj = get_object_or_404(File, id=file_id)
+        if not os.path.exists(file_obj.filepath):
+            return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Validate OCR option
+        if ocr_option not in ["Basic-ocr", "Advanced-ocr"]:
+            return Response({"error": "Invalid OCR option."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if the OCRFile entry already exists and is processed
+        existing_ocr_file = OCRFile.objects.filter(
+            original_file=file_obj,
+            ocr_option=ocr_option
+        ).first()
+
+        if existing_ocr_file and existing_ocr_file.status == "Processed" and existing_ocr_file.ocr_filepath:
+            logger.info(f"⚠️ OCR skipped: File {file_obj.id} already processed with {ocr_option}")
+            return Response({
+                "ocr_run_id": str(existing_ocr_file.run.id) if existing_ocr_file.run else "N/A",
+                "file_id": file_obj.id,
+                "status": "Processed",
+                "message": "OCR has already been completed for this file."
+            }, status=status.HTTP_202_ACCEPTED)
+
+        # Create OCRRun
+        ocr_run = OCRRun.objects.create(
+            project_id=file_obj.project_id,
+            service_id=file_obj.service_id,
+            client_name=file_obj.user.username if file_obj.user and file_obj.user.username else file_obj.user.email,
+            status="Pending",
+            ocr_option=ocr_option
+        )
+
+        # Start OCR task
+        process_ocr.delay(ocr_run.id, file_id, ocr_option)
+
+        return Response({
+            "ocr_run_id": str(ocr_run.id),
+            "file_id": file_obj.id,
+            "status": "Processing",
+            "message": "OCR task has been started."
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+
+'''
 class SubmitOCRAPIView(APIView):
     """
     Submit a file for OCR processing.
@@ -116,7 +183,7 @@ class SubmitOCRAPIView(APIView):
             "status": "Processing",
             "message": "File has already been processed. Skipping OCR."
         }, status=status.HTTP_202_ACCEPTED)
-
+'''
 
 class CheckOCRStatusAPIView(APIView):
     """

@@ -47,7 +47,372 @@ def get_user_from_client_id(client_id):
         return None
 
 
+class TranslationTaskStatusView(APIView):
+    """
+    Retrieve the status of a document translation using `run_id` or `file_id`.
+    Prioritizes `run_id` if both are provided to avoid ambiguous results.
+    """
+
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Check the status of a document translation using `file_id` or `run_id`. If both are provided, `run_id` is prioritized.",
+        tags=["Translation Status"],
+        manual_parameters=[client_id_param, client_secret_param, file_id_param, run_id_param],
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        run_id = request.query_params.get("run_id")
+
+        if not client_id or not client_secret or (not file_id and not run_id):
+            return Response({"error": "Missing required parameters"}, status=400)
+
+        user = get_user_from_client_id(client_id)
+        if not user:
+            logger.error(f"❌ Invalid client ID: {client_id}")
+            return Response({"error": "Invalid client ID"}, status=403)
+
+        run_instance = None
+        file_instance = None
+
+        # ✅ Prefer run_id
+        if run_id:
+            try:
+                run_instance = TranslationRun.objects.get(id=run_id)
+            except TranslationRun.DoesNotExist:
+                return Response({"error": "No translation process found for the provided run_id"}, status=404)
+
+        # ✅ Resolve via file_id if needed
+        if not run_instance and file_id:
+            file_instance = get_object_or_404(File, id=file_id)
+            tf_for_file = TranslationFile.objects.filter(original_file=file_instance).order_by("-created_at").first()
+            if tf_for_file:
+                run_instance = tf_for_file.run
+
+        if not run_instance:
+            return Response({"error": "No translation process found for the provided parameters"}, status=404)
+
+        # ✅ Prefer the translation file matching file_id if provided
+        if file_instance:
+            translation_file = TranslationFile.objects.filter(
+                run=run_instance, original_file=file_instance
+            ).order_by("-created_at").first()
+        else:
+            translation_file = TranslationFile.objects.filter(run=run_instance).order_by("-created_at").first()
+
+        if not translation_file:
+            return Response({"error": "No translation file found for the provided details"}, status=404)
+
+        response_data = {
+            "translation_run_id": str(run_instance.id),
+            "original_file_id": str(translation_file.original_file.id),
+            "translated_file_id": str(translation_file.id),
+            "from_language": run_instance.from_language,
+            "to_language": run_instance.to_language,
+            "status": run_instance.status,
+            "error_message": run_instance.error_message if run_instance.status == "Failed" else None,
+            "project_id": translation_file.original_file.project_id,
+            "service_id": translation_file.original_file.service_id,
+            "client_name": run_instance.client_name,
+            "original_file_path": translation_file.original_file.filepath,
+            "translated_file_path": translation_file.translated_filepath,
+            "created_at": translation_file.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # 🔹 ONLY translated files for THIS original file (all languages)
+        qs = TranslationFile.objects.filter(
+            original_file=translation_file.original_file
+        ).select_related("run").order_by("-created_at")
+
+        # 👉 If you want only the current run’s language, use:
+        # qs = qs.filter(run__to_language=run_instance.to_language)
+
+        registered_outputs = []
+        for tf in qs:
+            if not tf.translated_filepath:
+                continue
+            registered_outputs.append({
+                "translated_file_id": str(tf.id),
+                "language": tf.run.to_language,
+                "filename": os.path.basename(tf.translated_filepath) if tf.translated_filepath else None,
+                "filepath": tf.translated_filepath,
+                "status": tf.run.status,
+                # Optional convenience link if you expose a download route:
+                # "download_url": f"/api/v1/translation/download/?file_id={tf.original_file.id}&file_type=translated&language={tf.run.to_language}",
+            })
+
+        response_data["registered_outputs"] = registered_outputs
+
+        logger.info(f"[Translation Status] Responded for run_id={run_instance.id}, file_id={file_id or 'N/A'}")
+        return Response(response_data, status=200)
+
+
 '''
+class TranslationTaskStatusView(APIView):
+    """
+    Retrieve the status of a document translation using `run_id` or `file_id`.
+    Prioritizes `run_id` if both are provided to avoid ambiguous results.
+    """
+
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Check the status of a document translation using `file_id` or `run_id`. If both are provided, `run_id` is prioritized.",
+        tags=["Translation Status"],
+        manual_parameters=[client_id_param, client_secret_param, file_id_param, run_id_param],
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        run_id = request.query_params.get("run_id")
+
+        if not client_id or not client_secret or (not file_id and not run_id):
+            return Response({"error": "Missing required parameters"}, status=400)
+
+        # ✅ Validate client ID
+        user = get_user_from_client_id(client_id)
+        if not user:
+            logger.error(f"❌ Invalid client ID: {client_id}")
+            return Response({"error": "Invalid client ID"}, status=403)
+
+        run_instance = None
+        file_instance = None
+
+        # ✅ Prioritize run_id
+        if run_id:
+            try:
+                run_instance = TranslationRun.objects.get(id=run_id)
+            except TranslationRun.DoesNotExist:
+                return Response({"error": "No translation process found for the provided run_id"}, status=404)
+
+        # ✅ Resolve via file_id only if run unresolved
+        if not run_instance and file_id:
+            file_instance = get_object_or_404(File, id=file_id)
+            translation_file_for_file = TranslationFile.objects.filter(original_file=file_instance).order_by("-created_at").first()
+            if translation_file_for_file:
+                run_instance = translation_file_for_file.run
+
+        if not run_instance:
+            return Response({"error": "No translation process found for the provided parameters"}, status=404)
+
+        # ✅ Prefer the translation file that matches the provided file_id when possible
+        if file_instance:
+            translation_file = TranslationFile.objects.filter(run=run_instance, original_file=file_instance).order_by("-created_at").first()
+        else:
+            translation_file = TranslationFile.objects.filter(run=run_instance).order_by("-created_at").first()
+
+        if not translation_file:
+            return Response({"error": "No translation file found for the provided details"}, status=404)
+
+        response_data = {
+            "translation_run_id": str(run_instance.id),
+            "original_file_id": str(translation_file.original_file.id),
+            "translated_file_id": str(translation_file.id),
+            "from_language": run_instance.from_language,
+            "to_language": run_instance.to_language,
+            "status": run_instance.status,
+            "error_message": run_instance.error_message if run_instance.status == "Failed" else None,
+            "project_id": translation_file.original_file.project_id,
+            "service_id": translation_file.original_file.service_id,
+            "client_name": run_instance.client_name,
+            "original_file_path": translation_file.original_file.filepath,
+            "translated_file_path": translation_file.translated_filepath,
+            "created_at": translation_file.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # ✅ Mirror OCR behavior: include ALL artifacts from the same run (except the original)
+        registered_outputs = list(
+            File.objects.filter(run=translation_file.original_file.run)
+            .exclude(id=translation_file.original_file.id)
+            .values("id", "filename", "filepath")
+        )
+        response_data["registered_outputs"] = registered_outputs
+
+        logger.info(f"[Translation Status] Responded for run_id={run_instance.id}, file_id={file_id or 'N/A'}")
+        return Response(response_data, status=200)
+'''
+
+
+'''
+class TranslationTaskStatusView(APIView):
+    """
+    Retrieve the status of a document translation using both `file_id` and `run_id`.
+    Ensures the exact file-translation pair is returned (no guesswork or `.first()`).
+    """
+
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Check the status of a specific document translation using both `file_id` and `run_id`.",
+        tags=["Translation Status"],
+        manual_parameters=[client_id_param, client_secret_param, file_id_param, run_id_param],
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        run_id = request.query_params.get("run_id")
+
+        # ✅ Validate required params
+        if not client_id or not client_secret or not file_id or not run_id:
+            return Response({"error": "Both `file_id` and `run_id` are required."}, status=400)
+
+        # ✅ Validate client identity
+        user = get_user_from_client_id(client_id)
+        if not user:
+            logger.error(f"❌ Invalid client ID: {client_id}")
+            return Response({"error": "Invalid client ID"}, status=403)
+
+        # ✅ Fetch file and run
+        file_instance = get_object_or_404(File, id=file_id)
+        run_instance = get_object_or_404(TranslationRun, id=run_id)
+
+        # ✅ Fetch the exact translation for this file and run
+        translation_file = TranslationFile.objects.filter(
+            original_file=file_instance,
+            run=run_instance
+        ).first()
+
+        if not translation_file:
+            return Response({"error": "No translation file found for the provided `file_id` and `run_id`."}, status=404)
+
+        # ✅ Construct response
+        response_data = {
+            "translation_run_id": str(run_instance.id),
+            "original_file_id": str(file_instance.id),
+            "translated_file_id": str(translation_file.id),
+            "from_language": run_instance.from_language,
+            "to_language": run_instance.to_language,
+            "status": run_instance.status,
+            "error_message": run_instance.error_message if run_instance.status == "Failed" else None,
+            "project_id": file_instance.project_id,
+            "service_id": file_instance.service_id,
+            "client_name": run_instance.client_name,
+            "original_file_path": file_instance.filepath,
+            "translated_file_path": translation_file.translated_filepath,
+            "created_at": translation_file.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # ✅ Pull other translated output files registered for the same original run
+        registered_outputs = list(
+            File.objects.filter(run=file_instance.run)
+            .exclude(id=file_instance.id)
+            .filter(filepath__icontains=f"/translations/{run_instance.to_language}/")
+            .values("id", "filename", "filepath")
+        )
+
+        response_data["registered_outputs"] = registered_outputs
+
+        logger.info(f"[Translation Status] Returned file_id={file_id} for run_id={run_id}")
+
+        return Response(response_data, status=200)
+'''
+
+
+'''
+class TranslationTaskStatusView(APIView):
+    """
+    Retrieve the status of a document translation using `file_id` or `run_id`.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Check the status of a document translation using `file_id` or `run_id`.",
+        tags=["Translation Status"],
+        manual_parameters=[client_id_param, client_secret_param, file_id_param, run_id_param],
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        file_id = request.query_params.get("file_id")
+        run_id = request.query_params.get("run_id")
+
+        if not client_id or not client_secret or (not file_id and not run_id):
+            return Response({"error": "Missing required parameters"}, status=400)
+
+        # ✅ Validate client ID and retrieve user
+        user = get_user_from_client_id(client_id)
+        if not user:
+            logger.error(f"❌ Invalid client ID: {client_id}")
+            return Response({"error": "Invalid client ID"}, status=403)
+
+        run_instance = None
+        file_instance = None
+
+        # ✅ Try to fetch by run_id first
+        if run_id:
+            run_instance = get_object_or_404(TranslationRun, id=run_id)
+
+        # ✅ Use file_id only if run_id not provided
+        if not run_instance and file_id:
+            file_instance = get_object_or_404(File, id=file_id)
+            translation_file = TranslationFile.objects.filter(original_file=file_instance).first()
+            if translation_file:
+                run_instance = translation_file.run
+
+        if not run_instance:
+            return Response({"error": "No translation process found for the provided file_id or run_id"}, status=404)
+
+        # ✅ Ensure file_instance is loaded if file_id was provided
+        if file_id and not file_instance:
+            file_instance = get_object_or_404(File, id=file_id)
+
+        # ✅ Fetch correct translation file
+        if file_instance:
+            translation_file = TranslationFile.objects.filter(run=run_instance, original_file=file_instance).first()
+        else:
+            translation_file = TranslationFile.objects.filter(run=run_instance).first()
+
+        if not translation_file:
+            return Response({"error": "No translation file found for the provided details"}, status=404)
+
+        # ✅ Prepare response payload
+        response_data = {
+            "translation_run_id": str(run_instance.id),
+            "original_file_id": str(translation_file.original_file.id),
+            "translated_file_id": str(translation_file.id),
+            "from_language": run_instance.from_language,
+            "to_language": run_instance.to_language,
+            "status": run_instance.status,
+            "error_message": run_instance.error_message if run_instance.status == "Failed" else None,
+            "project_id": translation_file.original_file.project_id,
+            "service_id": translation_file.original_file.service_id,
+            "client_name": run_instance.client_name,
+            "original_file_path": translation_file.original_file.filepath,
+            "translated_file_path": translation_file.translated_filepath,
+            "created_at": translation_file.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # ✅ Collect other translated outputs under same run (excluding original file)
+        registered_outputs = list(
+            File.objects.filter(run=translation_file.original_file.run)
+            .exclude(id=translation_file.original_file.id)
+            .filter(filepath__icontains=f"/translations/{run_instance.to_language}/")
+            .values("id", "filename", "filepath")
+        )
+        response_data["registered_outputs"] = registered_outputs
+
+        logger.info(f"[Translation Status] Responded for run_id={run_instance.id}, file_id={file_id or 'N/A'}")
+
+        return Response(response_data, status=200)
+'''
+
+
+
+'''
+# THIS IS THE WORKING ONE
+
 class TranslationTaskStatusView(APIView):
     """
     Retrieve the status of a document translation using `run_id` or `file_id`.
@@ -86,15 +451,24 @@ class TranslationTaskStatusView(APIView):
             except TranslationRun.DoesNotExist:
                 return Response({"error": "No translation process found for the provided run_id"}, status=404)
 
-        elif file_id:
+
+        if not run_instance and file_id:
             file_instance = get_object_or_404(File, id=file_id)
 
-            # ✅ Get the most recent translation run for this file
-            translation_file = TranslationFile.objects.filter(original_file=file_instance).order_by("-created_at").first()
+            # ✅ Find corresponding translation run using `file_id`
+            translation_file = TranslationFile.objects.filter(original_file=file_instance).first()
             if translation_file:
                 run_instance = translation_file.run
-            else:
-                return Response({"error": "No translation process found for the provided file_id"}, status=404)
+
+        #elif file_id:
+        #    file_instance = get_object_or_404(File, id=file_id)
+
+            # ✅ Get the most recent translation run for this file
+        #    translation_file = TranslationFile.objects.filter(original_file=file_instance).order_by("-created_at").first()
+        #    if translation_file:
+        #        run_instance = translation_file.run
+        #    else:
+        #        return Response({"error": "No translation process found for the provided file_id"}, status=404)
 
         if not run_instance:
             return Response({"error": "No translation process found for the provided parameters"}, status=404)
@@ -121,10 +495,37 @@ class TranslationTaskStatusView(APIView):
             "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
+        # ✅ Pull other translated output files registered for the same original run
+        registered_outputs = list(
+            File.objects.filter(run=file_instance.run)
+            .exclude(id=file_instance.id)
+            .filter(filepath__icontains=f"/translations/{run_instance.to_language}/")
+            .values("id", "filename", "filepath")
+        )
+
+        response_data["registered_outputs"] = registered_outputs
+
+        logger.info(f"[Translation Status] Returned file_id={file_id} for run_id={run_id}")
+
+
         return Response(response_data, status=200)
+
 '''
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+'''
 class TranslationTaskStatusView(APIView):
     """
     Retrieve the status of a document translation using `file_id` or `run_id`.
@@ -208,7 +609,7 @@ class TranslationTaskStatusView(APIView):
         response_data["registered_outputs"] = registered_outputs
 
         return Response(response_data, status=200)
-
+'''
 
 
 class TranslationFileDownloadView(APIView):

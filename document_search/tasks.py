@@ -1,6 +1,6 @@
 """
 document_search.tasks
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
 
 Celery tasks for background indexing & re-indexing.
 
@@ -26,19 +26,21 @@ from typing import Iterable, List, Tuple
 from celery import shared_task
 from django.db import transaction
 from django.core.cache import cache
-from document_search.models import SearchQueryLog 
+from django.db.models import Q
+from django.contrib.auth import get_user_model
+from datetime import datetime
 
 from core.models import File
-from document_search.models import VectorChunk
-from document_search.utils import compute_chunks
+from document_search.models import VectorChunk, SearchQueryLog
+from document_search.utils import (
+    compute_chunks,
+    preview_for_file,
+    _get_model,
+    embed_text,   # used in exec_search
+)
 
-from document_search.utils import preview_for_file
-from pymilvus import Collection
-from document_search.utils import _get_model
-
-from django.db.models import Q
-from datetime import datetime
-from document_operations.models import FileAccessEntry
+# Use the same access helper the views rely on
+from document_operations.utils import get_user_accessible_file_ids
 
 # ───────────────────────────── Config & constants ───────────────────────────
 try:
@@ -76,15 +78,14 @@ def _ensure_collection() -> Collection:
     if not utility.has_collection(COLLECTION_NAME):
         LOGGER.info("Creating Milvus collection '%s' …", COLLECTION_NAME)
 
-        # ── inside _ensure_collection() ──────────────────────────────────────────
         schema = CollectionSchema(
             [
-                FieldSchema("pk",        DataType.INT64, is_primary=True, auto_id=True),
-                FieldSchema("file_id",   DataType.INT64),
-                FieldSchema("chunk_hash", DataType.INT64),  # 👈 new field for dedup
-                FieldSchema("source",    DataType.VARCHAR, max_length=100),     # filename
-                FieldSchema("chunk_text", DataType.VARCHAR, max_length=2000),   # <- rename!
-                FieldSchema("vector",    DataType.FLOAT_VECTOR, dim=VECTOR_DIM),
+                FieldSchema("pk",         DataType.INT64, is_primary=True, auto_id=True),
+                FieldSchema("file_id",    DataType.INT64),
+                FieldSchema("chunk_hash", DataType.INT64),                    # for dedup
+                FieldSchema("source",     DataType.VARCHAR, max_length=100),  # filename
+                FieldSchema("chunk_text", DataType.VARCHAR, max_length=2000),
+                FieldSchema("vector",     DataType.FLOAT_VECTOR, dim=VECTOR_DIM),
             ],
             description="Chunked document embeddings (multi-tenant)",
         )
@@ -109,7 +110,7 @@ def _ensure_partition(coll: Collection, name: str) -> None:
 
 def _insert_batches(
     coll: Collection,
-    rows: List[Tuple[int, int, str, str, List[float]]],   # file_id, src, text, vec
+    rows: List[Tuple[int, int, str, str, List[float]]],   # (file_id, chunk_hash, source, chunk_text, vector)
     partition: str,
     batch: int = BATCH_SZ,
 ) -> None:
@@ -121,7 +122,7 @@ def _insert_batches(
                 [
                     [r[0] for r in slice_],  # file_id
                     [r[1] for r in slice_],  # chunk_hash
-                    [r[2] for r in slice_],  # source  (filename)
+                    [r[2] for r in slice_],  # source (filename)
                     [r[3] for r in slice_],  # chunk_text
                     [r[4] for r in slice_],  # vector
                 ],
@@ -159,81 +160,102 @@ def index_file(file_id: int, force: bool = False) -> dict:
     # 1️⃣ Extract ▸ Chunk ▸ Embed
     chunks, vectors = compute_chunks(file.filepath)
 
-    # NEW: concatenate all text to classify the entire file
+    # ── Lightweight whole-doc type classification (single embed) ─────────
     all_text = " ".join(chunks) if chunks else ""
     if all_text.strip():
         embed_model = _get_model()
         doc_embedding = embed_model.encode([all_text])[0]
 
-        # Simple label prototypes for semantic similarity
+        # Expanded label set (grouped; keep strings concise)
         labels = {
-                    "Contract": "This document is a legal contract between parties.",
-                    "Legal Agreement": "This document outlines legal obligations, rights, or terms between parties.",
-                    "Non-Disclosure Agreement": "This document restricts sharing confidential information.",
-                    "Service Level Agreement": "This document specifies performance standards and responsibilities between service providers and clients.",
-                    "Legal Complaint": "This document is a legal complaint filed in court.",
-                    "Court Order": "This document contains orders or judgments issued by a court.",
-                    "Will": "This document details the distribution of a person's estate after death.",
-                    "Policy Document": "This document describes official rules or guidelines.",
-                    "License": "This document grants legal permission for an activity or use.",
-                    "Patent": "This document protects intellectual property rights.",
-                    "Financial Report": "This document describes financial results, performance, or analysis.",
-                    "Balance Sheet": "This document summarizes assets, liabilities, and equity of an entity.",
-                    "Income Statement": "This document details revenue and expenses over a period.",
-                    "Invoice": "This document is an invoice for payment.",
-                    "Receipt": "This document acknowledges payment received.",
-                    "Tax Form": "This document relates to tax filing or reporting obligations.",
-                    "Bank Statement": "This document shows transactions in a bank account.",
-                    "Audit Report": "This document provides an independent financial audit opinion.",
-                    "Budget": "This document plans income and expenses for a period.",
-                    "Payroll Report": "This document summarizes employee wages and deductions.",
-                    "Medical Report": "This document contains medical or health records.",
-                    "Medical Prescription": "This document is a prescription for medication or treatment.",
-                    "Lab Result": "This document shows medical or laboratory test outcomes.",
-                    "Patient Summary": "This document summarizes patient medical history and conditions.",
-                    "Insurance Claim": "This document is submitted to request insurance reimbursement.",
-                    "Business Proposal": "This document proposes business plans, services, or products.",
-                    "Business Plan": "This document outlines business strategies, objectives, and forecasts.",
-                    "Meeting Minutes": "This document records discussion points and decisions from meetings.",
-                    "Memo": "This document is a formal written message for internal communication.",
-                    "Resume": "This document summarizes an individual's work experience and skills.",
-                    "Cover Letter": "This document accompanies a resume to express interest in a job.",
-                    "Letter": "This document is a formal or informal letter.",
-                    "Email": "This document is an electronic mail communication.",
-                    "Press Release": "This document announces news or events to the media.",
-                    "Brochure": "This document is a marketing or informational pamphlet.",
-                    "Advertisement": "This document promotes products, services, or events.",
-                    "User Manual": "This document provides instructions for using a product or system.",
-                    "Technical Specification": "This document describes detailed technical requirements and designs.",
-                    "Log File": "This document contains logs from systems, servers, or applications.",
-                    "Standard Operating Procedure": "This document describes step-by-step instructions for business processes.",
-                    "Research Paper": "This document presents academic research findings.",
-                    "Thesis": "This document is a lengthy academic dissertation.",
-                    "Lecture Notes": "This document contains notes from educational lectures.",
-                    "Patent Application": "This document is filed to seek intellectual property protection.",
-                    "Permit": "This document grants legal permission for specific activities.",
-                    "Certificate": "This document verifies a fact or achievement.",
-                    "Notice": "This document communicates official information or updates.",
-                    "Form": "This document contains fields for data collection or submission.",
-                    "Checklist": "This document lists tasks or items to complete or verify.",
-                    "Schedule": "This document details timelines or time-based plans.",
-                    "Statement of Work": "This document defines project deliverables and responsibilities.",
-                    "Bill of Lading": "This document acknowledges receipt of goods for shipment.",
-                    "Purchase Order": "This document authorizes the purchase of goods or services.",
-                    "Agenda": "This document lists topics to be discussed in a meeting.",
-                    "Transcript": "This document records spoken words or conversations.",
-                    "Policy Brief": "This document provides summaries of policy issues and recommendations.",
-                    "Guideline": "This document offers recommendations for best practices.",
-                    "FAQ": "This document lists frequently asked questions and answers.",
-                    "Summary": "This document provides a condensed version of longer content.",
-                    "Newsletter": "This document provides regular updates or news to a group of readers.",
-                    "White Paper": "This document provides authoritative information or solutions on a topic.",
-                    "Case Study": "This document analyzes a specific example or scenario in detail.",
-                    "Project Report": "This document summarizes progress, findings, or results of a project.",
-                    "Privacy Policy": "This document explains how personal data is collected and used.",
-                    "Terms and Conditions": "This document defines rules and legal agreements for using products or services.",
-                    "Unclassified": "This document does not fit into any known category or cannot be determined."
-                }
+            # Legal & Compliance
+            "Contract": "Legal contract between parties with terms and signatures.",
+            "Legal Agreement": "Legal obligations, rights, or terms between parties.",
+            "NDA": "Non-disclosure agreement restricting sharing confidential information.",
+            "SLA": "Service level agreement with performance standards and responsibilities.",
+            "Court Order": "Orders or judgments issued by a court.",
+            "Legal Complaint": "Formal legal complaint filed in court.",
+            "Terms and Conditions": "Rules and legal agreements for using products or services.",
+            "Privacy Policy": "Explains how personal data is collected and used.",
+            "Policy Document": "Official rules or guidelines that must be followed.",
+            "Permit": "Legal permission granted for specific activities.",
+            "License": "Authorization document granting legal permission.",
+            "Certificate": "Official document verifying a fact or achievement.",
+            "Will": "Estate distribution instructions after death.",
+            # Finance & Accounting
+            "Financial Report": "Financial results, performance, or analysis.",
+            "Income Statement": "Revenue and expenses over a period.",
+            "Balance Sheet": "Assets, liabilities, and equity snapshot.",
+            "Cash Flow Statement": "Cash inflows and outflows over a period.",
+            "Budget": "Planned income and expenses for a period.",
+            "Invoice": "Bill for payment with items and totals.",
+            "Receipt": "Acknowledgment of payment received.",
+            "Bank Statement": "Account transactions and balances.",
+            "Audit Report": "Independent financial audit opinion.",
+            "Payroll Report": "Employee wages and deductions summary.",
+            "Purchase Order": "Authorization to buy goods or services.",
+            "Bill of Lading": "Receipt of goods for shipment.",
+            "Statement of Work": "Project deliverables, scope, and responsibilities.",
+            # Business & Operations
+            "Business Proposal": "Proposes plans, services, or products to a client.",
+            "Business Plan": "Business strategies, objectives, and forecasts.",
+            "RFP Response": "Response to a request for proposal.",
+            "SOP": "Standard operating procedure with step-by-step instructions.",
+            "Project Report": "Project progress, findings, or results.",
+            "Meeting Minutes": "Discussion points and decisions from meetings.",
+            "Memo": "Formal internal communication message.",
+            "Agenda": "List of topics to be discussed in a meeting.",
+            "Checklist": "Tasks or items to complete or verify.",
+            "Schedule": "Timeline or plan with dates and times.",
+            "Log File": "System, server, or application log entries.",
+            "User Manual": "Instructions for using a product or system.",
+            "Technical Specification": "Detailed technical requirements and designs.",
+            "Runbook": "Operational procedures for incidents or maintenance.",
+            "Architecture Diagram": "System architecture documentation overview.",
+            # Sales & Marketing
+            "Press Release": "Public announcement of news or events.",
+            "Brochure": "Marketing or informational pamphlet.",
+            "Advertisement": "Promotes products, services, or events.",
+            "Price List": "Catalog of products or services with prices.",
+            "Statement of Capabilities": "Company capabilities and differentiators.",
+            # HR & Talent
+            "Resume": "Work experience and skills summary.",
+            "Cover Letter": "Letter expressing job interest accompanying a resume.",
+            "Offer Letter": "Employment offer details and terms.",
+            "Job Description": "Role responsibilities and required qualifications.",
+            "Performance Review": "Employee performance evaluation.",
+            # Medical & Insurance
+            "Medical Report": "Medical or health record details and assessments.",
+            "Prescription": "Medication or treatment directive by a clinician.",
+            "Lab Result": "Medical or laboratory test outcomes.",
+            "Patient Summary": "Patient medical history and conditions.",
+            "Insurance Claim": "Request to insurer for reimbursement.",
+            "EOB": "Explanation of benefits document from insurer.",
+            # Research & Education
+            "Research Paper": "Academic research findings and analysis.",
+            "White Paper": "Authoritative information or solution on a topic.",
+            "Case Study": "Detailed analysis of a specific example.",
+            "Thesis": "Lengthy academic dissertation.",
+            "Lecture Notes": "Notes from educational lectures.",
+            "Transcript": "Verbatim record of spoken words or courses.",
+            "Dataset Description": "Metadata and description for datasets.",
+            # IT & Security
+            "Security Policy": "Information security rules and standards.",
+            "Vulnerability Report": "Security weaknesses and remediation.",
+            "Penetration Test Report": "Results of simulated attacks and fixes.",
+            "Incident Report": "Security incident details and timeline.",
+            "Change Request": "Proposed system change and approvals.",
+            "Release Notes": "Software release changes and fixes.",
+            # Government & Public
+            "Notice": "Official information or updates to the public.",
+            "Regulatory Filing": "Submission to a regulator or exchange.",
+            # Misc
+            "FAQ": "Frequently asked questions and answers.",
+            "Summary": "Condensed version of longer content.",
+            "Newsletter": "Periodic news or updates for readers.",
+            "Unclassified": "Document type cannot be determined.",
+        }
+
         label_texts = list(labels.values())
         label_names = list(labels.keys())
         label_embeddings = embed_model.encode(label_texts)
@@ -245,12 +267,11 @@ def index_file(file_id: int, force: bool = False) -> dict:
 
         file.document_type = best_label
         file.save(update_fields=["document_type"])
-
-        LOGGER.info(f"→ File {file_id} classified as: {best_label}")
+        LOGGER.info("→ File %s classified as: %s", file_id, best_label)
     else:
         file.document_type = "Unknown"
         file.save(update_fields=["document_type"])
-        LOGGER.info(f"→ File {file_id} classified as: Unknown")
+        LOGGER.info("→ File %s classified as: Unknown", file_id)
 
     if not chunks:
         LOGGER.warning("No extractable text for %s.", file.filename)
@@ -274,12 +295,11 @@ def index_file(file_id: int, force: bool = False) -> dict:
             batch_size=500,
         )
 
-    # 3️⃣ Insert into Milvus
+    # 3️⃣ Insert into Milvus (partitioned by user)
     coll = _ensure_collection()
     part = _partition_name(file.user_id)
     _ensure_partition(coll, part)
     coll.load(partition_names=[part])
-
 
     seen = set()
     rows = []
@@ -295,8 +315,7 @@ def index_file(file_id: int, force: bool = False) -> dict:
     coll.flush()
     coll.release()
 
-    LOGGER.info("✅ Indexed %s chunks for file %s → partition %s",
-                len(chunks), file_id, part)
+    LOGGER.info("✅ Indexed %s chunks for file %s → partition %s", len(chunks), file_id, part)
     return {"status": "ok", "chunks": len(chunks)}
 
 
@@ -319,14 +338,13 @@ def bulk_reindex() -> dict:
     return {"queued": count}
 
 
-
 @shared_task(name="document_search.exec_search")
 def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> list[dict]:
     """
     Heavy-weight search:
         • embed query
         • Milvus ANN search (user partition)
-        • return [{file_id, chunk_text, score}, …]
+        • return [{file_id, chunk_text, score, preview}, …]
     """
     cache_key = f"search:{user_id}:{file_id}:{top_k}:{hash(query)}"
     cached = cache.get(cache_key)
@@ -334,15 +352,13 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
         return cached  # ⏩ hot path
 
     # ── embed ───────────────────────────────────────────────────────────
-    from document_search.utils import embed_text
     q_vec = embed_text(query)
 
     # ── Milvus ──────────────────────────────────────────────────────────
     coll = _ensure_collection()
     part = _partition_name(user_id)
-
-    _ensure_partition(coll, part)           # ✅ add this line
-    coll.load(partition_names=[part])       # avoids load failure
+    _ensure_partition(coll, part)
+    coll.load(partition_names=[part])
 
     if isinstance(file_id, list):
         expr = f"file_id in {tuple(file_id)}"
@@ -352,7 +368,7 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
         expr = ""
 
     import time
-    t0 = time.time()                                        # ⏱️ start
+    t0 = time.time()
 
     res = coll.search(
         data=[q_vec],
@@ -362,19 +378,19 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
         expr=expr,
         output_fields=["file_id", "chunk_text"],
     )
-    duration = int((time.time() - t0) * 1000)               # ⏱️ ms
+    duration = int((time.time() - t0) * 1000)
     coll.release()
 
-    seen = set()
+    seen_chunks = set()
     hits = []
     for hit in res[0]:
         fid   = int(hit.entity.get("file_id"))
         ctext = hit.entity.get("chunk_text", "")
         preview = preview_for_file(fid)
         chash = hash(ctext)
-        if chash in seen:
+        if chash in seen_chunks:
             continue
-        seen.add(chash)
+        seen_chunks.add(chash)
 
         snippet = (ctext[:297] + "…") if len(ctext) > 300 else ctext
         snippet = snippet.replace("\n", "  \n")  # Markdown line breaks
@@ -405,25 +421,31 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
 
 
 @shared_task(name="document_search.semantic_search_task")
-def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | None, filters: dict) -> list[dict]:
+def semantic_search_task(
+    user_id: int,
+    query: str,
+    top_k: int,
+    file_id: int | None,
+    filters: dict | None,
+) -> list[dict]:
     """
     Perform semantic search asynchronously.
+    NOTE: View must call with **five** args (no extra list of accessible ids).
     """
     try:
+        filters = filters or {}
+
         # Embed query
         embed_model = _get_model()
         query_vector = embed_model.encode([query])[0]
 
-        # ✅ FIX: connect and ensure collection
+        # Milvus: ensure collection & user's partition
         collection = _ensure_collection()
-        collection.load()
+        part_name = _partition_name(user_id)
+        _ensure_partition(collection, part_name)
+        collection.load(partition_names=[part_name])
 
-        # Optionally load only user's partition
-        partition = _partition_name(user_id)
-        _ensure_partition(collection, partition)
-        collection.load(partition_names=[partition])
-
-        # Build filter expression
+        # Optional file constraint for Milvus ANN
         if isinstance(file_id, list):
             expr = f"file_id in {tuple(file_id)}"
         elif file_id:
@@ -440,44 +462,28 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
             output_fields=["file_id", "chunk_text"],
         )
 
-        file_ids = list({hit.entity.get("file_id") for hit in results[0]})
+        # Vector-hit file ids
+        vector_file_ids = list({int(hit.entity.get("file_id")) for hit in results[0]})
 
-        # Build Postgres filters
-        # q = Q(user_id=user_id)
+        # 🔐 Compute accessible file IDs the same way as views
+        User = get_user_model()
+        user = User.objects.filter(pk=user_id).first()
+        if user:
+            accessible_file_ids = set(get_user_accessible_file_ids(user))
+        else:
+            # Fallback to ownership-only if user lookup fails
+            accessible_file_ids = set(File.objects.filter(user_id=user_id).values_list("id", flat=True))
 
-        # Get files owned by the user or shared with them
+        if vector_file_ids:
+            allowed_ids = set(vector_file_ids) & set(accessible_file_ids)
+        else:
+            return []
 
-        # 🔐 Get accessible file IDs (owned or shared)
-        accessible_file_ids = list(
-            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
-        ) + list(
-            FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
-        )
+        if not allowed_ids:
+            return []
 
-        q = Q(id__in=accessible_file_ids)  # ✅ Base filter
-
-        # Optional: narrow to specific file_id(s)
-        if file_ids:
-            q &= Q(id__in=file_ids)  # intersection
-
-        # Apply additional filters
-        if filters.get("created_from"):
-            q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
-        if filters.get("created_to"):
-            q &= Q(created_at__lte=datetime.fromisoformat(filters["created_to"]))
-        if filters.get("author"):
-            q &= Q(metadata__author__icontains=filters["author"])
-        if filters.get("project_id"):
-            q &= Q(project_id=filters["project_id"])
-        if filters.get("service_id"):
-            q &= Q(service_id=filters["service_id"])
-
-        '''
-        accessible_file_ids = list(
-            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
-        ) + list(
-            FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
-        )
+        # Build additional filters
+        q = Q(id__in=allowed_ids)
 
         if filters.get("created_from"):
             q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
@@ -489,41 +495,43 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
             q &= Q(project_id=filters["project_id"])
         if filters.get("service_id"):
             q &= Q(service_id=filters["service_id"])
-        if file_ids:
-            q &= Q(id__in=file_ids)
-            q = Q(id__in=accessible_file_ids)
-        '''
 
         files = File.objects.filter(q).prefetch_related("metadata")
 
-        results_out = []
-        for file in files:
-            metadata = file.metadata.first()
-            results_out.append({
-                "file_id": file.id,
-                "filename": file.filename,
-                "file_size": file.file_size,
-                "file_type": file.file_type,
-                "document_type": file.document_type,
-                "created_at": file.created_at,
-                "author": metadata.author if metadata else None,
-                "keywords": metadata.keywords if metadata else None,
-                "chunk_text": next(
-                    (hit.entity.get("chunk_text") for hit in results[0] if hit.entity.get("file_id") == file.id),
-                    ""
-                ),
-                "score": next(
-                    (hit.score for hit in results[0] if hit.entity.get("file_id") == file.id),
-                    None
-                )
+        # Best (highest score) hit per file from vector results
+        best_per_file: dict[int, tuple[str, float]] = {}
+        for hit in results[0]:
+            fid = int(hit.entity.get("file_id"))
+            if fid not in allowed_ids:
+                continue
+            score = float(hit.score)
+            chunk = hit.entity.get("chunk_text", "")
+            prev = best_per_file.get(fid)
+            if (not prev) or score > prev[1]:
+                best_per_file[fid] = (chunk, score)
+
+        out = []
+        for f in files:
+            md = f.metadata.first()
+            chunk_text, score = best_per_file.get(f.id, ("", None))
+            out.append({
+                "file_id": f.id,
+                "filename": f.filename,
+                "file_size": f.file_size,
+                "file_type": f.file_type,
+                "document_type": getattr(f, "document_type", None),
+                "created_at": f.created_at,
+                "author": getattr(md, "author", None) if md else None,
+                "keywords": getattr(md, "keywords", None) if md else None,
+                "chunk_text": chunk_text,
+                "score": score,
             })
 
-        return results_out
+        return out
 
     except Exception as e:
-        LOGGER.error(f"Error in semantic search task: {str(e)}")
+        LOGGER.error("Error in semantic search task: %s", str(e))
         return {"error": str(e)}
-
 
 
 # ───────────── Optional alias for semantic clarity ─────────────

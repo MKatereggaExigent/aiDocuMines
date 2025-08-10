@@ -123,7 +123,9 @@ class SubmitTranslationAPIView(APIView):
         )
 
         # ✅ Start translation asynchronously
-        translate_document_task.delay(file_id, from_lang, to_lang)
+        # translate_document_task.delay(file_id, from_lang, to_lang)
+        # translate_document_task.delay(file_id, str(run.id), from_language, to_language)
+        translate_document_task.delay(file_id, str(translation_run.id), from_lang, to_lang)
 
         response_data = {
             "translation_run_id": str(translation_run.id),
