@@ -40,8 +40,8 @@ INSTALLED_APPS = [
     "django_celery_beat",
     "oauth2_provider",
     "corsheaders",
-    #"core",
     "core.apps.CoreConfig",
+    "insights_hub",
     "file_monitor",
     "document_ocr",
     "document_anonymizer",
@@ -55,7 +55,8 @@ INSTALLED_APPS = [
     "document_structures",
     "file_elasticsearch",
     "platform_data_insights",
-    "integrations"
+    "integrations",
+    "cost_centre",
 ]
 
 MIDDLEWARE = [
@@ -91,6 +92,20 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "aiDocuMines.wsgi.application"
+
+ONLYOFFICE = {
+    "DOC_SERVER_URL": os.getenv("ONLYOFFICE_URL", "https://onlyoffice.aidocumines.com").rstrip("/"),
+    "DOC_SERVER_PUBLIC_URL": os.getenv("ONLYOFFICE_PUBLIC_URL", "https://onlyoffice.aidocumines.com").rstrip("/"),
+    "JWT_SECRET": os.getenv("ONLYOFFICE_JWT_SECRET", ""),
+    "DOWNLOAD_TTL": int(os.getenv("ONLYOFFICE_DOWNLOAD_TTL", "300")),
+    "HTTP_CONNECT_TIMEOUT": int(os.getenv("ONLYOFFICE_HTTP_CONNECT_TIMEOUT", "5")),
+    "HTTP_READ_TIMEOUT": int(os.getenv("ONLYOFFICE_HTTP_READ_TIMEOUT", "240")),
+}
+
+
+# Internal API base used in signed URLs that DS calls back to
+API_BASE_URL = os.getenv("API_BASE_URL", "http://aidocumines_web").rstrip("/")
+
 
 
 OAUTH2_PROVIDER_APPLICATION_MODEL = 'oauth2_provider.Application'

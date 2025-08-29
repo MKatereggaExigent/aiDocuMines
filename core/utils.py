@@ -1,37 +1,32 @@
+# core/utils.py
 import os
+import re
+import csv
 import logging
 import mimetypes
-from pathlib import Path
-from django.conf import settings
+import zipfile
 import hashlib
-from PyPDF2 import PdfReader
+import subprocess
+from pathlib import Path
+from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
+
+from django.conf import settings
+from django.utils import timezone
+from django.contrib.contenttypes.models import ContentType
+
+# Third-party libs
 from docx import Document
-
 import PyPDF2
-
 import fitz  # PyMuPDF
 from pdfminer.pdfparser import PDFParser
 from pdfminer.pdfdocument import PDFDocument
-import subprocess
-from datetime import datetime, timedelta
-
-import dateutil.parser
-from dateutil import parser as dateutil_parser
-
-import zipfile
-import xml.etree.ElementTree as ET
-
 from unidecode import unidecode
-import re
+from tika import parser as tika_parser  # keep as used in extract_document_text
+import pandas as pd
 
-import hashlib
 from core.models import File, Storage
 from document_operations.models import Folder, FileFolderLink
-from django.utils import timezone
-
-from django.contrib.contenttypes.models import ContentType
-import pandas as pd
-from tika import parser
 from document_operations.utils import register_file_folder_link
 
 logger = logging.getLogger(__name__)
@@ -58,66 +53,45 @@ MAX_FILE_SIZE_MB = 100
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 
-
 def str_to_bool(value):
     """Converts various truthy/falsy string values to boolean."""
     if isinstance(value, bool):
         return value
     if value is None:
         return False
-    return str(value).lower() in ["true", "yes", "1"]
+    return str(value).strip().lower() in {"true", "yes", "1", "y", "t"}
 
 
-def sanitize_filename(filename):
-    """Sanitizes the filename by replacing special characters.
-
-    Args:
-        filename (str): The original filename.
-
-    Returns:
-        str: The sanitized filename.
-    """
-    # Replace German special characters with normal letters
+def sanitize_filename(filename: str) -> str:
+    """Sanitize the filename by removing/normalizing special characters."""
+    # Replace German/special characters with ASCII
     filename = unidecode(filename)
-
-    # Replace all spaces with underscores
+    # Replace spaces
     filename = filename.replace(" ", "_")
-
-    # Remove all special characters except hyphens and underscores
+    # Keep only safe chars
     filename = re.sub(r"[^a-zA-Z0-9\-_.]", "", filename)
-
     return filename
 
 
-def rename_files_in_folder(folder_path):
-    """Renames all files in a folder and its subfolders by sanitizing filenames.
-
-    Args:
-        folder_path (str): The path of the folder.
-    """
-    for root, dirs, files in os.walk(folder_path):
+def rename_files_in_folder(folder_path: str) -> None:
+    """Renames all files in a folder and subfolders by sanitizing filenames."""
+    for root, _, files in os.walk(folder_path):
         for filename in files:
-            # Full path of the file
-            full_file_path = os.path.join(root, filename)
-
-            # Sanitize the filename
-            sanitized_name = sanitize_filename(filename)
-
-            # Full path of the new file name
-            full_sanitized_path = os.path.join(root, sanitized_name)
-
-            # Rename the file
-            os.rename(full_file_path, full_sanitized_path)
-            print(f"Renamed {full_file_path} to {full_sanitized_path}")
+            src = os.path.join(root, filename)
+            sanitized = sanitize_filename(filename)
+            dst = os.path.join(root, sanitized)
+            if src != dst:
+                os.rename(src, dst)
+                logger.info("Renamed %s -> %s", src, dst)
 
 
-# def save_uploaded_file(uploaded_file, storage_path: str):
 def save_uploaded_file(uploaded_file, storage_path: str, custom_filename=None):
     """
     Saves uploaded files synchronously.
 
     :param uploaded_file: File object from Django (InMemoryUploadedFile or TemporaryUploadedFile)
     :param storage_path: System location of uploaded files
+    :param custom_filename: Optional new filename (sanitized automatically)
     :return: File metadata dictionary
     """
     # ✅ Validate file size
@@ -125,32 +99,32 @@ def save_uploaded_file(uploaded_file, storage_path: str, custom_filename=None):
         raise ValueError(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit.")
 
     # ✅ Validate file type
-    file_name = uploaded_file.name  
+    file_name = custom_filename or uploaded_file.name
+    file_name = sanitize_filename(file_name)
     file_ext = file_name.split(".")[-1].lower()
     mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
 
     if file_ext not in ALLOWED_FILE_TYPES:
         raise ValueError(f"Unsupported file type: {file_ext}")
 
+    os.makedirs(storage_path, exist_ok=True)
     file_path = os.path.join(storage_path, file_name)
 
     # ✅ Save file in chunks
     chunk_size = 64 * 1024  # 64KB chunks
     with open(file_path, "wb") as out_file:
-        while chunk := uploaded_file.read(chunk_size):
+        while True:
+            chunk = uploaded_file.read(chunk_size)
+            if not chunk:
+                break
             out_file.write(chunk)
-            
-    # Renmae the files in the storage_path to be sanitized
+
+    # Ensure all names in folder are sanitized (idempotent)
     rename_files_in_folder(storage_path)
-    
-    # Update the file_path and file_name after sanitization
-    file_path = os.path.join(storage_path, sanitize_filename(file_name))
-    file_name = sanitize_filename(file_name)
-            
+
     # ✅ Calculate file hash
     file_hash = calculate_md5(file_path)
-
-    logger.info(f"✅ File {file_name} saved successfully at {file_path}")
+    logger.info("✅ File %s saved at %s", file_name, file_path)
 
     return {
         "file_path": file_path,
@@ -158,149 +132,204 @@ def save_uploaded_file(uploaded_file, storage_path: str, custom_filename=None):
         "file_size": uploaded_file.size,
         "file_type": mime_type,
         "md5_hash": file_hash,
-        "upload_timestamp": datetime.utcnow().isoformat()
+        "upload_timestamp": datetime.utcnow().isoformat(),
     }
 
 
-def calculate_md5(file_path: str):
-    """Computes MD5 hash of a file."""
-    hash_md5 = hashlib.md5()
+def calculate_md5(file_path: str) -> str:
+    """Compute MD5 hash of a file."""
+    md5 = hashlib.md5()
     with open(file_path, "rb") as f:
-        while chunk := f.read(4096):  # Read in 4KB chunks
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            md5.update(chunk)
+    return md5.hexdigest()
 
 
-def convert_pdf_date(raw_date):
+def convert_pdf_date(raw_date: str | None):
     """
-    Converts extracted PDF dates to ISO 8601 format (YYYY-MM-DD HH:MM:SS).
+    Converts extracted PDF (or ISO-ish) dates to ISO 8601 (YYYY-MM-DDTHH:MM:SS).
     Handles:
       - PDF format: "D:20250302161655+00'00'"
-      - Human-readable format: "Sun Mar  2 10:16:55 2025 CST"
+      - Generic/ISO-ish strings (best-effort)
     """
     if not raw_date or not isinstance(raw_date, str):
         return None
 
-    # ✅ Handle PDF Standard Date Format: "D:20250302161655+00'00'"
-    pdf_date_match = re.match(r"D:(\d{14})([+-]\d{2})'(\d{2})'", raw_date)
-    if pdf_date_match:
-        date_part = pdf_date_match.group(1)  # Extract "20250302161655"
-        tz_offset_hours = int(pdf_date_match.group(2))  # Extract "+00"
-        tz_offset_minutes = int(pdf_date_match.group(3))  # Extract "00"
+    # ✅ Handle PDF Standard Date Format
+    m = re.match(r"D:(\d{14})([+-]\d{2})'(\d{2})'", raw_date)
+    if m:
+        date_part = m.group(1)  # "YYYYMMDDHHMMSS"
+        tz_h = int(m.group(2))
+        tz_m = int(m.group(3))
+        try:
+            parsed = datetime.strptime(date_part, "%Y%m%d%H%M%S")
+            tz = timedelta(hours=tz_h, minutes=tz_m)
+            parsed = parsed - tz
+            return parsed.isoformat()
+        except Exception:
+            return None
 
-        # Convert to datetime object
-        parsed_date = datetime.strptime(date_part, "%Y%m%d%H%M%S")
-
-        # Apply timezone offset
-        tz_offset = timedelta(hours=tz_offset_hours, minutes=tz_offset_minutes)
-        parsed_date = parsed_date - tz_offset  # Adjust time based on timezone offset
-
-        print(f"✅ PDF Parsed Date: {parsed_date.isoformat()}")
-        return parsed_date.isoformat()
-
-    # ✅ Handle Human-Readable Date: "Sun Mar  2 10:16:55 2025 CST"
+    # ✅ Fallback: try parsing as generic date
     try:
-        parsed_date = dateutil.parser.parse(raw_date)
-        print(f"✅ Human-Readable Parsed Date: {parsed_date.isoformat()}")
-        return parsed_date.isoformat()
-    except Exception as e:
-        print(f"❌ Error parsing date '{raw_date}': {e}")
+        # Avoid pulling in dateutil parser globally again
+        from dateutil import parser as dateutil_parser  # local import
+        return dateutil_parser.parse(raw_date).isoformat()
+    except Exception:
         return None
 
-def extract_pdf_metadata(pdf_path):
+
+def extract_pdf_metadata(pdf_path: str) -> dict:
     """
-    Extracts extensive metadata from a PDF file using multiple libraries.
-    
-    :param pdf_path: Path to the PDF document.
-    :return: Dictionary containing cleaned metadata.
+    Extract extensive metadata from a PDF using multiple libraries.
     """
     if not os.path.exists(pdf_path):
         return {"Error": "File not found"}
 
-    metadata = {}
+    metadata: dict[str, object] = {}
 
-    # ✅ Step 1: Extract metadata using PyMuPDF (fitz)
-    doc = fitz.open(pdf_path)
-    raw_metadata = doc.metadata or {}  # Add standard metadata fields
-    metadata.update({k.lower(): v for k, v in raw_metadata.items()})  # Normalize keys
-    
-    # ✅ Fix date fields to ISO 8601
-    metadata["creationdate"] = convert_pdf_date(metadata.get("creationdate"))
-    metadata["moddate"] = convert_pdf_date(metadata.get("moddate"))
-
-    metadata["file_size"] = os.path.getsize(pdf_path)  # File size in bytes
-    metadata["page_count"] = len(doc)  # Number of pages
-
-    metadata["is_encrypted"] = str_to_bool(raw_metadata.get("is_encrypted", "no"))
-    metadata["encrypted"] = str_to_bool(raw_metadata.get("encrypted", "no"))
-    metadata["optimized"] = str_to_bool(raw_metadata.get("optimized", "no"))
-
-    # ✅ Handle PDF version safely
-    metadata["pdf_version"] = raw_metadata.get("format", "Unknown PDF Version")
-
-    # ✅ Step 2: Extract font information
-    fonts = set()
-    for page in doc:
-        for font in page.get_fonts(full=True):
-            fonts.add(font[3])  # Extracting font names
-    metadata["fonts"] = list(fonts) if fonts else "No font information available"
-
-    # ✅ Step 3: Extract additional metadata using PyPDF2
-    with open(pdf_path, "rb") as f:
-        reader = PyPDF2.PdfReader(f)
-        doc_info = reader.metadata
-        metadata.update({k.lower(): v for k, v in (doc_info or {}).items()})  # Normalize keys
- 
-        # 🔐 Normalize all known boolean fields to Python bools
-        for key in [
-            "is_encrypted", "encrypted", "optimized", "tagged",
-            "userproperties", "suspects", "custom_metadata"
-        ]:
-            if key in metadata:
-                metadata[key] = str_to_bool(metadata[key])
-
-        metadata["page_rotation"] = [page.rotation for page in reader.pages]  # Page rotation angles
-
-    # ✅ Step 4: Extract document metadata using pdfminer.six
-    with open(pdf_path, "rb") as f:
-        parser = PDFParser(f)
-        doc = PDFDocument(parser)
-        pdfminer_info = {k: v.decode("utf-8", "ignore") if isinstance(v, bytes) else v for k, v in doc.info[0].items()}
-        metadata.update({k.lower(): v for k, v in pdfminer_info.items()})  # Normalize keys
-        
-        # 🔐 Normalize all known boolean fields to Python bools
-        for key in [
-            "is_encrypted", "encrypted", "optimized", "tagged",
-            "userproperties", "suspects", "custom_metadata"
-        ]:
-            if key in metadata:
-                metadata[key] = str_to_bool(metadata[key])
-
-    # ✅ Step 5: Extract even more details using pdfinfo (Poppler)
+    # ✅ PyMuPDF (fitz)
     try:
-        pdfinfo_output = subprocess.run(
-            ["pdfinfo", pdf_path], capture_output=True, text=True
-        )
-        pdfinfo_data = pdfinfo_output.stdout.strip().split("\n")
-        for line in pdfinfo_data:
-            if ":" in line:
-                key, value = line.split(":", 1)
-                metadata[key.strip().lower().replace(" ", "_")] = value.strip()
-    except Exception as e:
-        metadata["pdfinfo_error"] = str(e)
+        doc = fitz.open(pdf_path)
+        raw = doc.metadata or {}
+        metadata.update({k.lower(): v for k, v in raw.items()})
+        metadata["file_size"] = os.path.getsize(pdf_path)
+        metadata["page_count"] = len(doc)
+        metadata["creationdate"] = convert_pdf_date(metadata.get("creationdate"))
+        metadata["moddate"] = convert_pdf_date(metadata.get("moddate"))
+        metadata["is_encrypted"] = str_to_bool(raw.get("is_encrypted", "no"))
+        metadata["encrypted"] = str_to_bool(raw.get("encrypted", "no"))
+        metadata["optimized"] = str_to_bool(raw.get("optimized", "no"))
+        metadata["pdf_version"] = raw.get("format", "Unknown PDF Version")
 
-    # ✅ Step 6: Convert Date Fields to Readable Format
-    # for date_key in ["creation_date", "moddate"]:
-        # if date_key in metadata and metadata[date_key]:
-            # try:
-                # metadata[date_key] = datetime.strptime(metadata[date_key][2:16], "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
-            # except ValueError:
-                # pass  # Keep as is if format is unrecognized
+        # Fonts
+        fonts = set()
+        for page in doc:
+            for font in page.get_fonts(full=True):
+                # tuple layout may vary; index 3 is usually the font name
+                if len(font) > 3 and font[3]:
+                    fonts.add(font[3])
+        metadata["fonts"] = sorted(fonts) if fonts else []
+    except Exception as e:
+        metadata.setdefault("errors", []).append(f"PyMuPDF error: {e}")
+
+    # ✅ PyPDF2
+    try:
+        with open(pdf_path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            doc_info = reader.metadata or {}
+            metadata.update({k.lower(): v for k, v in doc_info.items()})
+            try:
+                metadata["page_rotation"] = [page.rotation for page in reader.pages]
+            except Exception:
+                pass
+
+            # normalize common booleans
+            for key in [
+                "is_encrypted", "encrypted", "optimized", "tagged",
+                "userproperties", "suspects", "custom_metadata"
+            ]:
+                if key in metadata:
+                    metadata[key] = str_to_bool(metadata[key])
+    except Exception as e:
+        metadata.setdefault("errors", []).append(f"PyPDF2 error: {e}")
+
+    # ✅ pdfminer.six
+    try:
+        with open(pdf_path, "rb") as f:
+            p = PDFParser(f)
+            d = PDFDocument(p)
+            if getattr(d, "info", None):
+                # d.info is typically a list of dictionaries
+                info0 = d.info[0] if d.info else {}
+                info_norm = {
+                    (k.decode("utf-8", "ignore") if isinstance(k, bytes) else str(k)).lower():
+                    (v.decode("utf-8", "ignore") if isinstance(v, bytes) else v)
+                    for k, v in info0.items()
+                }
+                metadata.update(info_norm)
+                for key in [
+                    "is_encrypted", "encrypted", "optimized", "tagged",
+                    "userproperties", "suspects", "custom_metadata"
+                ]:
+                    if key in metadata:
+                        metadata[key] = str_to_bool(metadata[key])
+    except Exception as e:
+        metadata.setdefault("errors", []).append(f"pdfminer error: {e}")
+
+    # ✅ pdfinfo (Poppler)
+    try:
+        out = subprocess.run(["pdfinfo", pdf_path], capture_output=True, text=True)
+        lines = out.stdout.strip().splitlines()
+        for line in lines:
+            if ":" in line:
+                k, v = line.split(":", 1)
+                k = k.strip().lower().replace(" ", "_")
+                metadata[k] = v.strip()
+    except Exception as e:
+        metadata.setdefault("errors", []).append(f"pdfinfo error: {e}")
 
     return metadata
 
 
-def extract_docx_metadata(docx_path):
+def _read_docx_core_props(docx_zip: zipfile.ZipFile) -> dict:
+    """Read docProps/core.xml; return normalized fields."""
+    core = {}
+    if "docProps/core.xml" not in docx_zip.namelist():
+        return core
+    root = ET.fromstring(docx_zip.read("docProps/core.xml").decode("utf-8"))
+    ns = {
+        "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
+        "dc": "http://purl.org/dc/elements/1.1/",
+        "dcterms": "http://purl.org/dc/terms/",
+    }
+    core["title"] = root.findtext("dc:title", default=None, namespaces=ns)
+    core["creator"] = root.findtext("dc:creator", default=None, namespaces=ns)
+    core["author"] = core.get("creator")  # mirror for convenience
+    core["subject"] = root.findtext("dc:subject", default=None, namespaces=ns)
+    core["keywords"] = root.findtext("cp:keywords", default=None, namespaces=ns)
+    core["last_modified_by"] = root.findtext("cp:lastModifiedBy", default=None, namespaces=ns)
+    core["category"] = root.findtext("cp:category", default=None, namespaces=ns)
+    core["content_status"] = root.findtext("cp:contentStatus", default=None, namespaces=ns)
+    core["revision"] = root.findtext("cp:revision", default=None, namespaces=ns)
+
+    created_node = root.find("dcterms:created", ns)
+    modified_node = root.find("dcterms:modified", ns)
+    core["creationdate"] = convert_pdf_date(created_node.text) if (created_node is not None and created_node.text) else None
+    core["moddate"] = convert_pdf_date(modified_node.text) if (modified_node is not None and modified_node.text) else None
+    return core
+
+
+def _read_docx_custom_props(docx_zip: zipfile.ZipFile) -> dict:
+    """Read docProps/custom.xml; return {} if missing."""
+    try:
+        with docx_zip.open("docProps/custom.xml") as f:
+            tree = ET.parse(f)
+    except KeyError:
+        return {}
+    except Exception:
+        return {}
+
+    root = tree.getroot()
+    ns = {
+        "cp": "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
+        "vt": "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+    }
+    props = {}
+    for prop in root.findall("cp:property", ns):
+        name = prop.get("name")
+        children = list(prop)
+        if not children:
+            continue
+        value_elem = children[0]
+        value = value_elem.text
+        props[name] = value
+    return props
+
+
+def extract_docx_metadata(docx_path: str) -> dict:
+    """
+    DOCX metadata extraction. Always returns a dict that includes 'custom_metadata'.
+    """
     metadata = {
         "format": "DOCX",
         "title": None,
@@ -316,8 +345,8 @@ def extract_docx_metadata(docx_path):
         "content_status": None,
         "revision": None,
         "trapped": None,
-        "encryption": None,
-        "file_size": os.path.getsize(docx_path),
+        "encryption": "No",
+        "file_size": os.path.getsize(docx_path) if os.path.exists(docx_path) else None,
         "page_count": None,
         "is_encrypted": False,
         "fonts": [],
@@ -335,110 +364,54 @@ def extract_docx_metadata(docx_path):
         "optimized": False,
         "pdf_version": None,
         "word_count": None,
+        # 🔐 Always present to avoid KeyError downstream:
+        "custom_metadata": {},
     }
 
-    # Extract metadata from DOCX ZIP format (docProps/core.xml)
+    # Extract core & custom props from the package
     try:
-        with zipfile.ZipFile(docx_path, 'r') as docx_zip:
-            if "docProps/core.xml" in docx_zip.namelist():
-                core_xml = docx_zip.read("docProps/core.xml").decode("utf-8")
-                
-                # Parse XML
-                root = ET.fromstring(core_xml)
-                ns = {
-                    "cp": "http://schemas.openxmlformats.org/package/2006/metadata/core-properties",
-                    "dc": "http://purl.org/dc/elements/1.1/",
-                    "dcterms": "http://purl.org/dc/terms/"
-                }
-
-                # Extract standard metadata fields
-                metadata["title"] = root.findtext("dc:title", default=None, namespaces=ns)
-                metadata["creator"] = root.findtext("dc:creator", default=None, namespaces=ns)
-                metadata["subject"] = root.findtext("dc:subject", default=None, namespaces=ns)
-                metadata["keywords"] = root.findtext("cp:keywords", default=None, namespaces=ns)
-                metadata["last_modified_by"] = root.findtext("cp:lastModifiedBy", default=None, namespaces=ns)
-                metadata["category"] = root.findtext("cp:category", default=None, namespaces=ns)
-                metadata["content_status"] = root.findtext("cp:contentStatus", default=None, namespaces=ns)
-                metadata["revision"] = root.findtext("cp:revision", default=None, namespaces=ns)
-                
-
-                # Handle creation and modification dates safely
-                created_date = root.find("dcterms:created", ns)
-                modified_date = root.find("dcterms:modified", ns)
-                
-                if created_date is not None and created_date.text:
-                    try:
-                        # Pass only the string to convert_pdf_date()
-                        metadata["creationdate"] = convert_pdf_date(created_date.text)
-                    except ValueError:
-                        metadata["creationdate"] = None  # Handle parsing failure gracefully
-                
-                if modified_date is not None and modified_date.text:
-                    try:
-                        # Pass only the string to convert_pdf_date()
-                        metadata["moddate"] = convert_pdf_date(modified_date.text)
-                    except ValueError:
-                        metadata["moddate"] = None  # Handle parsing failure gracefully
-
-
-                # Handle creation and modification dates safely
-                # created_date = root.find("dcterms:created", ns)
-                # modified_date = root.find("dcterms:modified", ns)
-# 
-                # if created_date is not None and created_date.text:
-                    # try:
-                        # metadata["creationdate"] = convert_pdf_date(datetime.strptime(created_date.text, "%Y-%m-%dT%H:%M:%SZ"))
-                    # except ValueError:
-                        # metadata["creationdate"] = convert_pdf_date(created_date.text)  # Keep original format if parsing fails
-# 
-                # if modified_date is not None and modified_date.text:
-                    # try:
-                        # metadata["moddate"] = convert_pdf_date(datetime.strptime(modified_date.text, "%Y-%m-%dT%H:%M:%SZ"))
-                    # except ValueError:
-                        # metadata["moddate"] = convert_pdf_date(modified_date.text)  # Keep original format if parsing fails
-
+        with zipfile.ZipFile(docx_path, "r") as z:
+            core = _read_docx_core_props(z)
+            metadata.update(core)
+            metadata["custom_metadata"] = _read_docx_custom_props(z)
     except Exception as e:
-        metadata["custom_metadata"] = f"Error extracting core.xml: {str(e)}"
+        # Keep going; attach error note but preserve key presence
+        metadata.setdefault("errors", []).append(f"core/custom props error: {e}")
 
-    # Extract word count and fonts using `python-docx`
+    # Word count, fonts, rough page estimate via python-docx
     try:
         doc = Document(docx_path)
-        metadata["page_count"] = len(doc.paragraphs) // 20  # Approximate: 20 paragraphs ≈ 1 page
-        metadata["word_count"] = sum(len(p.text.split()) for p in doc.paragraphs)
-        metadata["fonts"] = list(set(run.font.name for para in doc.paragraphs for run in para.runs if run.font.name))
+        paragraphs = list(doc.paragraphs)
+        metadata["word_count"] = sum(len(p.text.split()) for p in paragraphs)
+        # Very rough page heuristic; better replaced with actual pagination if needed
+        metadata["page_count"] = max(1, len(paragraphs) // 20) if paragraphs else 1
+        fonts = set()
+        for p in paragraphs:
+            for run in p.runs:
+                if run.font and run.font.name:
+                    fonts.add(run.font.name)
+        metadata["fonts"] = sorted(fonts) if fonts else []
     except Exception as e:
-        metadata["custom_metadata"] += f"\nError extracting document fonts: {str(e)}"
+        metadata.setdefault("errors", []).append(f"python-docx error: {e}")
 
-
-    try:
-        metadata["encrypted"] = str_to_bool(raw_metadata.get("encrypted", "no"))
-        metadata["is_encrypted"] = str_to_bool(raw_metadata.get("is_encrypted", "no"))
-        metadata["optimized"] = str_to_bool(raw_metadata.get("optimized", "no"))
-    except Exception as e:
-        metadata["custom_metadata"] += f"\nError extracting encrypted/optimized fields: {str(e)}"
-
-
+    # DOCX doesn't really expose encrypted/optimized flags like PDFs; keep defaults
     return metadata
 
 
 def extract_metadata(file_instance):
     """
-    Extracts metadata from a given file.
-
-    :param file_instance: File instance from the database
-    :return: Metadata dictionary
+    Extracts metadata from a given File model instance.
     """
     file_path = file_instance.filepath
-    logger.info(f"🔍 Checking file path: {file_path}")
+    logger.info("🔍 Checking file path: %s", file_path)
 
-    # ✅ Check if file exists
     if not Path(file_path).exists():
-        logger.error(f"❌ File does not exist: {file_path}")
+        logger.error("❌ File does not exist: %s", file_path)
         return None
 
-    logger.info(f"✅ File found! Extracting metadata for {file_path}")
+    logger.info("✅ File found! Extracting metadata for %s", file_path)
 
-    metadata = {
+    base = {
         "file_id": file_instance.id,
         "storage_id": file_instance.storage.storage_id if file_instance.storage else None,
         "file_size": os.path.getsize(file_path),
@@ -477,38 +450,41 @@ def extract_metadata(file_instance):
         "optimized": False,
         "pdf_version": None,
         "word_count": None,
+        # Make sure this key is *always* present
+        "custom_metadata": {},
     }
 
+    name_lc = (file_instance.filename or "").lower()
 
-    # ✅ Extract metadata for PDFs
-    if file_instance.filename.endswith(".pdf"):
+    if name_lc.endswith(".pdf"):
         try:
-            pdf_metadata = extract_pdf_metadata(file_path)
-            metadata.update(pdf_metadata)
-            logger.info(f"✅ Extracted PDF metadata: {pdf_metadata}")
+            pdf_meta = extract_pdf_metadata(file_path)
+            base.update(pdf_meta)
+            logger.info("✅ Extracted PDF metadata for file_id=%s", file_instance.id)
         except Exception as e:
-            logger.error(f"❌ PDF metadata extraction failed: {str(e)}")
+            logger.error("❌ PDF metadata extraction failed: %s", e)
 
-    # ✅ Extract metadata for DOCX
-    elif file_instance.filename.endswith(".docx"):
+    elif name_lc.endswith(".docx"):
         try:
-            docx_metadata = extract_docx_metadata(file_path)
-            metadata.update(docx_metadata)
-            logger.info(f"✅ Extracted DOCX metadata: {docx_metadata}")
+            docx_meta = extract_docx_metadata(file_path)
+            base.update(docx_meta)
+            logger.info("✅ Extracted DOCX metadata for file_id=%s", file_instance.id)
         except Exception as e:
-            logger.error(f"❌ DOCX metadata extraction failed: {str(e)}")
+            logger.error("❌ DOCX metadata extraction failed: %s", e)
 
-    # ✅ Extract word count for TXT
-    elif file_instance.filename.endswith(".txt"):
+    elif name_lc.endswith(".txt"):
         try:
-            with open(file_path, "r", encoding="utf-8") as text_file:
-                metadata["word_count"] = sum(len(line.split()) for line in text_file)
-            logger.info(f"✅ Extracted TXT metadata: {metadata}")
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as text_file:
+                base["word_count"] = sum(len(line.split()) for line in text_file)
+            logger.info("✅ Extracted TXT metadata for file_id=%s", file_instance.id)
         except Exception as e:
-            logger.error(f"❌ TXT metadata extraction failed: {str(e)}")
+            logger.error("❌ TXT metadata extraction failed: %s", e)
 
-    return metadata
+    else:
+        # leave base as-is; format likely handled elsewhere
+        pass
 
+    return base
 
 
 def register_generated_file(file_path, user, run, project_id, service_id, folder_name="generated"):
@@ -521,10 +497,9 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
 
     # Calculate MD5
     with open(file_path, "rb") as f:
-        content = f.read()
-        md5_hash = hashlib.md5(content).hexdigest()
+        md5_hash = hashlib.md5(f.read()).hexdigest()
 
-    # Get content type for the given run
+    # ContentType for the given run instance
     content_type = ContentType.objects.get_for_model(run)
 
     # ✅ Create Storage with generic linkage
@@ -533,88 +508,78 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
         content_type=content_type,
         object_id=run.pk,
         upload_storage_location=file_path,
-        output_storage_location=None
+        output_storage_location=None,
     )
 
-
+    # De-dup by md5 for this user
     existing = File.objects.filter(md5_hash=md5_hash, user=user).first()
     if existing:
         return existing
 
-    # ✅ Register File with link to Storage and optionally Run
-    from core.models import Run
+    from core.models import Run as RunModel
     file_instance = File.objects.create(
-        run=run if isinstance(run, Run) else None,
+        run=run if isinstance(run, RunModel) else None,
         storage=storage,
         filename=os.path.basename(file_path),
         filepath=file_path,
         file_size=os.path.getsize(file_path),
-        file_type=os.path.splitext(file_path)[1].lstrip("."),
+        file_type=mimetypes.guess_type(file_path)[0] or os.path.splitext(file_path)[1].lstrip("."),
         md5_hash=md5_hash,
         user=user,
         project_id=project_id,
         service_id=service_id,
     )
-    register_file_folder_link(file_instance)
 
-    # ✅ Link to folder
-    from document_operations.models import Folder, FileFolderLink
+    # Create folder link
+    register_file_folder_link(file_instance)
     folder, _ = Folder.objects.get_or_create(
         name=folder_name,
         user=user,
         project_id=project_id,
         service_id=service_id,
-        defaults={"created_at": timezone.now()}
+        defaults={"created_at": timezone.now()},
     )
     FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
 
     return file_instance
 
 
-
-def extract_document_text(path, mime_type=None):
+def extract_document_text(path, mime_type=None) -> str:
     """
     Extract text from various file types.
     """
-    import os
-    import pandas as pd
-
     if not os.path.exists(path):
         return ""
 
     ext = os.path.splitext(path)[-1].lower()
-
     try:
         if ext == ".pdf":
-            import fitz
             text = ""
             doc = fitz.open(path)
             for page in doc:
                 text += page.get_text()
             return text
 
-        elif ext == ".docx":
-            from docx import Document
+        if ext == ".docx":
             doc = Document(path)
             return "\n".join(p.text for p in doc.paragraphs)
 
-        elif ext == ".txt":
+        if ext == ".txt":
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 return f.read()
 
-        elif ext == ".csv":
+        if ext == ".csv":
             df = pd.read_csv(path, nrows=1000)
-            return df.to_string()
+            return df.to_string(index=False)
 
-        elif ext == ".xlsx":
+        if ext == ".xlsx":
             df = pd.read_excel(path, nrows=1000)
-            return df.to_string()
+            return df.to_string(index=False)
 
-        else:
-            from tika import parser
-            parsed = parser.from_file(path)
-            return parsed.get("content", "").strip()
+        # Fallback for other formats
+        parsed = tika_parser.from_file(path)
+        return (parsed.get("content") or "").strip()
 
     except Exception as e:
-        return f"Error extracting text: {str(e)}"
+        return f"Error extracting text: {e}"
 

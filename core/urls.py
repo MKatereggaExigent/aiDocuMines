@@ -13,6 +13,17 @@ from .views import (
     ServiceSummaryView,
 )
 
+
+from core.onlyoffice_views import (
+    OnlyOfficeConvertView,
+    OnlyOfficeCommandView,
+    OnlyOfficeSignedDownloadView,
+    OnlyOfficeCallbackView,
+    OnlyOfficeEditorConfigView,
+    OnlyOfficeCreateDocxView,
+    OnlyOfficeDocServerUrlView
+)
+
 urlpatterns = [
     # ✅ File Upload Endpoint
     path("upload/", FileUploadView.as_view(), name="file-upload"),
@@ -66,3 +77,13 @@ urlpatterns = [
     path("health/", health_check, name="health_check"),
     
 ]
+
+urlpatterns += [
+    path("onlyoffice/convert/", OnlyOfficeConvertView.as_view(), name="onlyoffice-convert"),
+    path("onlyoffice/command/", OnlyOfficeCommandView.as_view(), name="onlyoffice-command"),
+    path("onlyoffice/signed-download/", OnlyOfficeSignedDownloadView.as_view(), name="onlyoffice-signed-download"),
+    path("onlyoffice/callback/", OnlyOfficeCallbackView.as_view(), name="onlyoffice-callback"),
+    path("onlyoffice/editor-config/", OnlyOfficeEditorConfigView.as_view(), name="onlyoffice-editor-config"),
+    path("onlyoffice/create-docx/", OnlyOfficeCreateDocxView.as_view(), name="onlyoffice-create-docx"),
+    path("onlyoffice/docserver-url/", OnlyOfficeDocServerUrlView.as_view(), name="onlyoffice-docserver-url"),
+    ]

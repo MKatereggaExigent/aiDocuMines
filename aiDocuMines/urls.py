@@ -106,6 +106,10 @@ urlpatterns = [
     
     # Integrations
     path("api/v1/integrations/", include("integrations.urls", namespace="integrations")),
+
+    # Cost Centre
+    path("api/v1/cost/", include(("cost_centre.urls", "cost_centre"), namespace="cost")),
+
 ]
 
 # Serve static files for Swagger UI

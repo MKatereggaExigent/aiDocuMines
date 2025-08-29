@@ -64,51 +64,6 @@ class Storage(models.Model):
         return f"Storage {self.storage_id} - {self.upload_storage_location}"
 
 
-
-'''
-class Storage(models.Model):
-    """
-    Represents storage locations for uploaded and processed files.
-    """
-    storage_id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="storages", null=True)
-    
-    # Optionally link to either a Run (for general file processing) or a TranslationRun (for translation tasks)
-    # run = models.ForeignKey(Run, on_delete=models.CASCADE, related_name="storages", db_column="run_id", null=True, blank=True)
-
-    translation_run = models.ForeignKey(
-        "document_translation.TranslationRun",
-        on_delete=models.CASCADE,
-        related_name="core_storages",
-        db_column="translation_run_id",
-        null=True,
-        blank=True
-    )
-
-    # translation_run = models.ForeignKey(TranslationRun, on_delete=models.CASCADE, related_name="storages", db_column="translation_run_id", null=True, blank=True)
-
-    upload_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # Store absolute path for uploaded file
-    output_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # Store path for processed/generated output
-
-    def __str__(self):
-        return f"Storage {self.storage_id} - {self.upload_storage_location}"
-'''
-
-'''
-class Storage(models.Model):
-    """
-    Represents storage locations for uploaded and processed files.
-    """
-    storage_id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="storages", null=True)
-    run = models.ForeignKey(Run, on_delete=models.CASCADE, related_name="storages", db_column="run_id")
-    upload_storage_location = models.CharField(max_length=1024, blank=True, null=True)  # ✅ Store absolute path
-    output_storage_location = models.CharField(max_length=1024, blank=True, null=True)
-
-    def __str__(self):
-        return f"Storage {self.storage_id} - {self.upload_storage_location}"
-'''
-
 class File(models.Model):
     """
     Represents a document uploaded for processing.
@@ -199,9 +154,6 @@ class File(models.Model):
             service_id=service_id,
             origin_file=original_file,
         )
-
-
-
 
 
 class Metadata(models.Model):
