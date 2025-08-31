@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "rest_framework.authtoken",
+    "django_extensions",
     "drf_yasg",
     "django_celery_beat",
     "oauth2_provider",
@@ -57,6 +58,7 @@ INSTALLED_APPS = [
     "platform_data_insights",
     "integrations",
     "cost_centre",
+    "home_dash_analytics",
 ]
 
 MIDDLEWARE = [

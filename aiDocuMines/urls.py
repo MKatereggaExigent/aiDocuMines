@@ -110,6 +110,9 @@ urlpatterns = [
     # Cost Centre
     path("api/v1/cost/", include(("cost_centre.urls", "cost_centre"), namespace="cost")),
 
+    # Home Dashboard Analytics
+    path("api/v1/home-analytics/", include("home_dash_analytics.urls")),
+
 ]
 
 # Serve static files for Swagger UI
