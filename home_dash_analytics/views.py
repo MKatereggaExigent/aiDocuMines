@@ -17,6 +17,9 @@ from oauth2_provider.contrib.rest_framework import (
     TokenHasReadWriteScope,
 )
 
+from django.conf import settings
+from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
+
 from .utils import (
     build_overview,
     SECTIONS,
@@ -101,6 +104,42 @@ to_param = openapi.Parameter(
 # ──────────────────────────────────────────────────────────────────────────────
 # Auth base view: bind to token user and (optionally) verify client header
 # ──────────────────────────────────────────────────────────────────────────────
+
+# Optional feature flag: allow service-to-service tokens to impersonate the app owner.
+# Default False for safety.
+ALLOW_CLIENT_CREDS_FOR_HOME_ANALYTICS = getattr(
+    settings, "HOME_ANALYTICS_ALLOW_CLIENT_CREDENTIALS", False
+)
+
+class OAuth2SecuredAPIView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]  # requires "read" or "write" scope
+
+    def _get_user(self, request):
+        header_client_id = request.headers.get("X-Client-ID")
+        if not header_client_id:
+            return None, Response({"error": "Missing X-Client-ID header"}, status=status.HTTP_400_BAD_REQUEST)
+
+        token = getattr(request, "auth", None)  # django-oauth-toolkit AccessToken
+        if not token:
+            return None, Response({"error": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        app = getattr(token, "application", None)
+        if not app or app.client_id != header_client_id:
+            return None, Response({"error": "Client mismatch for this token"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Primary path: user-bound tokens
+        if getattr(request, "user", None) and request.user.is_authenticated:
+            return request.user, None
+
+        # Optional path: client-credentials tokens (no user on token)
+        # Strongly recommended OFF for user-scoped analytics.
+        if ALLOW_CLIENT_CREDS_FOR_HOME_ANALYTICS and getattr(app, "user", None):
+            return app.user, None
+
+        return None, Response({"error": "User-bound access token required"}, status=status.HTTP_403_FORBIDDEN)
+
+'''
 class OAuth2SecuredAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]  # requires 'read' or 'write' scope
@@ -134,7 +173,7 @@ class OAuth2SecuredAPIView(APIView):
             return token_app.user, None
 
         return None, Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
-
+'''
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Views

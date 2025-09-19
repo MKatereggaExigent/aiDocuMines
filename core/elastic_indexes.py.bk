@@ -1,5 +1,4 @@
-# core/elastic_indexes.py
-from elasticsearch_dsl import Document, Date, Keyword, Text, Integer, Long
+from elasticsearch_dsl import Document, Date, Keyword, Text, Integer
 from elasticsearch_dsl.connections import connections
 
 
@@ -19,8 +18,8 @@ class RunIndex(Document):
 
 class FileIndex(Document):
     id = Keyword()
-    filename = Text(analyzer='standard', fields={'raw': Keyword()})
-    filepath = Text(analyzer='standard', fields={'raw': Keyword()})
+    filename = Text(analyzer="standard")
+    filepath = Text(analyzer="standard")
     file_size = Integer()
     status = Keyword()
     project_id = Keyword()
@@ -28,8 +27,8 @@ class FileIndex(Document):
     created_at = Date()
     updated_at = Date()
     md5_hash = Keyword()
-    user_id = Long()
-    content = Text(analyzer='english')
+    user_id = Integer()
+    content = Text(analyzer="english")
 
     class Index:
         name = 'files'

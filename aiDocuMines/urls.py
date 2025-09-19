@@ -113,6 +113,9 @@ urlpatterns = [
     # Home Dashboard Analytics
     path("api/v1/home-analytics/", include("home_dash_analytics.urls")),
 
+    # Email Management
+    path("api/v1/email/", include("email_management.urls")),
+
 ]
 
 # Serve static files for Swagger UI

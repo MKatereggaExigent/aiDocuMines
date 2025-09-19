@@ -3,12 +3,18 @@ import json
 import tiktoken  # for OpenAI token estimation
 import pandas as pd
 from urllib.parse import unquote
+from typing import List, Tuple, Optional
+
 from langchain_ollama import ChatOllama
 from openai import OpenAI
+
+# Django models (for cached text lookup when using file_id)
+from core.models import File
 
 # Registry of model context limits (tokens)
 MODEL_CONTEXT_WINDOWS = {
     "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
     "gpt-4": 128000,
     "gpt-3.5-turbo": 16000,
     "claude-2": 100000,
@@ -19,86 +25,196 @@ MODEL_CONTEXT_WINDOWS = {
     "default": 4096
 }
 
-def estimate_token_count(text, model="gpt-3.5-turbo"):
+
+# ───────────────────────── Token helpers ─────────────────────────
+
+def get_token_limit(model: str) -> int:
+    return MODEL_CONTEXT_WINDOWS.get(model, MODEL_CONTEXT_WINDOWS["default"])
+
+
+def _get_encoder(model: str):
     try:
-        encoding = tiktoken.encoding_for_model(model)
-    except:
-        encoding = tiktoken.get_encoding("cl100k_base")
-    return len(encoding.encode(text))
+        return tiktoken.encoding_for_model(model)
+    except Exception:
+        return tiktoken.get_encoding("cl100k_base")
 
-def chunk_text_by_token_limit(text, model_name, max_reserved_tokens=1000):
-    token_limit = MODEL_CONTEXT_WINDOWS.get(model_name, MODEL_CONTEXT_WINDOWS["default"])
-    chunk_size = token_limit - max_reserved_tokens
 
-    words = text.split()
-    chunks, current_chunk, token_count = [], [], 0
+def estimate_token_count(text: str, model: str = "gpt-3.5-turbo") -> int:
+    enc = _get_encoder(model)
+    return len(enc.encode(text or ""))
 
-    for word in words:
-        token_count += 1
-        current_chunk.append(word)
-        if token_count >= chunk_size:
-            chunks.append(" ".join(current_chunk))
-            current_chunk, token_count = [], 0
 
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
+def _split_text_by_tokens(text: str, model_name: str, chunk_size_tokens: int) -> List[str]:
+    """
+    Chunk text by approximate token count using tiktoken.
+    This is more accurate than splitting by words.
+    """
+    if not text:
+        return []
+    enc = _get_encoder(model_name)
+    tokens = enc.encode(text)
+    chunks = []
+    for i in range(0, len(tokens), chunk_size_tokens):
+        chunk_tokens = tokens[i:i + chunk_size_tokens]
+        chunks.append(enc.decode(chunk_tokens))
     return chunks
 
 
-def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
+def chunk_text_by_token_limit(text: str, model_name: str, max_reserved_tokens: int = 1000) -> List[str]:
+    token_limit = get_token_limit(model_name)
+    chunk_size = max(token_limit - max_reserved_tokens, 1024)  # keep a reasonable floor
+    return _split_text_by_tokens(text, model_name, chunk_size)
+
+
+def _trim_messages_to_budget(previous_messages: Optional[List[dict]], model: str, budget_tokens: int) -> List[dict]:
+    """
+    Keep only as many tail messages as fit within budget_tokens.
+    Each message is expected to have {'role': 'user'|'assistant', 'content': '...'}.
+    """
+    if not previous_messages:
+        return []
+
+    enc = _get_encoder(model)
+    trimmed: List[dict] = []
+    running = 0
+
+    # iterate from the end (most recent first), then reverse back
+    for msg in reversed(previous_messages):
+        content = msg.get("content") or ""
+        tokens = len(enc.encode(content))
+        if running + tokens > budget_tokens:
+            break
+        trimmed.append(msg)
+        running += tokens
+
+    return list(reversed(trimmed))
+
+
+# ───────────────────────── Cache helpers ─────────────────────────
+
+def _candidate_output_paths(file_path: str) -> List[str]:
+    # Prefer "<original>.txt", fall back to "<root>.txt"
+    root, _ = os.path.splitext(file_path)
+    return [f"{file_path}.txt", f"{root}.txt"]
+
+
+def _read_if_exists(path: Optional[str]) -> Optional[str]:
+    if path and os.path.exists(path) and os.path.getsize(path) > 0:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception:
+            return None
+    return None
+
+
+def _ensure_parent(path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+
+def _write_text(path: str, text: str):
+    _ensure_parent(path)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text or "")
+
+
+def _get_cached_text_for_file(file_obj: File) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Returns (text, used_path). Tries:
+      1) storage.output_storage_location
+      2) <filepath>.txt
+      3) <root>.txt
+    """
+    # 1) storage.output_storage_location
+    storage = getattr(file_obj, "storage", None)
+    out_path = getattr(storage, "output_storage_location", None)
+    text = _read_if_exists(out_path)
+    if text:
+        return text, out_path
+
+    # 2) / 3) neighbor text files
+    for cand in _candidate_output_paths(file_obj.filepath):
+        text = _read_if_exists(cand)
+        if text:
+            return text, cand
+
+    return None, out_path or _candidate_output_paths(file_obj.filepath)[-1]
+
+
+def _save_cache_and_update_storage(file_obj: File, text: str, chosen_path: Optional[str]):
+    """
+    Writes text to chosen_path (if provided) and updates Storage.output_storage_location if needed.
+    """
+    if not chosen_path:
+        # default to "<root>.txt"
+        chosen_path = _candidate_output_paths(file_obj.filepath)[-1]
+    try:
+        _write_text(chosen_path, text)
+        # Persist on Storage if field exists
+        storage = getattr(file_obj, "storage", None)
+        if storage and getattr(storage, "output_storage_location", None) != chosen_path:
+            storage.output_storage_location = chosen_path
+            storage.save(update_fields=["output_storage_location"])
+    except Exception as e:
+        print(f"[WARN] Failed to persist cache for file_id={file_obj.id} at {chosen_path}: {e}")
+
+
+# ───────────────────────── LLM dispatch ─────────────────────────
+
+def _build_messages_for_openai(previous_messages: Optional[List[dict]], chunk: str, query_text: str, model: str) -> List[dict]:
+    """
+    Construct OpenAI messages while respecting a token budget.
+    We keep system + (trimmed history) + current chunk + user query.
+    """
+    system_prompt = "You are a precise, concise data analysis and document QA assistant."
+    token_limit = get_token_limit(model)
+
+    # Reserve space for system + current prompt + output
+    reserve_for_output = 2048
+    reserve_for_chunk_and_question = estimate_token_count(chunk, model) + estimate_token_count(query_text, model) + 200
+    budget_for_history = max(token_limit - reserve_for_output - reserve_for_chunk_and_question, 512)
+
+    trimmed_history = _trim_messages_to_budget(previous_messages, model, budget_for_history)
+
+    messages: List[dict] = [{"role": "system", "content": system_prompt}]
+    messages.extend(trimmed_history)
+    messages.append({
+        "role": "user",
+        "content": f"Document excerpt:\n\n{chunk}\n\nQuestion: {query_text}\n\n"
+                   f"Answer briefly, cite exact facts you used, and say if the answer is uncertain."
+    })
+    return messages
+
+
+def dispatch_to_llm(query_text: str, chunk: str, llm_config: dict, previous_messages: Optional[List[dict]] = None):
     provider = llm_config.get("provider", "openai")
     model = llm_config.get("model", "gpt-3.5-turbo")
     api_key = llm_config.get("api_key")
-    endpoint = llm_config.get("endpoint")
+    endpoint = llm_config.get("endpoint")  # used for ollama if provided
 
     if provider == "openai":
         client = OpenAI(api_key=api_key) if api_key else OpenAI()
-
-        # Construct message history
-        messages = [
-            {"role": "system", "content": "You are a data analysis assistant."}
-        ]
-
-        if previous_messages:
-
-            # previous_messages = previous_messages[-10:]  # Keep last 10 turns
-
-            for msg in previous_messages:
-                role = msg.get("role")
-                content = msg.get("content")
-
-                # Fallback for legacy format with 'query'/'response'
-                if not content:
-                    if msg.get("query"):
-                        role = "user"
-                        content = msg.get("query")
-                    elif msg.get("response"):
-                        role = "assistant"
-                        content = msg.get("response")
-
-                if role and content and isinstance(content, str) and content.strip():
-                    messages.append({"role": role, "content": content})
-                else:
-                    print(f"[⚠️ Skipping malformed message] {msg}")
-
-        messages.append({"role": "user", "content": f"Document: {chunk}\n\nQuestion: {query_text}"})
-
+        messages = _build_messages_for_openai(previous_messages, chunk, query_text, model)
         response = client.chat.completions.create(
             model=model,
-            max_tokens=2048,
-            messages=messages
+            messages=messages,
+            max_tokens=1024,
+            temperature=0.2,
         )
         return response.choices[0].message.content
 
     elif provider == "ollama":
         try:
-            # Use service name as internal DNS hostname inside Docker
-            chat = ChatOllama(model=model, base_url="http://ollama:11434")
+            base_url = endpoint or "http://ollama:11434"
+            chat = ChatOllama(model=model, base_url=base_url)
+            # Simple condensed context; you can mirror OpenAI structure if desired
             context = ""
             if previous_messages:
-                for msg in previous_messages:
-                    context += f"User: {msg.get('query')}\nAssistant: {msg.get('response')}\n"
-            context += f"Document: {chunk}\n\nQuestion: {query_text}"
+                for msg in previous_messages[-10:]:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    context += f"{role.capitalize()}: {content}\n"
+            context += f"\nDocument:\n{chunk}\n\nQuestion: {query_text}"
             return chat.invoke(context)
         except Exception as e:
             raise RuntimeError(f"Ollama invocation failed: {e}")
@@ -113,43 +229,13 @@ def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
         raise ValueError(f"Unsupported provider: {provider}")
 
 
+# ───────────────────────── File path / id entrypoints ─────────────────────────
 
-'''
-def dispatch_to_llm(query_text, chunk, llm_config, previous_messages=None):
-    provider = llm_config.get("provider", "openai")
-    model = llm_config.get("model", "gpt-3.5-turbo")
-    api_key = llm_config.get("api_key")
-    endpoint = llm_config.get("endpoint")
-
-    if provider == "openai":
-        client = OpenAI(api_key=api_key) if api_key else OpenAI()
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=2048,
-            messages=[
-                {"role": "system", "content": "You are a data analysis assistant."},
-                {"role": "user", "content": f"Document: {chunk}\n\nQuestion: {query_text}"}
-            ]
-        )
-        return response.choices[0].message.content
-
-    elif provider == "ollama":
-        chat = ChatOllama(model=model)
-        return chat.invoke(f"Document: {chunk}\n\nQuestion: {query_text}")
-
-    elif provider == "langchain":
-        raise NotImplementedError("LangChain support is not yet implemented.")
-
-    elif provider == "mcp":
-        raise NotImplementedError("MCP provider not yet integrated.")
-
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
-'''
-
-def execute_file_query(query_text, file_path, llm_config, previous_messages=None):
+def _materialize_text_from_file_path(file_path: str) -> str:
+    """
+    Your original path-based extraction (one-off). Used for backward-compat.
+    """
     from .file_readers import read_file, convert_dataframe_to_text
-
     content, is_tabular = read_file(file_path)
     if content is None:
         raise ValueError("File content could not be read. Ensure the file format is supported.")
@@ -159,9 +245,49 @@ def execute_file_query(query_text, file_path, llm_config, previous_messages=None
         content = str(content)
     if not content.strip():
         raise ValueError("The file appears empty or unreadable.")
+    return content
+
+
+def _get_or_build_cached_text_for_file_id(file_id: int) -> str:
+    """
+    New, efficient path: use cached text if present; otherwise extract and store.
+    """
+    file_obj = File.objects.select_related("storage").get(id=file_id)
+
+    # 1) try cache
+    cached_text, chosen_path = _get_cached_text_for_file(file_obj)
+    if cached_text:
+        return cached_text
+
+    # 2) fallback extraction once, then cache
+    text = _materialize_text_from_file_path(file_obj.filepath)
+    _save_cache_and_update_storage(file_obj, text, chosen_path)
+    return text
+
+
+def execute_file_query(
+    query_text: str,
+    file_path: Optional[str],
+    llm_config: dict,
+    previous_messages: Optional[List[dict]] = None,
+    *,
+    file_id: Optional[int] = None
+) -> str:
+    """
+    Backward-compatible entrypoint:
+      - If file_id is provided, use cached-text pipeline (fast).
+      - Else if file_path is provided, do the legacy direct-read pipeline.
+    """
+    if file_id is not None:
+        content = _get_or_build_cached_text_for_file_id(file_id)
+    elif file_path:
+        # Legacy behavior (no caching)
+        content = _materialize_text_from_file_path(file_path)
+    else:
+        raise ValueError("Either file_id or file_path must be supplied.")
 
     model_name = llm_config.get("model", "default")
-    token_chunks = chunk_text_by_token_limit(content, model_name)
+    token_chunks = chunk_text_by_token_limit(content, model_name, max_reserved_tokens=1500)
 
     answers = []
     for i, chunk in enumerate(token_chunks):
@@ -175,36 +301,17 @@ def execute_file_query(query_text, file_path, llm_config, previous_messages=None
     return "\n\n---\n\n".join(answers)
 
 
-'''
-def execute_file_query(query_text, file_path, llm_config):
-    from .file_readers import read_file, convert_dataframe_to_text
+# ───────────────────────── DB entrypoint ─────────────────────────
 
-    content, is_tabular = read_file(file_path)
-    if content is None:
-        raise ValueError("File content could not be read. Ensure the file format is supported.")
-    if is_tabular:
-        content = convert_dataframe_to_text(content)
-    if not isinstance(content, str):
-        content = str(content)
-    if not content.strip():
-        raise ValueError("The file appears empty or unreadable.")
-
-    model_name = llm_config.get("model", "default")
-    token_chunks = chunk_text_by_token_limit(content, model_name)
-
-    answers = []
-    for i, chunk in enumerate(token_chunks):
-        try:
-            print(f"[INFO] Sending chunk {i+1}/{len(token_chunks)} to LLM...")
-            answer = dispatch_to_llm(query_text, chunk, llm_config)
-            answers.append(answer)
-        except Exception as e:
-            print(f"[ERROR] Failed to process chunk {i+1}: {e}")
-            answers.append(f"[Error processing chunk: {e}]")
-    return "\n\n---\n\n".join(answers)
-'''
-
-def execute_db_query(query_text, connection_string, table_name, llm_config, stream=False, chunk_size=100, previous_messages=None):
+def execute_db_query(
+    query_text: str,
+    connection_string: str,
+    table_name: str,
+    llm_config: dict,
+    stream: bool = False,
+    chunk_size: int = 100,
+    previous_messages: Optional[List[dict]] = None
+):
     from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query
 
     try:
@@ -242,9 +349,9 @@ def execute_db_query(query_text, connection_string, table_name, llm_config, stre
             print("[WARN] Query returned no usable data.")
             return "The table exists but contains no data rows to analyze."
 
-        # Process with LLM
+        # Token-chunk the data for LLM, reserve room for answer
         model_name = llm_config.get("model", "default")
-        token_chunks = chunk_text_by_token_limit(text_data, model_name)
+        token_chunks = chunk_text_by_token_limit(text_data, model_name, max_reserved_tokens=1500)
 
         answers = []
         for i, chunk in enumerate(token_chunks):
@@ -261,69 +368,4 @@ def execute_db_query(query_text, connection_string, table_name, llm_config, stre
     except Exception as e:
         print(f"[FATAL] Unexpected error in DB query pipeline: {e}")
         return f"[ERROR] Database query failed: {str(e)}"
-
-
-'''
-def execute_db_query(query_text, connection_string, table_name, llm_config, stream=False, chunk_size=100):
-    from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query
-
-    try:
-        print(f"[DEBUG] Connecting to database using: {connection_string}")
-        column_names = fetch_column_names(connection_string, table_name)
-        print(f"[DEBUG] Retrieved columns: {column_names}")
-
-        sql_query = generate_sql_query(table_name, query_text, column_names)
-        if not sql_query:
-            print(f"[INFO] SQL generation failed, using fallback: SELECT * FROM {table_name} LIMIT 100")
-            sql_query = f"SELECT * FROM {table_name} LIMIT 100"
-
-        print(f"[DEBUG] Final SQL Query: {sql_query}")
-        result = execute_sql_query(connection_string, sql_query, stream=stream, chunk_size=chunk_size)
-
-        # Normalize results to text for LLM
-        text_data = ""
-        if isinstance(result, pd.DataFrame):
-            print(f"[DEBUG] Got DataFrame with shape: {result.shape}")
-            text_data = result.to_csv(index=False)
-        elif hasattr(result, '__iter__') and not isinstance(result, (str, bytes, dict)):
-            chunks = []
-            for item in result:
-                if isinstance(item, pd.DataFrame):
-                    if not item.empty:
-                        chunks.append(item.to_csv(index=False))
-                else:
-                    chunks.append(str(item))
-            text_data = "\n\n".join(chunks)
-        else:
-            text_data = str(result)
-
-        print(f"[DEBUG] Extracted text data length: {len(text_data)}")
-        if not text_data.strip():
-            print("[WARN] Query returned no usable data.")
-            return "The table exists but contains no data rows to analyze."
-
-        # Process with LLM
-        model_name = llm_config.get("model", "default")
-        token_chunks = chunk_text_by_token_limit(text_data, model_name)
-
-        answers = []
-        for i, chunk in enumerate(token_chunks):
-            try:
-                print(f"[INFO] Sending chunk {i+1}/{len(token_chunks)} to LLM...")
-                answer = dispatch_to_llm(query_text, chunk, llm_config)
-                answers.append(answer)
-            except Exception as e:
-                print(f"[ERROR] Failed to process chunk {i+1}: {e}")
-                answers.append(f"[Error processing chunk: {e}]")
-
-        return "\n\n---\n\n".join(answers)
-
-    except Exception as e:
-        print(f"[FATAL] Unexpected error in DB query pipeline: {e}")
-        return f"[ERROR] Database query failed: {str(e)}"
-'''
-
-
-def get_token_limit(model):
-    return MODEL_CONTEXT_WINDOWS.get(model, MODEL_CONTEXT_WINDOWS["default"])
 

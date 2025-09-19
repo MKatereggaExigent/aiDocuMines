@@ -449,7 +449,7 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
 
         # 🔐 Get accessible file IDs (owned or shared)
         accessible_file_ids = list(
-            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
+            File.objects.filter(user_id=user_id).values_list("id", flat=True)
         ) + list(
             FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
         )
@@ -474,7 +474,7 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
 
         '''
         accessible_file_ids = list(
-            File.objects.filter(uploaded_by_id=user_id).values_list("id", flat=True)
+            File.objects.filter(user_id=user_id).values_list("id", flat=True)
         ) + list(
             FileAccessEntry.objects.filter(user_id=user_id, can_read=True).values_list("file_id", flat=True)
         )

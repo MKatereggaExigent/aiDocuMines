@@ -337,7 +337,7 @@ def bulk_reindex() -> dict:
     LOGGER.info("📥 Enqueued %s files for indexing.", count)
     return {"queued": count}
 
-
+'''
 @shared_task(name="document_search.exec_search")
 def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> list[dict]:
     """
@@ -418,8 +418,96 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
     )
 
     return hits
+'''
 
+@shared_task(name="document_search.exec_search")
+def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> list[dict]:
+    cache_key = f"search:v2:{user_id}:{file_id}:{top_k}:{hash(query)}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
 
+    # 1) Resolve access
+    User = get_user_model()
+    user = User.objects.filter(pk=user_id).first()
+    if not user:
+        return []
+
+    from django.db.models import F
+    accessible_ids = set(get_user_accessible_file_ids(user))
+
+    # If caller passed file_id, tighten scope
+    if file_id:
+        accessible_ids &= {int(file_id)}
+    if not accessible_ids:
+        return []
+
+    # 2) Determine which partitions to load (owners of accessible files)
+    owner_rows = (
+        File.objects
+        .filter(id__in=accessible_ids)
+        .values("id", "user_id")  # or "user_id" if that's your canonical owner field
+    )
+    owner_partitions = {f"user_{row['user_id']}" for row in owner_rows}
+
+    # 3) Embed query
+    q_vec = embed_text(query)
+
+    # 4) Milvus search over only needed partitions + file_id expr
+    coll = _ensure_collection()
+    for p in owner_partitions:
+        _ensure_partition(coll, p)
+    coll.load(partition_names=list(owner_partitions))
+
+    id_list = ",".join(map(str, sorted(accessible_ids)))
+    expr = f"file_id in [{id_list}]"
+
+    res = coll.search(
+        data=[q_vec],
+        anns_field="vector",
+        param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+        limit=top_k,
+        expr=expr,
+        output_fields=["file_id", "chunk_text"],
+    )
+    coll.release()
+
+    # 5) Dedup + shape
+    seen = set()
+    hits = []
+    for hit in res[0]:
+        fid = int(hit.entity.get("file_id"))
+        ctext = hit.entity.get("chunk_text", "")
+        ch = hash(ctext)
+        if ch in seen:
+            continue
+        seen.add(ch)
+
+        snippet = (ctext[:297] + "…") if len(ctext) > 300 else ctext
+        snippet = snippet.replace("\n", "  \n")
+
+        hits.append({
+            "file_id": fid,
+            "snippet_md": snippet,
+            "score": float(hit.score),
+            "preview": preview_for_file(fid),
+        })
+        if len(hits) >= top_k:
+            break
+
+    cache.set(cache_key, hits, timeout=60 * 60 * 6)
+    SearchQueryLog.objects.create(
+        user_id=user_id,
+        file_id=file_id if File.objects.filter(id=file_id).exists() else None,
+        query_text=query,
+        top_k=top_k,
+        duration_ms=None,  # you can restore timing if desired
+        result_count=len(hits),
+        result_json=hits,
+    )
+    return hits
+
+'''
 @shared_task(name="document_search.semantic_search_task")
 def semantic_search_task(
     user_id: int,
@@ -527,6 +615,106 @@ def semantic_search_task(
                 "score": score,
             })
 
+        return out
+
+    except Exception as e:
+        LOGGER.error("Error in semantic search task: %s", str(e))
+        return {"error": str(e)}
+'''
+
+@shared_task(name="document_search.semantic_search_task")
+def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | None, filters: dict | None) -> list[dict]:
+    try:
+        filters = filters or {}
+        User = get_user_model()
+        user = User.objects.filter(pk=user_id).first()
+        if not user:
+            return []
+
+        # 1) Access scope
+        accessible_ids = set(get_user_accessible_file_ids(user))
+        if file_id:
+            accessible_ids &= {int(file_id)}
+        if not accessible_ids:
+            return []
+
+        # 2) Owner partitions to load
+        owner_rows = (
+            File.objects
+            .filter(id__in=accessible_ids)
+            .values("id", "user_id")  # or "user_id"
+        )
+        owner_partitions = {f"user_{row['user_id']}" for row in owner_rows}
+
+        # 3) Embed
+        embed_model = _get_model()
+        qvec = embed_model.encode([query])[0]
+
+        # 4) Search only allowed partitions + ids
+        coll = _ensure_collection()
+        for p in owner_partitions:
+            _ensure_partition(coll, p)
+        coll.load(partition_names=list(owner_partitions))
+
+        id_list = ",".join(map(str, sorted(accessible_ids)))
+        expr = f"file_id in [{id_list}]"
+
+        results = coll.search(
+            data=[qvec],
+            anns_field="vector",
+            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            limit=top_k,
+            expr=expr,
+            output_fields=["file_id", "chunk_text"],
+        )
+
+        vector_file_ids = {int(hit.entity.get("file_id")) for hit in results[0]}
+        allowed_ids = vector_file_ids & accessible_ids
+        if not allowed_ids:
+            return []
+
+        # 5) Apply optional metadata filters in Django
+        q = Q(id__in=allowed_ids)
+        if filters.get("created_from"):
+            q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
+        if filters.get("created_to"):
+            q &= Q(created_at__lte=datetime.fromisoformat(filters["created_to"]))
+        if filters.get("author"):
+            q &= Q(metadata__author__icontains=filters["author"])
+        if filters.get("project_id"):
+            q &= Q(project_id=filters["project_id"])
+        if filters.get("service_id"):
+            q &= Q(service_id=filters["service_id"])
+
+        files = File.objects.filter(q).prefetch_related("metadata")
+
+        # best hit per file
+        best = {}
+        for hit in results[0]:
+            fid = int(hit.entity.get("file_id"))
+            if fid not in allowed_ids:
+                continue
+            score = float(hit.score)
+            chunk = hit.entity.get("chunk_text", "")
+            if (fid not in best) or (score > best[fid][1]):
+                best[fid] = (chunk, score)
+
+        out = []
+        for f in files:
+            md = f.metadata.first()
+            chunk_text, score = best.get(f.id, ("", None))
+            out.append({
+                "file_id": f.id,
+                "filename": f.filename,
+                "file_size": f.file_size,
+                "file_type": f.file_type,
+                "document_type": getattr(f, "document_type", None),
+                "created_at": f.created_at,
+                "author": getattr(md, "author", None) if md else None,
+                "keywords": getattr(md, "keywords", None) if md else None,
+                "chunk_text": chunk_text,
+                "score": score,
+            })
         return out
 
     except Exception as e:

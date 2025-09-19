@@ -1,21 +1,17 @@
 # file_elasticsearch/utils.py
 
-from elasticsearch_dsl import Q
+from elasticsearch_dsl import Search, Q
 from core.elastic_indexes import FileIndex
 from core.utils import extract_document_text
 from document_operations.utils import get_user_accessible_file_ids
 
-
 def delete_index():
     FileIndex._index.delete(ignore=404)
-
 
 def create_index():
     FileIndex.init()
 
-
 def index_file(file_instance):
-    # Extract text from the file path and index with ownership metadata
     content_text = extract_document_text(file_instance.filepath)
     doc = FileIndex(
         meta={"id": str(file_instance.id)},
@@ -33,9 +29,6 @@ def index_file(file_instance):
         content=content_text,
     )
     doc.save()
-    # Optionally refresh to make the document searchable immediately:
-    # FileIndex._index.refresh()
-
 
 def force_reindex():
     from core.models import File
@@ -43,12 +36,10 @@ def force_reindex():
     create_index()
     for f in File.objects.all():
         index_file(f)
-    # FileIndex._index.refresh()
-
 
 def _tenant_q(user, accessible_ids=None):
     """
-    Tenancy filter:
+    Return a bool-should filter:
       (user_id == me) OR (doc _id in my accessible file ids)
     """
     if accessible_ids is None:
@@ -61,19 +52,14 @@ def _tenant_q(user, accessible_ids=None):
 
     return Q("bool", should=shoulds, minimum_should_match=1)
 
-
 def basic_search(query, scope="both", user=None, accessible_ids=None):
     if not query:
         return []
 
-    # Use the mapped index from FileIndex
-    s = FileIndex.search()
-
-    # Enforce tenancy
+    s = Search(index="files")
     if user is not None:
         s = s.filter(_tenant_q(user, accessible_ids))
 
-    # Query selection
     if scope == "filename":
         s = s.query("multi_match", query=query, fields=["filename", "filepath"])
     elif scope == "content":
@@ -83,11 +69,9 @@ def basic_search(query, scope="both", user=None, accessible_ids=None):
 
     # Optional: avoid returning full content payloads
     # s = s.source(excludes=["content"])
-    # Optional: highlight snippets
     # s = s.highlight("content", fragment_size=160, number_of_fragments=1)
 
     return s.execute()
-
 
 def advanced_search(must=None, filter=None, search_in=None, user=None, accessible_ids=None):
     must = must or []
@@ -102,35 +86,19 @@ def advanced_search(must=None, filter=None, search_in=None, user=None, accessibl
         if field == "content":
             must_clauses.append({"match": {"content": value}})
         else:
-            must_clauses.append({
-                "wildcard": {
-                    field: {
-                        "value": value,
-                        "case_insensitive": True
-                    }
-                }
-            })
+            must_clauses.append({"wildcard": {field: {"value": value, "case_insensitive": True}}})
 
-    # Build filter clauses
     filter_clauses = []
     for f in filter:
         filter_clauses.append({"term": {f["field"]: f["value"]}})
 
-    # Base search from the index mapping
-    s = FileIndex.search().update_from_dict({
-        "query": {
-            "bool": {
-                "must": must_clauses,
-                "filter": filter_clauses
-            }
-        }
-    })
+    body = {"query": {"bool": {"must": must_clauses, "filter": filter_clauses}}}
+    s = FileIndex.search().update_from_dict(body)
 
-    # Enforce tenancy
     if user is not None:
         s = s.filter(_tenant_q(user, accessible_ids))
 
-    # Optional trims/highlights
+    # Optional: field trimming / highlighting
     # s = s.source(excludes=["content"])
     # s = s.highlight("content", fragment_size=160, number_of_fragments=1)
 

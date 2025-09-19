@@ -91,6 +91,9 @@ class SemanticFileSearchView(APIView):
             "filters": filters,
         })
 
+        # ⬇️ add this line
+        cache.set(f"task_owner:{task.id}", request.user.id, timeout=3600)
+
         return Response({"task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 
@@ -216,6 +219,8 @@ class BulkReindexMissingView(APIView):
 
     def post(self, request):
         task = bulk_reindex.delay()
+        # ⬇️ bind owner (admin user)
+        cache.set(f"task_owner:{task.id}", request.user.id, timeout=3600)
         return Response(
             {"message": "Bulk re-index started", "task_id": task.id},
             status=status.HTTP_202_ACCEPTED,
@@ -358,6 +363,13 @@ class SearchResultView(APIView):
 
     def get(self, request, task_id, *args, **kwargs):
         task_id = str(task_id)
+
+        # ✅ verify caller owns this task_id
+        owner_id = cache.get(f"task_owner:{task_id}")
+        if owner_id is None or owner_id != request.user.id:
+            # Hide existence to avoid leaking task IDs
+            return Response({"status": "error", "error": "Not found"}, status=404)
+
         result = AsyncResult(task_id)
 
         if result.state == "PENDING":

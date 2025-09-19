@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "integrations",
     "cost_centre",
     "home_dash_analytics",
+    "email_management",
 ]
 
 MIDDLEWARE = [

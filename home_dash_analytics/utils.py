@@ -632,6 +632,60 @@ def build_top_searches(user: CustomUser, limit: int = 10):
         .order_by("-count")[: int(limit)]
     )
 
+# ── Celery-friendly entrypoint used by tasks.py ───────────────────────────────
+from typing import Optional, Dict, Any  # (redundant if already imported above)
+
+def gather_user_dashboard_metrics(
+    user: Optional[CustomUser] = None,
+    user_id: Optional[int] = None,
+    client_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    service_id: Optional[str] = None,
+    since: Optional[str] = None,
+    **_,
+) -> Dict[str, Any]:
+    """
+    Resolve the user (by object, user_id, or OAuth client_id) and build the
+    full dashboard metrics payload. This wrapper exists so Celery can import
+    a single symbol without pulling in the Celery app (avoids circulars).
+    """
+    # Resolve user if not provided
+    if user is None:
+        if user_id is not None:
+            user = CustomUser.objects.filter(id=user_id).first()
+        elif client_id:
+            user = get_user_from_client_id(client_id)
+        else:
+            return {
+                "error": "MISSING_USER",
+                "user_id": user_id,
+                "client_id": client_id,
+                "window": {"since": since or (_utcnow() - timedelta(days=DEFAULT_WINDOW_DAYS))},
+            }
+
+    if user is None:
+        return {
+            "error": "USER_NOT_FOUND",
+            "user_id": user_id,
+            "client_id": client_id,
+            "window": {"since": since or (_utcnow() - timedelta(days=DEFAULT_WINDOW_DAYS))},
+        }
+
+    # Delegate to the existing builder
+    return build_overview(
+        user=user,
+        project_id=project_id,
+        service_id=service_id,
+        since=since,
+    )
+
+# Ensure it’s exported if the module uses __all__
+try:
+    __all__  # type: ignore[name-defined]
+except NameError:
+    __all__ = []
+__all__ += ["gather_user_dashboard_metrics"]
+
 
 # Map for /section/<key>/ in views.py
 SECTIONS = {

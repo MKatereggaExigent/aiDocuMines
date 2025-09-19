@@ -1,3 +1,4 @@
+# grid_documents_interrogation/views.py
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -6,24 +7,22 @@ from rest_framework.response import Response
 from .models import Topic, Query, DatabaseConnection
 from .serializers import TopicSerializer, QuerySerializer, DatabaseConnectionSerializer
 from core.models import File
-from custom_authentication.models import CustomUser
 
 from django.shortcuts import get_object_or_404
-from django.utils.timezone import now
 from .tasks import process_file_query, process_db_query
-
 
 import csv
 from io import StringIO
 import os
-
 import pandas as pd
 
 from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query, test_connection
 from .file_readers import read_pdf_file
 
 
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Database connections
+# ──────────────────────────────────────────────────────────────────────────────
 class DatabaseConnectionViewSet(viewsets.ModelViewSet):
     serializer_class = DatabaseConnectionSerializer
     permission_classes = [IsAuthenticated]
@@ -32,19 +31,17 @@ class DatabaseConnectionViewSet(viewsets.ModelViewSet):
         return DatabaseConnection.objects.filter(owner=self.request.user)
 
     def perform_create(self, serializer):
+        # Save and re-fetch to ensure encrypted fields (like password) are readable for URI building
         instance = serializer.save(owner=self.request.user)
-        # 🔥 Force reloading to correctly decrypt encrypted fields (e.g. password)
         self._created_instance = DatabaseConnection.objects.get(pk=instance.pk)
 
     @action(detail=True, methods=["get"], url_path="test-connection")
     def test_connection_view(self, request, pk=None):
-        # 🔄 Try to use freshly reloaded instance if available
         db_conn = getattr(self, "_created_instance", None)
         if not db_conn or str(db_conn.pk) != pk:
             db_conn = get_object_or_404(DatabaseConnection, pk=pk, owner=request.user)
 
         connection_uri = db_conn.build_connection_uri()
-
         try:
             test_connection(connection_uri)
             return Response({"success": "Connection successful."})
@@ -52,30 +49,9 @@ class DatabaseConnectionViewSet(viewsets.ModelViewSet):
             return Response({"error": str(e)}, status=500)
 
 
-'''
-class DatabaseConnectionViewSet(viewsets.ModelViewSet):
-    serializer_class = DatabaseConnectionSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return DatabaseConnection.objects.filter(owner=self.request.user)
-
-    def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
-
-    @action(detail=True, methods=["get"], url_path="test-connection")
-    def test_connection_view(self, request, pk=None):
-        db_conn = get_object_or_404(DatabaseConnection, pk=pk, owner=request.user)
-        connection_uri = db_conn.build_connection_uri()
-
-        try:
-            test_connection(connection_uri)  # Implement this in db_query_tools
-            return Response({"success": "Connection successful."})
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-'''
-
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Topics
+# ──────────────────────────────────────────────────────────────────────────────
 class TopicViewSet(viewsets.ModelViewSet):
     serializer_class = TopicSerializer
     permission_classes = [IsAuthenticated]
@@ -90,7 +66,6 @@ class TopicViewSet(viewsets.ModelViewSet):
     def summary(self, request, pk=None):
         topic = self.get_object()
         files = topic.files.all()
-
         summary = {
             "id": topic.id,
             "project_id": topic.project_id,
@@ -114,25 +89,18 @@ class TopicViewSet(viewsets.ModelViewSet):
         topic = self.get_object()
         latest_file = topic.files.order_by('-created_at').first()
         if latest_file:
-            return Response({
-                "file_id": latest_file.id,
-                "file_name": latest_file.filename
-            })
+            return Response({"file_id": latest_file.id, "file_name": latest_file.filename})
         return Response({"active_file": None})
-
 
     @action(detail=True, methods=["post"])
     def attach_file(self, request, pk=None):
         topic = self.get_object()
         file_id = request.data.get("file_id")
-
         if not file_id:
             return Response({"error": "file_id is required"}, status=400)
-
         file_obj = get_object_or_404(File, id=file_id)
         topic.files.add(file_obj)
         return Response({"message": f"File {file_obj.filename} attached to topic {topic.id}."}, status=200)
-
 
     @action(detail=False, methods=['post'], url_path='start-interrogation')
     def start_interrogation(self, request):
@@ -179,7 +147,9 @@ class TopicViewSet(viewsets.ModelViewSet):
         })
 
 
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Queries
+# ──────────────────────────────────────────────────────────────────────────────
 class QueryViewSet(viewsets.ModelViewSet):
     serializer_class = QuerySerializer
     permission_classes = [IsAuthenticated]
@@ -190,53 +160,90 @@ class QueryViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
-
     @action(detail=False, methods=['post'], url_path='ask')
     def ask_query(self, request):
+        """
+        Body:
+        {
+          "topic_id": <int>,
+          "query_text": "...",
+          "data_source": "file" | "db",
+          "file_id": <int>,                # when data_source="file"
+          "connection_string": "...",      # optional; if omitted, uses Topic.db_connection
+          "table": "users",                # for DB
+          "llm_config": { "provider": "openai", "model": "gpt-4o-mini", ... }
+        }
+        """
         topic_id = request.data.get("topic_id")
         query_text = request.data.get("query_text")
-        data_source = request.data.get("data_source", "file")
+        data_source = (request.data.get("data_source") or "file").lower()
         file_id = request.data.get("file_id")
 
-        llm_config = request.data.get("llm_config", {
+        llm_config = request.data.get("llm_config") or {
             "provider": "openai",
-            "model": "gpt-4o"
-        })
+            "model": "gpt-4o-mini"
+        }
 
         if not topic_id or not query_text:
             return Response({"error": "topic_id and query_text are required."}, status=400)
 
         topic = get_object_or_404(Topic, id=topic_id, user=request.user)
 
-
-        if not topic.has_data_source:
+        if not topic.has_data_source and data_source != "db":
             return Response({
                 "error": "No data source connected to this topic. Attach a file or link a database connection."
             }, status=400)
 
-
-        # 🧠 Build conversation memory
+        # Build conversation memory
         previous_messages = []
-        past_queries = Query.objects.filter(topic=topic).order_by('created_at')
-        for q in past_queries:
-            previous_messages.append({"role": "user", "content": q.query_text})
-            previous_messages.append({"role": "assistant", "content": q.response_text})
+        for q in Query.objects.filter(topic=topic).order_by('created_at'):
+            if q.query_text and isinstance(q.query_text, str) and q.query_text.strip():
+                previous_messages.append({"role": "user", "content": q.query_text})
+            if q.response_text and isinstance(q.response_text, str) and q.response_text.strip():
+                previous_messages.append({"role": "assistant", "content": q.response_text})
 
         try:
+            file = None
             if data_source == "file":
                 if not file_id:
                     return Response({"error": "file_id is required for file-based queries."}, status=400)
-
                 file = get_object_or_404(File, id=file_id)
-                task = process_file_query.delay(query_text, file.filepath, llm_config, previous_messages=previous_messages)
+
+                # NEW: fast path (use cached text via file_id)
+                task = process_file_query.delay(
+                    query_text=query_text,
+                    file_id=file.id,
+                    llm_config=llm_config,
+                    previous_messages=previous_messages
+                )
+
             elif data_source == "db":
                 connection_string = request.data.get("connection_string")
                 table_name = request.data.get("table")
-                task = process_db_query.delay(query_text, connection_string, table_name, llm_config, previous_messages=previous_messages)
-                file = None
+
+                # If connection_string is not supplied, try topic.db_connection
+                if not connection_string:
+                    if topic.db_connection:
+                        connection_string = topic.db_connection.build_connection_uri()
+                    else:
+                        return Response(
+                            {"error": "Missing connection_string and no DB connection linked to topic."},
+                            status=400
+                        )
+                if not table_name:
+                    return Response({"error": "Missing 'table' for DB query."}, status=400)
+
+                task = process_db_query.delay(
+                    query_text,
+                    connection_string,
+                    table_name,
+                    llm_config,
+                    previous_messages=previous_messages
+                )
             else:
                 return Response({"error": "Invalid data_source. Must be 'file' or 'db'."}, status=400)
 
+            # Synchronously wait for Celery result (kept same as your existing flow)
             result = task.get(timeout=60)
 
             query = Query.objects.create(
@@ -251,7 +258,6 @@ class QueryViewSet(viewsets.ModelViewSet):
 
         except Exception as e:
             return Response({"error": f"Query processing failed: {str(e)}"}, status=500)
-
 
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
@@ -287,7 +293,10 @@ class QueryViewSet(viewsets.ModelViewSet):
         if file and not Query.objects.filter(file=file).exists():
             file.delete()
             if file_path and os.path.exists(file_path):
-                os.remove(file_path)
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
 
         return Response({"success": "Query and associated file deleted."})
 
@@ -318,22 +327,23 @@ class QueryViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='reask')
     def reask_query(self, request, pk=None):
+        """
+        Re-ask with history. Supports file-based follow-ups (fast path via file_id).
+        """
         original = get_object_or_404(Query, id=pk, user=request.user)
         new_query_text = request.data.get("query_text", original.query_text)
         llm_config = request.data.get("llm_config", {
             "provider": "openai",
-            "model": "gpt-4o"
+            "model": "gpt-4o-mini"
         })
 
-        # Retrieve previous queries in topic as message history
+        # Build memory from topic history
         previous_queries = Query.objects.filter(
             topic=original.topic,
             user=request.user,
         ).order_by('created_at')
 
-
         previous_messages = []
-
         for q in previous_queries:
             try:
                 if q.query_text and isinstance(q.query_text, str) and q.query_text.strip():
@@ -343,29 +353,20 @@ class QueryViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 print(f"[⚠️ Skipped bad query ID {q.id} due to: {e}]")
 
-        # 🔍 Check if we have any usable memory
-        if not previous_messages:
-            print("[ℹ️ No previous chat history, treating as fresh query]")
-
-
-        if not previous_messages:
-            response_meta = {"note": "No previous messages — treated as fresh query."}
-        else:
-            response_meta = {"note": f"Used {len(previous_messages)} prior messages as context."}
-
-        # Now ask again using the new input with history
         if original.file:
-            from .utils import execute_file_query  # Ensure this is imported
             try:
-                result = execute_file_query(
+                # NEW: route via Celery fast path with file_id
+                task = process_file_query.delay(
                     query_text=new_query_text,
-                    file_path=original.file.filepath,
+                    file_id=original.file.id,
                     llm_config=llm_config,
                     previous_messages=previous_messages
                 )
+                result = task.get(timeout=60)
             except Exception as e:
-                return Response({"error": f"Follow-up query failed: {str(e)}"}, status=500)
+                return Response({"error": f"Follow-up query failed: {e}"}, status=500)
         else:
+            # Optional: add DB re-ask path using topic.db_connection if you want
             return Response({"error": "Re-ask is only supported for file-based queries for now."}, status=400)
 
         new_query = Query.objects.create(
@@ -375,7 +376,6 @@ class QueryViewSet(viewsets.ModelViewSet):
             query_text=new_query_text,
             response_text=result
         )
-
         return Response(QuerySerializer(new_query).data)
 
     @action(detail=False, methods=['get'], url_path='chat-history')
@@ -385,7 +385,6 @@ class QueryViewSet(viewsets.ModelViewSet):
             return Response({"error": "Missing topic_id"}, status=400)
 
         topic = get_object_or_404(Topic, id=topic_id, user=request.user)
-
         queries = Query.objects.filter(topic=topic, user=request.user).order_by('created_at')
 
         history = []
@@ -398,7 +397,6 @@ class QueryViewSet(viewsets.ModelViewSet):
             "topic_name": topic.name,
             "messages": history
         })
-
 
     @action(detail=False, methods=['get'], url_path='ocr-preview')
     def ocr_preview(self, request):
@@ -415,8 +413,25 @@ class QueryViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], url_path='db-inspect')
     def db_inspect(self, request):
+        """
+        Lightweight peek into a table.
+        Body: { "connection_string": "...", "table": "users" }
+        If connection_string omitted, will attempt to use Topic=db_connection if provided via ?topic_id=...
+        """
         connection_string = request.data.get("connection_string")
         table_name = request.data.get("table")
+        if not table_name:
+            return Response({"error": "table is required"}, status=400)
+
+        # Optional: allow topic_id to reuse linked DB connection
+        topic_id = request.query_params.get("topic_id")
+        if not connection_string and topic_id:
+            topic = get_object_or_404(Topic, id=topic_id, user=request.user)
+            if topic.db_connection:
+                connection_string = topic.db_connection.build_connection_uri()
+
+        if not connection_string:
+            return Response({"error": "connection_string is required (or provide ?topic_id with a linked DB)."}, status=400)
 
         try:
             cols = fetch_column_names(connection_string, table_name)
