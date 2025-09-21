@@ -13,14 +13,15 @@ from document_anonymizer.utils import compute_global_anonymization_stats
 from document_anonymizer.models import AnonymizationStats
 from django.contrib.auth import get_user_model
 # from platform_data_insights.utils import calculate_anonymization_insights
-from document_anonymizer.utils import calculate_anonymization_insights
+from document_anonymizer.utils import calculate_anonymization_insights, get_shared_anonymization_service
 
 
 User = get_user_model()
 
 
 logger = logging.getLogger(__name__)
-service = AnonymizationService()
+# service = AnonymizationService()
+service = get_shared_anonymization_service() 
 
 @shared_task
 def anonymize_document_task(file_id, file_type="plain", run_id=None):
@@ -97,7 +98,7 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
             return {"error": "No extractable content", "file_id": file_id}
         # make a single synthetic block so the rest of the pipeline can run uniformly
         elements_json = [{"element_id": "raw-0", "type": "Text", "text": raw_text}]
-
+        structured_text = raw_text                  # ✅ ensure downstream writes/HTML have text
 
     #try:
     #    structured_text, _, elements_json = service.extract_structured_text(file_entry.filepath)
@@ -128,6 +129,8 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
         f.write(final_masked_doc)
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(global_combined_map, f, indent=4)
+
+    ''' 
     with open(structured_json_path, "w", encoding="utf-8") as f:
         json.dump(updated_blocks, f, indent=2)
     with open(structured_txt_path, "w", encoding="utf-8") as f:
@@ -148,11 +151,36 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
     except Exception as e:
         logger.warning(f"⚠️ Structured HTML generation failed: {e}")
         structured_html_path = None
+    '''
+    
+    # these are fine once structured_text is guaranteed non-None
+    with open(structured_json_path, "w", encoding="utf-8") as f:
+        json.dump(updated_blocks, f, indent=2)
+    with open(structured_txt_path, "w", encoding="utf-8") as f:
+        f.write(structured_text)
+
+    try:
+        html_content = generate_anonymized_html(final_masked_doc, global_combined_map)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    except Exception as e:
+        logger.warning(f"⚠️ HTML generation failed: {e}")
+        html_path = None
+
+    try:
+        raw_html = generate_anonymized_html(structured_text, {})  # ✅ structured_text is a string now
+        with open(structured_html_path, "w", encoding="utf-8") as f:
+            f.write(raw_html)
+    except Exception as e:
+        logger.warning(f"⚠️ Structured HTML generation failed: {e}")
+        structured_html_path = None
+
 
     # risk_result = service.compute_risk_score(final_masked_doc, global_presidio_map, global_spacy_map)
 
 
     # Get original text from File model (prefer DB content, else read file)
+    '''
     original_for_risk = file_entry.content
     if not original_for_risk:
         try:
@@ -160,6 +188,19 @@ def anonymize_document_task(file_id, file_type="plain", run_id=None):
                 original_for_risk = f.read()
         except Exception:
             original_for_risk = final_masked_doc  # last resort fallback
+    '''
+
+    original_for_risk = file_entry.content
+    if not original_for_risk:
+        try:
+            extracted_text, _, _ = service.extract_text_from_file(file_entry.filepath)
+            original_for_risk = extracted_text or ""
+        except Exception:
+            original_for_risk = ""
+
+    if not original_for_risk.strip():
+        original_for_risk = final_masked_doc  # last resort
+
 
     risk_result = service.compute_risk_score(original_for_risk, global_presidio_map, global_spacy_map)
 
@@ -294,6 +335,7 @@ def deanonymize_document_task(file_id):
     return {"file_id": file_id, "deanonymized_txt": txt_path, "status": "Completed"}
 
 
+'''
 @shared_task
 def compute_risk_score_task(file_id):
     logger.info(f"📊 Computing risk score for file_id={file_id}")
@@ -341,6 +383,53 @@ def compute_risk_score_task(file_id):
         "risk_score": risk_result["risk_score"],
         "risk_level": risk_result["risk_level"],
         "breakdown": risk_result["breakdown"]
+    }
+'''
+
+@shared_task
+def compute_risk_score_task(file_id):
+    logger.info(f"📊 Computing risk score for file_id={file_id}")
+    file_entry = get_object_or_404(File, id=file_id)
+    instance = Anonymize.objects.filter(original_file=file_entry, is_active=True).first()
+    if not instance:
+        return {"error": "No active anonymized file found."}
+
+    presidio_map = instance.presidio_masking_map or {}
+    spacy_map    = instance.spacy_masking_map or {}
+
+    # Prefer DB text; else extract with service; else fail over to masked
+    original_for_risk = file_entry.content
+    if not original_for_risk:
+        try:
+            extracted_text, _, _ = service.extract_text_from_file(file_entry.filepath)
+            original_for_risk = extracted_text or ""
+        except Exception:
+            original_for_risk = ""
+
+    if not original_for_risk.strip():
+        # still nothing; fallback to masked text on disk if available
+        if instance.anonymized_filepath and os.path.exists(instance.anonymized_filepath):
+            try:
+                with open(instance.anonymized_filepath, "r", encoding="utf-8") as f:
+                    original_for_risk = f.read()
+            except Exception:
+                original_for_risk = ""
+
+    if not original_for_risk.strip():
+        return {"error": "No source text available for risk scoring"}
+
+    risk_result = service.compute_risk_score(original_for_risk, presidio_map, spacy_map)
+
+    instance.risk_score     = risk_result["risk_score"]
+    instance.risk_level     = risk_result["risk_level"]
+    instance.risk_breakdown = risk_result["breakdown"]
+    instance.save(update_fields=["risk_score", "risk_level", "risk_breakdown", "updated_at"])
+
+    return {
+        "file_id": file_id,
+        "risk_score": risk_result["risk_score"],
+        "risk_level": risk_result["risk_level"],
+        "breakdown": risk_result["breakdown"],
     }
 
 

@@ -13,6 +13,7 @@ from document_anonymizer.models import Anonymize
 from django.db.models import Avg, Count, Q
 from document_anonymizer.models import AnonymizationRun, Anonymize, DeAnonymize
 
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +139,13 @@ class AnonymizationService:
         fully_restored = self.reverse_masking(partially_restored, presidio_mapping)
         return fully_restored
 
+
     def reverse_masking(self, text, entity_mapping):
         for mask, original in sorted(entity_mapping.items(), key=lambda x: len(x[0]), reverse=True):
-            pattern = re.compile(r'\\b' + re.escape(mask) + r'\\b')
+            pattern = re.compile(r'\b' + re.escape(mask) + r'\b')
             text = pattern.sub(original, text)
         return text
+
 
     def get_file_path(self, original_file_path, folder="anonymized", extension="txt"):
         directory = os.path.join(os.path.dirname(original_file_path), folder)
@@ -157,44 +160,354 @@ class AnonymizationService:
                 return True
         return False
 
-    def compute_risk_score(self, original_text, presidio_map, spacy_map):
+    '''
+    def compute_risk_score(self, original_text: str, presidio_map: dict, spacy_map: dict):
         """
-        Calculates the document risk score and entity breakdown based on Presidio + SpaCy results.
+        Comprehensive PII risk scoring using Presidio + spaCy.
+
+        - De-dupes by (normalized_value, label) across engines
+        - Weights labels by severity (gov IDs/financial IDs > medical > contact > generic)
+        - Scales by density per 1,000 tokens (document-size proportional)
+        - Covers full spaCy NER (OntoNotes) + the Presidio entities you enumerated
+        - Still resilient to unknown/custom labels (sane defaults)
+
+        Returns:
+          {
+            "risk_score": float (0..100),
+            "risk_level": "Ok" | "Low" | "Medium" | "High",
+            "breakdown": { label: count }
+          }
         """
-        total_tokens = len(original_text.split())
-        if total_tokens == 0:
-            return {
-                "risk_score": 0.0,
-                "risk_level": "Low",
-                "breakdown": {}
+        import re
+
+        text = (original_text or "").strip()
+        # token count (fallback to 1 to avoid div-by-zero)
+        doc_tokens = max(1, len(re.findall(r"\w+", text)))
+
+        # -------- helpers --------
+        def label_of(mask_key: str) -> str:
+            # e.g. "EMAIL_ADDRESS_MASKED_3" -> "EMAIL_ADDRESS"
+            return (mask_key or "").split("_MASKED_")[0].upper().strip()
+
+        def norm_val(v: str) -> str:
+            # normalize entity surface form for de-duping
+            v = (v or "").strip().lower()
+            v = re.sub(r"\s+", " ", v)
+            return v
+
+        # -------- spaCy labels (canonical + common alternates) --------
+        SPACY_STD = {
+            "PERSON", "NORP", "FAC", "ORG", "GPE", "LOC", "PRODUCT", "EVENT",
+            "WORK_OF_ART", "LAW", "LANGUAGE", "DATE", "TIME", "PERCENT", "MONEY",
+            "QUANTITY", "ORDINAL", "CARDINAL"
+        }
+        # multilingual / alternate label forms you mentioned
+        SPACY_ALIASES = {
+            "PER": "PERSON",
+            "ORG": "ORG",
+            "LOC": "LOC",
+            "MISC": "MISC",
+        }
+
+        # -------- Presidio entities (from your lists) --------
+        # Finance / credentials
+        PRES_FINANCE_STRICT = {
+            "CREDIT_CARD", "US_BANK_NUMBER", "IBAN_CODE", "CRYPTO",
+        }
+        # Contact & network
+        PRES_CONTACT = {
+            "EMAIL_ADDRESS", "PHONE_NUMBER", "IP_ADDRESS", "URL",
+        }
+        # Generic person/location (Presidio’s logical entities)
+        PRES_GENERIC = {"PERSON", "LOCATION", "NRP"}  # NRP ~ NORP
+        # Medical
+        PRES_MEDICAL = {"MEDICAL_LICENSE", "UK_NHS", "AU_MEDICARE"}
+        # US IDs
+        PRES_US = {"US_SSN", "US_ITIN", "US_PASSPORT", "US_DRIVER_LICENSE"}
+        # UK
+        PRES_UK = {"UK_NHS", "UK_NINO"}
+        # Spain
+        PRES_ES = {"ES_NIF", "ES_NIE"}
+        # Italy
+        PRES_IT = {"IT_FISCAL_CODE", "IT_DRIVER_LICENSE", "IT_VAT_CODE", "IT_PASSPORT", "IT_IDENTITY_CARD"}
+        # Poland
+        PRES_PL = {"PL_PESEL"}
+        # Singapore
+        PRES_SG = {"SG_NRIC_FIN", "SG_UEN"}
+        # Australia
+        PRES_AU = {"AU_ABN", "AU_ACN", "AU_TFN", "AU_MEDICARE"}
+        # India
+        PRES_IN = {"IN_PAN", "IN_AADHAAR", "IN_VEHICLE_REGISTRATION", "IN_VOTER", "IN_PASSPORT"}
+        # Finland
+        PRES_FI = {"FI_PERSONAL_IDENTITY_CODE"}
+        # Korea
+        PRES_KR = {"KR_RRN"}
+        # Thailand
+        PRES_TH = {"TH_TNIN"}
+        # Date/time (Presidio combined)
+        PRES_DATETIME = {"DATE_TIME"}
+
+        # -------- severity groups (weights) --------
+        # High severity: government/strong identifiers and financial credentials
+        HIGH = (
+            PRES_FINANCE_STRICT
+            | PRES_US | PRES_UK | PRES_ES | PRES_IT | PRES_PL | PRES_SG
+            | PRES_AU | PRES_IN | PRES_FI | PRES_KR | PRES_TH
+            | {"IT_PASSPORT", "IN_PASSPORT"}  # already included above; kept for clarity
+        )
+        # Medium-High: medical identifiers (very sensitive); some org ID numbers
+        MED_HIGH = PRES_MEDICAL | {"SG_UEN", "AU_ABN", "AU_ACN", "IT_VAT_CODE"}
+        # Medium: direct contact/trackers + demographic groupings
+        MED = PRES_CONTACT | {"NRP", "NORP"}
+        # Low+: generic entities and temporal/values
+        LOW = (
+            PRES_GENERIC
+            | PRES_DATETIME
+            | {
+                "PERSON", "GPE", "LOC", "ORG", "FAC", "PRODUCT", "EVENT", "WORK_OF_ART",
+                "LAW", "LANGUAGE", "DATE", "TIME", "PERCENT", "MONEY",
+                "QUANTITY", "ORDINAL", "CARDINAL", "MISC"
             }
+        )
 
-        # Combine all entities
-        all_entities = {**presidio_map, **spacy_map}
-        total_sensitive_entities = len(all_entities)
+        def canonicalize_label(raw: str) -> str:
+            L = (raw or "").upper().strip()
+            # unify spaCy alternates (PER→PERSON etc.)
+            if L in SPACY_ALIASES:
+                return SPACY_ALIASES[L]
+            return L
 
-        risk_score = round((total_sensitive_entities / total_tokens) * 100, 2)
+        def weight_for(label: str) -> float:
+            L = canonicalize_label(label)
+            if L in HIGH:      return 8.0
+            if L in MED_HIGH:  return 6.0
+            if L in MED:       return 4.5
+            if L in LOW:       return 2.5
+            # Fallback heuristics (catch unknown/custom labels)
+            if re.search(r"(SSN|PASSPORT|DRIVER|LICENSE|NINO|NRIC|PESEL|TFN|AADHAAR|RRN|TNIN|ID(ENTITY)?|IBAN|BANK|ACCOUNT|CREDIT|CARD|CRYPTO)", L):
+                return 7.0
+            if re.search(r"(EMAIL|PHONE|MOBILE|TEL|IP|URL|DOMAIN)", L):
+                return 4.0
+            if re.search(r"(DATE|TIME|MONEY|PERCENT|QUANTITY|ORDINAL|CARDINAL)", L):
+                return 2.0
+            return 3.0  # sensible default
 
-        # Risk level thresholds
-        if risk_score <= 10:
-            risk_level = "Low"
-        elif risk_score <= 30:
-            risk_level = "Medium"
-        else:
-            risk_level = "High"
+        # -------- merge & de-duplicate across engines --------
+        merged = {}  # (value_norm, label) -> entry
+        def ingest(src_map: dict):
+            for mask, val in (src_map or {}).items():
+                raw_label = label_of(mask)
+                label = canonicalize_label(raw_label)
+                v_norm = norm_val(val)
+                if not v_norm:
+                    continue
+                key = (v_norm, label)
+                entry = merged.setdefault(key, {
+                    "value": v_norm,
+                    "label": label,
+                    "count": 0,
+                    "weight": weight_for(label),
+                    "tokens": len(re.findall(r"\w+", v_norm)),
+                    "chars": len(v_norm),
+                })
+                entry["count"] += 1
 
-        # Category breakdown
-        entity_breakdown = {}
-        for key in all_entities.keys():
-            category = key.split("_MASKED_")[0]
-            entity_breakdown[category] = entity_breakdown.get(category, 0) + 1
+        ingest(presidio_map or {})
+        ingest(spacy_map or {})
+
+        # -------- aggregate & scale --------
+        total_occurrences = sum(e["count"] for e in merged.values())
+        total_weighted    = sum(e["weight"] * e["count"] for e in merged.values())
+
+        # density per 1k tokens => doc-size proportional
+        density_per_1k  = (total_occurrences / doc_tokens) * 1000.0
+        severity_per_1k = (total_weighted    / doc_tokens) * 1000.0
+
+        # Blend density (60%) + severity (40%), each with a soft cap
+        risk = (
+            min(1.0, density_per_1k  / 20.0) * 0.60 +
+            min(1.0, severity_per_1k / 30.0) * 0.40
+        ) * 100.0
+        risk_score = round(min(100.0, risk), 2)
+
+        if   risk_score >= 60: risk_level = "High"
+        elif risk_score >= 20: risk_level = "Medium"
+        elif risk_score >  0:  risk_level = "Low"
+        else:                  risk_level = "Ok"
+
+        breakdown = {}
+        for e in merged.values():
+            breakdown[e["label"]] = breakdown.get(e["label"], 0) + e["count"]
 
         return {
             "risk_score": risk_score,
             "risk_level": risk_level,
-            "breakdown": entity_breakdown
+            "breakdown": dict(sorted(breakdown.items(), key=lambda kv: (-kv[1], kv[0]))),
+        }
+    '''
+
+
+    def compute_risk_score(self, original_text: str, presidio_map: dict, spacy_map: dict):
+        """
+        Mask-aware, size-fair PII risk scoring.
+
+        Key ideas:
+          - Ignore spaCy hits whose *value* contains Presidio masks (e.g. "..._MASKED_7")
+            to avoid label pollution like ORG=“US_DRIVER_LICENSE_MASKED_2...”.
+          - De-dupe by (normalized value, label) across engines.
+          - Count per-label with diminishing returns (1st hit counts most, repeats count less).
+          - Normalize by document length (per ~1k tokens) with a floor so short docs aren’t over-penalized.
+          - Map to 0..100 via a logistic curve, so typical docs don’t hit 100.
+
+        Returns:
+          {
+            "risk_score": float,
+            "risk_level": "Ok" | "Low" | "Medium" | "High",
+            "breakdown": { label: count }
+          }
+        """
+        import re
+        import math
+
+        text = (original_text or "").strip()
+        # token count (fallback 1 to avoid div-by-zero)
+        doc_tokens = max(1, len(re.findall(r"\w+", text)))
+        # size normalization (per ~1k tokens) but don't penalize tiny docs too much
+        tokens_k = max(0.5, doc_tokens / 1000.0)
+
+        # ---------- helpers -------------------------------------------------------
+        def label_of(mask_key: str) -> str:
+            return (mask_key or "").split("_MASKED_")[0].upper().strip()
+
+        def norm_val(v: str) -> str:
+            v = (v or "").strip()
+            v = re.sub(r"\s+", " ", v)
+            return v
+
+        # unify common spaCy aliases
+        SPACY_ALIASES = {"PER": "PERSON", "MISC": "MISC", "LOC": "LOC", "ORG": "ORG"}
+        def canon_spacy_label(lbl: str) -> str:
+            L = (lbl or "").upper().strip()
+            return SPACY_ALIASES.get(L, L)
+
+        # ---------- severity taxonomy (sync with risk_weight_for_label) -----------
+        HIGH = {
+            "CREDIT_CARD","US_BANK_NUMBER","IBAN_CODE","CRYPTO",
+            "US_SSN","US_ITIN","US_PASSPORT","US_DRIVER_LICENSE",
+            "UK_NINO","UK_NHS",
+            "ES_NIF","ES_NIE",
+            "IT_FISCAL_CODE","IT_DRIVER_LICENSE","IT_VAT_CODE","IT_PASSPORT","IT_IDENTITY_CARD",
+            "PL_PESEL",
+            "SG_NRIC_FIN","SG_UEN",
+            "AU_ABN","AU_ACN","AU_TFN","AU_MEDICARE",
+            "IN_PAN","IN_AADHAAR","IN_VEHICLE_REGISTRATION","IN_VOTER","IN_PASSPORT",
+            "FI_PERSONAL_IDENTITY_CODE","KR_RRN","TH_TNIN",
+        }
+        MED_HIGH = {"MEDICAL_LICENSE","UK_NHS","AU_MEDICARE","SG_UEN","AU_ABN","AU_ACN","IT_VAT_CODE"}
+        MED = {"EMAIL_ADDRESS","PHONE_NUMBER","IP_ADDRESS","URL","NRP","NORP"}
+        LOW = {
+            "PERSON","GPE","LOC","ORG","FAC","PRODUCT","EVENT","WORK_OF_ART","LAW","LANGUAGE",
+            "DATE","TIME","PERCENT","MONEY","QUANTITY","ORDINAL","CARDINAL","MISC","LOCATION","DATE_TIME"
         }
 
+        def weight_for(label: str) -> float:
+            L = label.upper().strip()
+            if L in HIGH: return 8.0
+            if L in MED_HIGH: return 6.0
+            if L in MED: return 4.5
+            if L in LOW: return 2.5
+            # Fallback heuristics for unknown/custom labels
+            if re.search(r"(SSN|PASSPORT|DRIVER|LICENSE|NINO|NRIC|PESEL|TFN|AADHAAR|RRN|TNIN|IBAN|BANK|ACCOUNT|CREDIT|CARD|CRYPTO)", L):
+                return 7.0
+            if re.search(r"(EMAIL|PHONE|MOBILE|TEL|IP|URL|DOMAIN)", L):
+                return 4.0
+            if re.search(r"(DATE|TIME|MONEY|PERCENT|QUANTITY|ORDINAL|CARDINAL)", L):
+                return 2.0
+            return 3.0
+
+        def group_k_for(label: str) -> float:
+            """
+            Diminishing-returns 'k' per severity group.
+            Smaller k => saturates faster (first hit counts most).
+            """
+            w = weight_for(label)
+            if w >= 8.0:  # HIGH
+                return 1.0
+            if w >= 6.0:  # MED_HIGH
+                return 1.5
+            if w >= 4.5:  # MED
+                return 2.0
+            return 3.0     # LOW/other
+
+        # ---------- mask-aware ingestion -----------------------------------------
+        MASK_TOKEN_RE = re.compile(r"\b([A-Z][A-Z_]+)_MASKED_\d+\b")
+
+        merged = {}  # key=(value_norm, label) -> entry
+
+        def add_entry(v_norm: str, label: str):
+            key = (v_norm, label)
+            e = merged.setdefault(key, {
+                "value": v_norm,
+                "label": label,
+                "count": 0,
+                "weight": weight_for(label),
+            })
+            e["count"] += 1
+
+        # 1) Presidio: always count original values with their own labels
+        for mask, val in (presidio_map or {}).items():
+            L = label_of(mask)
+            v_norm = norm_val(val)
+            if not v_norm:
+                continue
+            add_entry(v_norm, L)
+
+        # 2) spaCy: ignore any hit whose 'value' contains Presidio mask tokens
+        for mask, val in (spacy_map or {}).items():
+            raw_v = norm_val(val)
+            if not raw_v:
+                continue
+            # If spaCy value includes any *_MASKED_* tokens, it's derived from Presidio replacement -> skip
+            if "_MASKED_" in raw_v:
+                continue
+            L = canon_spacy_label(label_of(mask))
+            add_entry(raw_v, L)
+
+        # ---------- aggregate per label with diminishing returns ------------------
+        label_counts = {}
+        for e in merged.values():
+            label_counts[e["label"]] = label_counts.get(e["label"], 0) + e["count"]
+
+        # Diminishing-returns curve per label: f(n) = 1 - exp(-n/k)
+        # Then normalize by tokens_k (≈ per 1k tokens) and weight by severity.
+        raw = 0.0
+        for label, n in label_counts.items():
+            k = group_k_for(label)
+            diminishing = 1.0 - math.exp(-float(n) / k)
+            raw += (weight_for(label) * diminishing) / tokens_k
+
+        # ---------- logistic map to 0..100 (calibrated) --------------------------
+        # Tunables (alpha: steepness, beta: mid-point). Adjust if you want stricter/looser scoring.
+        alpha = 0.85
+        beta = 4.0
+        risk_score = 100.0 / (1.0 + math.exp(-alpha * (raw - beta)))
+        risk_score = round(risk_score, 2)
+
+        if   risk_score >= 70.0: risk_level = "High"
+        elif risk_score >= 35.0: risk_level = "Medium"
+        elif risk_score >  0.0:  risk_level = "Low"
+        else:                    risk_level = "Ok"
+
+        # breakdown = actual counted occurrences per canonical label
+        breakdown = dict(sorted(label_counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+        return {
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+            "breakdown": breakdown,
+            # (Optional) diagnostics you can log if needed:
+            # "doc_tokens": doc_tokens, "tokens_k": tokens_k, "raw": round(raw, 3)
+        }
 
 
 def generate_anonymized_html(masked_text, entity_mapping):
@@ -513,3 +826,95 @@ def calculate_anonymization_insights(user):
     insights["deanonymization_count"] = deanonymize_count
 
     return insights
+
+
+
+# Reuse one heavy service (spaCy + Presidio) per worker
+@lru_cache(maxsize=1)
+def get_shared_anonymization_service():
+    return AnonymizationService()
+
+def list_supported_entities_runtime():
+    """
+    Returns the actual label sets available at runtime.
+    Adds model/pipeline metadata, and avoids re-initializing heavy models.
+    """
+    data = {
+        "spacy": [],
+        "presidio": [],
+        "meta": {"spacy_model": None, "spacy_pipes": []}
+    }
+    try:
+        svc = get_shared_anonymization_service()
+
+        # spaCy
+        data["meta"]["spacy_model"] = getattr(getattr(svc, "nlp", None), "meta", {}).get("name")
+        data["meta"]["spacy_pipes"] = list(getattr(svc.nlp, "pipe_names", []))
+        if "ner" in getattr(svc.nlp, "pipe_names", []):
+            data["spacy"] = sorted(set(svc.nlp.get_pipe("ner").labels))
+
+        # Presidio
+        data["presidio"] = sorted(set(svc.analyzer.get_supported_entities()))
+    except Exception as e:
+        logger.warning(f"[entities] Introspection failed: {e}")
+
+    return data
+
+# --- Optional: expose the risk weights the scorer uses (handy for docs/UI) ---
+def risk_weight_for_label(label: str) -> float:
+    """
+    Keep this logic in sync with AnonymizationService.compute_risk_score().
+    Returns the numeric weight used for a given (possibly non-canonical) label.
+    """
+    import re
+    L = (label or "").upper().strip()
+    # quick aliasing
+    ALIASES = {"PER": "PERSON", "MISC": "MISC", "LOC": "LOC", "ORG": "ORG"}
+    L = ALIASES.get(L, L)
+
+    HIGH = {
+        # financial & strong IDs
+        "CREDIT_CARD","US_BANK_NUMBER","IBAN_CODE","CRYPTO",
+        # national IDs / passports / drivers / tax etc. (from your list)
+        "US_SSN","US_ITIN","US_PASSPORT","US_DRIVER_LICENSE",
+        "UK_NINO","UK_NHS",
+        "ES_NIF","ES_NIE",
+        "IT_FISCAL_CODE","IT_DRIVER_LICENSE","IT_VAT_CODE","IT_PASSPORT","IT_IDENTITY_CARD",
+        "PL_PESEL",
+        "SG_NRIC_FIN","SG_UEN",
+        "AU_ABN","AU_ACN","AU_TFN","AU_MEDICARE",
+        "IN_PAN","IN_AADHAAR","IN_VEHICLE_REGISTRATION","IN_VOTER","IN_PASSPORT",
+        "FI_PERSONAL_IDENTITY_CODE",
+        "KR_RRN",
+        "TH_TNIN",
+    }
+    MED_HIGH = {"MEDICAL_LICENSE","UK_NHS","AU_MEDICARE","SG_UEN","AU_ABN","AU_ACN","IT_VAT_CODE"}
+    MED = {"EMAIL_ADDRESS","PHONE_NUMBER","IP_ADDRESS","URL","NRP","NORP"}
+    LOW = {
+        "PERSON","GPE","LOC","ORG","FAC","PRODUCT","EVENT","WORK_OF_ART",
+        "LAW","LANGUAGE","DATE","TIME","PERCENT","MONEY","QUANTITY",
+        "ORDINAL","CARDINAL","MISC","LOCATION","DATE_TIME"
+    }
+
+    if L in HIGH: return 8.0
+    if L in MED_HIGH: return 6.0
+    if L in MED: return 4.5
+    if L in LOW: return 2.5
+
+    # fallbacks for unknown/custom labels
+    if re.search(r"(SSN|PASSPORT|DRIVER|LICENSE|NINO|NRIC|PESEL|TFN|AADHAAR|RRN|TNIN|IBAN|BANK|ACCOUNT|CREDIT|CARD|CRYPTO)", L):
+        return 7.0
+    if re.search(r"(EMAIL|PHONE|MOBILE|TEL|IP|URL|DOMAIN)", L):
+        return 4.0
+    if re.search(r"(DATE|TIME|MONEY|PERCENT|QUANTITY|ORDINAL|CARDINAL)", L):
+        return 2.0
+    return 3.0
+
+def list_supported_entities_with_weights():
+    """
+    Returns { label: weight } for all labels currently supported by either engine.
+    """
+    data = list_supported_entities_runtime()
+    labels = sorted(set(data.get("spacy", [])) | set(data.get("presidio", [])))
+    return {lbl: risk_weight_for_label(lbl) for lbl in labels}
+

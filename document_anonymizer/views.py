@@ -447,7 +447,10 @@ class DownloadStructuredTextView(APIView):
 
         if variant == "original":
             file = get_object_or_404(File, id=file_id)
-            path = file.filepath
+            if (file.file_type or "").startswith("text/"):
+                path = file.filepath
+            else:
+                return Response({"error": "Original structured text is not available for this file type."}, status=400)
         else:
             instance = get_object_or_404(Anonymize, original_file_id=file_id, is_active=True, file_type="structured")
             path = instance.anonymized_filepath
@@ -738,4 +741,25 @@ class AnonymizationInsightsView(APIView):
             "cached": False,
             "data": insights
         }, status=status.HTTP_200_OK)
+
+
+class SupportedEntitiesView(APIView):
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Lists the actual spaCy & Presidio entity labels available at runtime.",
+        tags=["Anonymization Insights"],
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter("include_weights", openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False)
+        ],
+        responses={200: "Success"},
+    )
+    def get(self, request):
+        from document_anonymizer.utils import list_supported_entities_runtime, list_supported_entities_with_weights
+        payload = list_supported_entities_runtime()
+        if str(request.query_params.get("include_weights", "false")).lower() == "true":
+            payload["weights"] = list_supported_entities_with_weights()
+        return Response(payload, status=200)
 

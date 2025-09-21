@@ -42,6 +42,9 @@ from core.tasks import process_bulk_metadata
 
 import mimetypes
 
+from document_anonymizer.models import AnonymizationRun
+from document_anonymizer.tasks import anonymize_document_task, compute_risk_score_task
+
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +266,43 @@ class FileUploadView(APIView):
                     logger.exception("❌ Failed to trigger indexing for file_id=%s. Error: %s", fresh.id, str(e))
 
 
+            def trigger_anonymization():
+                try:
+                    # Decide anonymization file_type for your pipeline
+                    # Use "structured" if you want JSON blocks; fallback to "plain"
+                    file_type = "structured" if fresh.file_type.lower() in [
+                        "application/pdf",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    ] else "plain"
+
+                    # Create a run record to track this anonymization
+                    anon_run = AnonymizationRun.objects.create(
+                        project_id=project_id,
+                        service_id=service_id,
+                        client_name=user.username or user.email,
+                        status="Processing",
+                        anonymization_type="Presidio"  # or "Presidio-Spacy" to match your choice
+                    )
+
+                    # Queue anonymization (idempotence handled inside the task if you prefer)
+                    anonymize_document_task.apply_async((fresh.id, file_type, str(anon_run.id)))
+
+                    # If your anonymize task doesn’t already compute risk, also queue this:
+                    compute_risk_score_task.apply_async((fresh.id,), countdown=0)
+
+                    # (Optional) log to EndpointResponseTable (like you do for indexing)
+                    EndpointResponseTable.objects.create(
+                        run=run,
+                        client=user,
+                        endpoint_name="/api/v1/document-anonymizer/submit-anonymization/",
+                        response_data={"auto_trigger": True, "file_id": fresh.id, "file_type": file_type},
+                        status="Pending"
+                    )
+                    logger.info("🔐 Auto-anonymization queued for file_id=%s (type=%s)", fresh.id, file_type)
+                except Exception:
+                    logger.exception("❌ Failed to queue anonymization for file_id=%s", fresh.id)
+
+
             if fresh.file_type.lower() not in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
                 logger.info("⏭️   Skipping indexing for unsupported type: %s", fresh.file_type)
             elif not getattr(getattr(user, "settings", None), "auto_index_enabled", True):
@@ -275,6 +315,9 @@ class FileUploadView(APIView):
 
             # NEW:
             transaction.on_commit(lambda: extract_document_text_task.delay(fresh.id))
+            
+            # queue after transaction commits (same pattern you use for indexing)
+            transaction.on_commit(trigger_anonymization)
 
             # Delete any old cached insights
             UserInsights.objects.filter(user=request.user).delete()

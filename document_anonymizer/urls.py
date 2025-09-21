@@ -20,6 +20,7 @@ from .views import (
     AnonymizationStatsResultView,
     AnonymizationStatsHistoryView,
     AnonymizationInsightsView,
+    SupportedEntitiesView,   # ← add this
     health_check
 )
 from .task_statuses import AnonymizationTaskStatusView
@@ -62,6 +63,9 @@ urlpatterns = [
 
     # ✅ NEW: Anonymization Insights
     path("anonymization-insights/", AnonymizationInsightsView.as_view(), name="anonymization-insights"),
+
+    # urlpatterns (add near the insights / stats routes)
+    path("supported-entities/", SupportedEntitiesView.as_view(), name="supported-entities"),
 
     # Health
     path("health/", health_check, name="health_check"),
