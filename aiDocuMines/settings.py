@@ -60,6 +60,11 @@ INSTALLED_APPS = [
     "cost_centre",
     "home_dash_analytics",
     "email_management",
+    "private_equity",
+    "class_actions",
+    "labor_employment",
+    "ip_litigation",
+    "regulatory_compliance",
 ]
 
 MIDDLEWARE = [

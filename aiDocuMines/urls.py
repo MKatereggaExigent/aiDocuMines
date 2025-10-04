@@ -116,6 +116,13 @@ urlpatterns = [
     # Email Management
     path("api/v1/email/", include("email_management.urls")),
 
+    # Legal Vertical APIs
+    path('api/v1/private-equity/', include('private_equity.urls')),
+    path('api/v1/class-actions/', include('class_actions.urls')),
+    path('api/v1/labor-employment/', include('labor_employment.urls')),
+    path('api/v1/ip-litigation/', include('ip_litigation.urls')),
+    path('api/v1/regulatory-compliance/', include('regulatory_compliance.urls')),
+
 ]
 
 # Serve static files for Swagger UI
