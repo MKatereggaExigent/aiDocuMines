@@ -7,10 +7,15 @@ from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
+import logging
+
+logger = logging.getLogger(__name__)
+
 from custom_authentication.permissions import IsClientOrAdmin
 from .models import (
     ComplianceRun, RegulatoryRequirement, PolicyMapping, DSARRequest,
-    DataInventory, RedactionTask, ComplianceAlert
+    DataInventory, RedactionTask, ComplianceAlert,
+    ServiceExecution, ServiceOutput
 )
 from .serializers import (
     ComplianceRunSerializer, RegulatoryRequirementSerializer, PolicyMappingSerializer,
@@ -894,3 +899,247 @@ class ComplianceReportView(APIView):
             "compliance_run_id": compliance_run_id,
             "report_type": report_type
         }, status=status.HTTP_202_ACCEPTED)
+
+
+class ServiceExecutionListCreateView(APIView):
+    """
+    API view for listing and creating service executions for Regulatory Compliance.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def get(self, request):
+        """List service executions with optional filtering."""
+        try:
+            # Get query parameters
+            compliance_run_id = request.query_params.get('compliance_run_id')
+            service_type = request.query_params.get('service_type')
+            status = request.query_params.get('status')
+
+            # Base queryset
+            queryset = ServiceExecution.objects.filter(user=request.user)
+
+            # Apply filters
+            if compliance_run_id:
+                queryset = queryset.filter(compliance_run_id=compliance_run_id)
+            if service_type:
+                queryset = queryset.filter(service_type=service_type)
+            if status:
+                queryset = queryset.filter(status=status)
+
+            # Order by most recent
+            queryset = queryset.order_by('-started_at')
+
+            # Serialize and return
+            data = []
+            for execution in queryset:
+                data.append({
+                    'id': str(execution.id),
+                    'compliance_run_id': execution.compliance_run.id if execution.compliance_run else None,
+                    'service_type': execution.service_type,
+                    'service_name': execution.service_name,
+                    'service_version': execution.service_version,
+                    'status': execution.status,
+                    'started_at': execution.started_at.isoformat(),
+                    'completed_at': execution.completed_at.isoformat() if execution.completed_at else None,
+                    'execution_time_seconds': execution.execution_time_seconds,
+                    'input_files': execution.input_files,
+                    'input_parameters': execution.input_parameters,
+                    'output_type': execution.output_type,
+                    'output_count': execution.output_count,
+                    'error_message': execution.error_message,
+                    'execution_metadata': execution.execution_metadata,
+                })
+
+            return Response({
+                'success': True,
+                'data': data,
+                'count': len(data)
+            })
+
+        except Exception as e:
+            logger.error(f"Error listing service executions: {str(e)}")
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def post(self, request):
+        """Create a new service execution record."""
+        try:
+            data = request.data
+
+            # Validate required fields
+            required_fields = ['service_type', 'service_name']
+            for field in required_fields:
+                if field not in data:
+                    return Response({
+                        'success': False,
+                        'error': f'Missing required field: {field}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get compliance run if provided
+            compliance_run = None
+            if 'compliance_run_id' in data:
+                try:
+                    compliance_run = ComplianceRun.objects.get(
+                        id=data['compliance_run_id'],
+                        user=request.user
+                    )
+                except ComplianceRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': 'Compliance run not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+            # Create service execution
+            execution = ServiceExecution.objects.create(
+                user=request.user,
+                compliance_run=compliance_run,
+                service_type=data['service_type'],
+                service_name=data['service_name'],
+                service_version=data.get('service_version', '1.0'),
+                status=data.get('status', 'pending'),
+                input_files=data.get('input_files', []),
+                input_parameters=data.get('input_parameters', {}),
+                output_type=data.get('output_type', 'json'),
+                output_count=data.get('output_count', 0),
+                execution_metadata=data.get('execution_metadata', {})
+            )
+
+            return Response({
+                'success': True,
+                'data': {
+                    'id': str(execution.id),
+                    'service_type': execution.service_type,
+                    'service_name': execution.service_name,
+                    'status': execution.status,
+                    'started_at': execution.started_at.isoformat()
+                }
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating service execution: {str(e)}")
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ServiceOutputListCreateView(APIView):
+    """
+    API view for listing and creating service outputs for Regulatory Compliance.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def get(self, request):
+        """List service outputs with optional filtering."""
+        try:
+            # Get query parameters
+            service_execution_id = request.query_params.get('service_execution_id')
+            output_type = request.query_params.get('output_type')
+
+            # Base queryset
+            queryset = ServiceOutput.objects.filter(
+                service_execution__user=request.user
+            )
+
+            # Apply filters
+            if service_execution_id:
+                queryset = queryset.filter(service_execution_id=service_execution_id)
+            if output_type:
+                queryset = queryset.filter(output_type=output_type)
+
+            # Order by most recent
+            queryset = queryset.order_by('-created_at')
+
+            # Serialize and return
+            data = []
+            for output in queryset:
+                data.append({
+                    'id': str(output.id),
+                    'service_execution_id': str(output.service_execution.id),
+                    'output_name': output.output_name,
+                    'output_type': output.output_type,
+                    'file_extension': output.file_extension,
+                    'mime_type': output.mime_type,
+                    'file_size': output.file_size,
+                    'download_url': output.download_url,
+                    'preview_url': output.preview_url,
+                    'is_primary': output.is_primary,
+                    'created_at': output.created_at.isoformat(),
+                    'output_metadata': output.output_metadata,
+                })
+
+            return Response({
+                'success': True,
+                'data': data,
+                'count': len(data)
+            })
+
+        except Exception as e:
+            logger.error(f"Error listing service outputs: {str(e)}")
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def post(self, request):
+        """Create a new service output record."""
+        try:
+            data = request.data
+
+            # Validate required fields
+            required_fields = ['service_execution_id', 'output_name', 'output_type']
+            for field in required_fields:
+                if field not in data:
+                    return Response({
+                        'success': False,
+                        'error': f'Missing required field: {field}'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get service execution
+            try:
+                service_execution = ServiceExecution.objects.get(
+                    id=data['service_execution_id'],
+                    user=request.user
+                )
+            except ServiceExecution.DoesNotExist:
+                return Response({
+                    'success': False,
+                    'error': 'Service execution not found'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Create service output
+            output = ServiceOutput.objects.create(
+                service_execution=service_execution,
+                output_name=data['output_name'],
+                output_type=data['output_type'],
+                file_extension=data.get('file_extension', ''),
+                mime_type=data.get('mime_type', ''),
+                file_size=data.get('file_size'),
+                output_data=data.get('output_data'),
+                output_text=data.get('output_text', ''),
+                download_url=data.get('download_url', ''),
+                preview_url=data.get('preview_url', ''),
+                is_primary=data.get('is_primary', False),
+                output_metadata=data.get('output_metadata', {})
+            )
+
+            return Response({
+                'success': True,
+                'data': {
+                    'id': str(output.id),
+                    'output_name': output.output_name,
+                    'output_type': output.output_type,
+                    'created_at': output.created_at.isoformat()
+                }
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating service output: {str(e)}")
+            return Response({
+                'success': False,
+                'error': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

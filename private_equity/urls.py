@@ -7,6 +7,8 @@ from .views import (
     FindingsReportView,
     RiskClauseSummaryView,
     DocumentTypeSummaryView,
+    ServiceExecutionListCreateView,
+    ServiceOutputListCreateView,
 )
 
 app_name = 'private_equity'
@@ -28,4 +30,8 @@ urlpatterns = [
     # Analytics and Summaries
     path('risk-clause-summary/', RiskClauseSummaryView.as_view(), name='risk-clause-summary'),
     path('document-type-summary/', DocumentTypeSummaryView.as_view(), name='document-type-summary'),
+
+    # Service Execution & Output Tracking
+    path('service-executions/', ServiceExecutionListCreateView.as_view(), name='service-executions'),
+    path('service-outputs/', ServiceOutputListCreateView.as_view(), name='service-outputs'),
 ]

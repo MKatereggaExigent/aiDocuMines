@@ -10,6 +10,8 @@ from .views import (
     DuplicateDetectionView,
     EvidenceSummaryView,
     IntakeFormSummaryView,
+    ServiceExecutionListCreateView,
+    ServiceOutputListCreateView,
 )
 
 app_name = 'class_actions'
@@ -40,4 +42,8 @@ urlpatterns = [
     # Analytics and Summaries
     path('evidence-summary/', EvidenceSummaryView.as_view(), name='evidence-summary'),
     path('intake-form-summary/', IntakeFormSummaryView.as_view(), name='intake-form-summary'),
+
+    # Service Execution Management
+    path('service-executions/', ServiceExecutionListCreateView.as_view(), name='service-executions'),
+    path('service-outputs/', ServiceOutputListCreateView.as_view(), name='service-outputs'),
 ]

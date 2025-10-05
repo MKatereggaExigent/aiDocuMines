@@ -12,6 +12,128 @@ from .models import (
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+# Import AI services (will be available in production)
+try:
+    from document_search.tasks import semantic_search_task, index_file_task
+    from file_elasticsearch.utils import search_files, index_file
+    from grid_documents_interrogation.tasks import ask_question_task
+    from document_translation.tasks import translate_document_task
+    from document_ocr.tasks import extract_text_task
+    AI_SERVICES_AVAILABLE = True
+except ImportError:
+    # For local development - AI services not yet available
+    AI_SERVICES_AVAILABLE = False
+    logger.warning("AI services not available locally - will be available in production")
+
+
+def call_ai_patent_analysis(file_obj, user, analysis_type='general'):
+    """
+    Use AI services to analyze patent documents.
+    Integrates with document_search (Milvus) and grid_documents_interrogation.
+    """
+    try:
+        if not AI_SERVICES_AVAILABLE:
+            # Fallback for local development
+            return _basic_patent_analysis(file_obj, analysis_type)
+
+        # Use semantic search to find similar patents
+        query_text = f"patent {analysis_type} {file_obj.filename}"
+        if hasattr(file_obj, 'content') and file_obj.content:
+            query_text += f" {file_obj.content[:500]}"
+
+        # Call semantic search service (internal Django app)
+        search_result = semantic_search_task.delay(
+            query=query_text,
+            top_k=10,
+            file_id=file_obj.id,
+            user_id=user.id
+        ).get(timeout=30)
+
+        # Use document Q&A for intelligent patent analysis
+        if analysis_type == 'claims':
+            question = "What are the independent and dependent claims in this patent? Analyze their scope and limitations."
+        elif analysis_type == 'prior_art':
+            question = "What prior art references are cited in this patent? Analyze their relevance to the claims."
+        elif analysis_type == 'infringement':
+            question = "Analyze this patent for potential infringement issues. What are the key claim elements?"
+        elif analysis_type == 'validity':
+            question = "Analyze this patent for validity issues. Are there potential prior art or obviousness concerns?"
+        else:
+            question = f"Analyze this patent document for {analysis_type} aspects"
+
+        qa_result = ask_question_task.delay(
+            query=question,
+            file_ids=[file_obj.id],
+            user_id=user.id
+        ).get(timeout=60)
+
+        # Process AI results
+        return _process_ai_patent_results(search_result, qa_result, analysis_type)
+
+    except Exception as e:
+        logger.error(f"AI patent analysis failed for file {file_obj.id}: {str(e)}")
+        return _basic_patent_analysis(file_obj, analysis_type)
+
+
+def call_ai_prior_art_search(patent_file, user, search_scope='comprehensive'):
+    """
+    Use AI services to search for prior art.
+    """
+    try:
+        if not AI_SERVICES_AVAILABLE:
+            return _basic_prior_art_search(patent_file, search_scope)
+
+        # Extract key concepts from patent for prior art search
+        question = "Extract the key technical concepts, innovations, and claim elements from this patent for prior art searching."
+
+        concept_result = ask_question_task.delay(
+            query=question,
+            file_ids=[patent_file.id],
+            user_id=user.id
+        ).get(timeout=30)
+
+        # Use semantic search to find similar prior art
+        if concept_result and 'answer' in concept_result:
+            search_query = f"prior art {concept_result['answer'][:200]}"
+
+            prior_art_result = semantic_search_task.delay(
+                query=search_query,
+                top_k=20,
+                user_id=user.id
+            ).get(timeout=60)
+
+            return _process_ai_prior_art_results(prior_art_result, patent_file)
+
+        return []
+
+    except Exception as e:
+        logger.error(f"AI prior art search failed: {str(e)}")
+        return _basic_prior_art_search(patent_file, search_scope)
+
+
+def call_ai_claim_construction(patent_file, user):
+    """
+    Use AI services for claim construction analysis.
+    """
+    try:
+        if not AI_SERVICES_AVAILABLE:
+            return _basic_claim_construction(patent_file)
+
+        # Use document Q&A for claim construction
+        question = "Provide a detailed claim construction analysis. For each claim element, identify: 1) Plain meaning, 2) Specification support, 3) Prosecution history, 4) Potential claim scope issues."
+
+        qa_result = ask_question_task.delay(
+            query=question,
+            file_ids=[patent_file.id],
+            user_id=user.id
+        ).get(timeout=60)
+
+        return _process_ai_claim_construction_results(qa_result, patent_file)
+
+    except Exception as e:
+        logger.error(f"AI claim construction failed: {str(e)}")
+        return _basic_claim_construction(patent_file)
+
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def extract_patent_data_task(self, patent_document_id, user_id):
@@ -606,3 +728,83 @@ def analyze_validity_task(self, validity_challenge_id, user_id):
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=120, exc=e)
         return {"status": "failed", "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔧 HELPER FUNCTIONS FOR AI INTEGRATION
+# ═══════════════════════════════════════════════════════════════
+
+def _basic_patent_analysis(file_obj, analysis_type):
+    """Basic patent analysis fallback for local development."""
+    filename_lower = file_obj.filename.lower()
+
+    # Basic analysis based on filename and type
+    analysis_result = {
+        'analysis_type': analysis_type,
+        'patent_type': 'utility' if 'utility' in filename_lower else 'unknown',
+        'complexity': 'medium',
+        'confidence': 0.3,
+        'findings': []
+    }
+
+    # Basic keyword detection for patent content
+    if hasattr(file_obj, 'content') and file_obj.content:
+        content_lower = file_obj.content.lower()
+        patent_keywords = ['claim', 'invention', 'embodiment', 'prior art', 'specification']
+
+        for keyword in patent_keywords:
+            if keyword in content_lower:
+                analysis_result['findings'].append(f"Found patent element: {keyword}")
+
+    return analysis_result
+
+
+def _basic_prior_art_search(patent_file, search_scope):
+    """Basic prior art search fallback for local development."""
+    return {
+        'patent_file': patent_file.filename,
+        'search_scope': search_scope,
+        'prior_art_found': [],
+        'search_summary': 'Basic search - AI services not available',
+        'confidence': 0.3
+    }
+
+
+def _basic_claim_construction(patent_file):
+    """Basic claim construction fallback for local development."""
+    return {
+        'patent_file': patent_file.filename,
+        'claim_elements': [],
+        'construction_summary': 'Basic construction - AI services not available',
+        'confidence': 0.3
+    }
+
+
+def _process_ai_patent_results(search_result, qa_result, analysis_type):
+    """Process AI patent analysis results."""
+    return {
+        'analysis_type': analysis_type,
+        'similar_patents': search_result.get('results', [])[:5] if search_result else [],
+        'ai_insights': qa_result.get('answer', '') if qa_result else '',
+        'confidence': qa_result.get('confidence', 0.5) if qa_result else 0.5
+    }
+
+
+def _process_ai_prior_art_results(prior_art_result, patent_file):
+    """Process AI prior art search results."""
+    return {
+        'patent_file': patent_file.filename,
+        'prior_art_documents': prior_art_result.get('results', []) if prior_art_result else [],
+        'relevance_scores': [],
+        'confidence': 0.7
+    }
+
+
+def _process_ai_claim_construction_results(qa_result, patent_file):
+    """Process AI claim construction results."""
+    return {
+        'patent_file': patent_file.filename,
+        'claim_analysis': qa_result.get('answer', '') if qa_result else '',
+        'construction_elements': [],
+        'confidence': qa_result.get('confidence', 0.5) if qa_result else 0.5
+    }

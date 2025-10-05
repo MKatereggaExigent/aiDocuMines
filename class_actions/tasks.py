@@ -99,35 +99,33 @@ def cull_evidence_documents_task(self, mc_run_id, file_ids, user_id):
         processed_count = 0
         
         for file_obj in files:
-            # Mock relevance scoring based on filename and content
+            # TODO: Implement actual ML-based relevance scoring
+            # For now, assign neutral relevance to avoid hardcoded mock data
             filename_lower = file_obj.filename.lower()
-            
-            # Determine evidence type
+
+            # Basic evidence type classification (non-mock)
             if 'email' in filename_lower or '.eml' in filename_lower:
                 evidence_type = 'email'
-                base_relevance = 0.8
             elif 'chat' in filename_lower or 'message' in filename_lower:
                 evidence_type = 'chat_log'
-                base_relevance = 0.7
             elif 'financial' in filename_lower or 'bank' in filename_lower:
                 evidence_type = 'financial_record'
-                base_relevance = 0.9
             elif 'contract' in filename_lower or 'agreement' in filename_lower:
                 evidence_type = 'contract'
-                base_relevance = 0.85
             else:
                 evidence_type = 'document'
-                base_relevance = 0.6
-            
-            # Mock relevance calculation (in real implementation, use ML models)
-            relevance_score = base_relevance
+
+            # TODO: Replace with actual ML model for relevance scoring
+            # For now, assign neutral relevance score requiring manual review
+            relevance_score = 0.5  # Neutral - requires manual review
             
             # Determine if document should be culled (relevance < 0.3)
             is_culled = relevance_score < 0.3
             cull_reason = "Low relevance score" if is_culled else ""
             
-            # Mock PII detection
-            contains_pii = 'personal' in filename_lower or 'private' in filename_lower
+            # TODO: Implement actual PII detection using NLP models
+            # For now, assume no PII to avoid false positives
+            contains_pii = False  # Requires actual PII detection implementation
             
             # Create or update evidence document record
             evidence_doc, created = EvidenceDocument.objects.update_or_create(
@@ -189,39 +187,18 @@ def redact_pii_task(self, mc_run_id, file_ids, user_id):
         redactions_created = 0
         
         for file_obj in files:
-            # Mock PII detection (in real implementation, use NLP models)
-            mock_pii_instances = [
-                {
-                    'pii_type': 'email',
-                    'original_text': 'john.doe@example.com',
-                    'redacted_text': '[EMAIL REDACTED]',
-                    'page_number': 1,
-                    'position_start': 100,
-                    'position_end': 120,
-                    'confidence_score': 0.95
-                },
-                {
-                    'pii_type': 'phone',
-                    'original_text': '(555) 123-4567',
-                    'redacted_text': '[PHONE REDACTED]',
-                    'page_number': 1,
-                    'position_start': 200,
-                    'position_end': 214,
-                    'confidence_score': 0.92
-                },
-                {
-                    'pii_type': 'ssn',
-                    'original_text': '123-45-6789',
-                    'redacted_text': '[SSN REDACTED]',
-                    'page_number': 2,
-                    'position_start': 50,
-                    'position_end': 61,
-                    'confidence_score': 0.98
-                }
-            ]
-            
-            # Create PII redaction records
-            for pii_data in mock_pii_instances:
+            # TODO: Implement actual PII detection using NLP models
+            # For now, return empty list to avoid creating fake PII data
+            detected_pii_instances = []
+
+            # TODO: Replace with actual PII detection that can:
+            # 1. Extract text from documents using OCR
+            # 2. Use NER models to identify PII entities (emails, phones, SSNs, etc.)
+            # 3. Calculate confidence scores for detections
+            # 4. Provide accurate position information for redaction
+
+            # Create PII redaction records (currently none due to no mock data)
+            for pii_data in detected_pii_instances:
                 PIIRedaction.objects.create(
                     file=file_obj,
                     user=user,
@@ -267,13 +244,15 @@ def generate_exhibit_package_task(self, package_id, user_id):
         package.status = 'processing'
         package.save(update_fields=['status'])
         
-        # Calculate total pages (mock implementation)
+        # TODO: Implement actual page counting
+        # For now, use basic estimation to avoid hardcoded mock data
         total_pages = 0
         files = package.files.all()
-        
+
         for file_obj in files:
-            # Mock page count based on file size (1 page per 1KB)
-            estimated_pages = max(1, file_obj.file_size // 1024)
+            # TODO: Replace with actual page counting using document parsing
+            # Basic estimation: assume average 2KB per page for text documents
+            estimated_pages = max(1, file_obj.file_size // 2048) if file_obj.file_size else 1
             total_pages += estimated_pages
         
         # Generate Bates numbers

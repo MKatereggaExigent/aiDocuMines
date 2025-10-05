@@ -12,8 +12,8 @@ import logging
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
 from core.models import File
 from .models import (
-    DueDiligenceRun, DocumentClassification, RiskClause, 
-    FindingsReport, DataRoomConnector
+    DueDiligenceRun, DocumentClassification, RiskClause,
+    FindingsReport, DataRoomConnector, ServiceExecution, ServiceOutput
 )
 from .serializers import (
     DueDiligenceRunSerializer, DueDiligenceRunCreateSerializer,
@@ -27,6 +27,15 @@ from .tasks import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Import AI services for enhanced document processing
+try:
+    from document_search.tasks import semantic_search_task, index_file
+    from file_elasticsearch.utils import search_files
+    AI_SERVICES_AVAILABLE = True
+except ImportError:
+    AI_SERVICES_AVAILABLE = False
+    logger.warning("AI services not available - falling back to basic processing")
 
 
 class DueDiligenceRunListCreateView(APIView):
@@ -455,3 +464,243 @@ class DocumentTypeSummaryView(APIView):
 
         serializer = DocumentTypeSummarySerializer(summary_data, many=True)
         return Response(serializer.data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔄 SERVICE EXECUTION & OUTPUT PERSISTENCE VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+class ServiceExecutionListCreateView(APIView):
+    """
+    List and create service executions for Private Equity services.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all service executions for the authenticated user",
+        tags=["Private Equity - Service Tracking"],
+        responses={200: "List of service executions"}
+    )
+    def get(self, request):
+        """List all service executions for the authenticated user"""
+        executions = ServiceExecution.objects.filter(user=request.user)
+
+        # Filter by due diligence run if provided
+        dd_run_id = request.query_params.get('due_diligence_run')
+        if dd_run_id:
+            executions = executions.filter(due_diligence_run_id=dd_run_id)
+
+        # Filter by service type if provided
+        service_type = request.query_params.get('service_type')
+        if service_type:
+            executions = executions.filter(service_type=service_type)
+
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            executions = executions.filter(status=status_filter)
+
+        # Serialize and return
+        data = []
+        for execution in executions:
+            data.append({
+                'id': execution.id,
+                'service_type': execution.service_type,
+                'service_name': execution.service_name,
+                'status': execution.status,
+                'started_at': execution.started_at,
+                'completed_at': execution.completed_at,
+                'duration': execution.duration,
+                'output_count': execution.output_count,
+                'output_type': execution.output_type,
+                'due_diligence_run': execution.due_diligence_run.id,
+                'execution_metadata': execution.execution_metadata
+            })
+
+        return Response(data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new service execution record",
+        tags=["Private Equity - Service Tracking"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'service_type': openapi.Schema(type=openapi.TYPE_STRING),
+                'service_name': openapi.Schema(type=openapi.TYPE_STRING),
+                'due_diligence_run': openapi.Schema(type=openapi.TYPE_INTEGER),
+                'input_parameters': openapi.Schema(type=openapi.TYPE_OBJECT),
+                'output_type': openapi.Schema(type=openapi.TYPE_STRING),
+                'execution_metadata': openapi.Schema(type=openapi.TYPE_OBJECT),
+            }
+        ),
+        responses={201: "Service execution created"}
+    )
+    def post(self, request):
+        """Create a new service execution record"""
+        try:
+            # Get or create due diligence run
+            dd_run_id = request.data.get('due_diligence_run')
+            if dd_run_id:
+                dd_run = get_object_or_404(DueDiligenceRun, id=dd_run_id, run__user=request.user)
+            else:
+                # Create a default DD run if none provided
+                from core.models import Run, Project
+                project = Project.objects.filter(user=request.user).first()
+                if not project:
+                    return Response(
+                        {'error': 'No project found. Please create a project first.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                run = Run.objects.create(
+                    user=request.user,
+                    project=project,
+                    name=f"Service Execution Run - {request.data.get('service_name', 'Unknown')}"
+                )
+
+                dd_run = DueDiligenceRun.objects.create(
+                    run=run,
+                    deal_name=f"Auto-generated for {request.data.get('service_name', 'Service')}",
+                    target_company="Auto-generated"
+                )
+
+            # Create service execution
+            execution = ServiceExecution.objects.create(
+                user=request.user,
+                due_diligence_run=dd_run,
+                service_type=request.data.get('service_type'),
+                service_name=request.data.get('service_name'),
+                service_version=request.data.get('service_version', '1.0'),
+                status=request.data.get('status', 'completed'),
+                input_parameters=request.data.get('input_parameters', {}),
+                output_type=request.data.get('output_type', 'json'),
+                output_count=request.data.get('output_count', 1),
+                execution_metadata=request.data.get('execution_metadata', {})
+            )
+
+            # Set completed_at if status is completed
+            if execution.status == 'completed':
+                from django.utils import timezone
+                execution.completed_at = timezone.now()
+                execution.save()
+
+            return Response({
+                'id': execution.id,
+                'service_type': execution.service_type,
+                'service_name': execution.service_name,
+                'status': execution.status,
+                'created_at': execution.created_at
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating service execution: {str(e)}")
+            return Response(
+                {'error': f'Failed to create service execution: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class ServiceOutputListCreateView(APIView):
+    """
+    List and create service outputs for Private Equity services.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all service outputs for the authenticated user",
+        tags=["Private Equity - Service Tracking"],
+        responses={200: "List of service outputs"}
+    )
+    def get(self, request):
+        """List all service outputs for the authenticated user"""
+        outputs = ServiceOutput.objects.filter(service_execution__user=request.user)
+
+        # Filter by service execution if provided
+        execution_id = request.query_params.get('service_execution')
+        if execution_id:
+            outputs = outputs.filter(service_execution_id=execution_id)
+
+        # Filter by output type if provided
+        output_type = request.query_params.get('output_type')
+        if output_type:
+            outputs = outputs.filter(output_type=output_type)
+
+        # Serialize and return
+        data = []
+        for output in outputs:
+            data.append({
+                'id': output.id,
+                'service_execution': output.service_execution.id,
+                'output_name': output.output_name,
+                'output_type': output.output_type,
+                'file_size': output.file_size,
+                'formatted_size': output.formatted_size,
+                'is_primary': output.is_primary,
+                'created_at': output.created_at,
+                'download_url': output.download_url,
+                'preview_url': output.preview_url,
+                'output_metadata': output.output_metadata
+            })
+
+        return Response(data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new service output record",
+        tags=["Private Equity - Service Tracking"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'service_execution': openapi.Schema(type=openapi.TYPE_STRING),
+                'output_name': openapi.Schema(type=openapi.TYPE_STRING),
+                'output_type': openapi.Schema(type=openapi.TYPE_STRING),
+                'output_data': openapi.Schema(type=openapi.TYPE_OBJECT),
+                'output_text': openapi.Schema(type=openapi.TYPE_STRING),
+                'file_size': openapi.Schema(type=openapi.TYPE_INTEGER),
+                'output_metadata': openapi.Schema(type=openapi.TYPE_OBJECT),
+                'is_primary': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+            }
+        ),
+        responses={201: "Service output created"}
+    )
+    def post(self, request):
+        """Create a new service output record"""
+        try:
+            # Get service execution
+            execution_id = request.data.get('service_execution')
+            execution = get_object_or_404(ServiceExecution, id=execution_id, user=request.user)
+
+            # Create service output
+            output = ServiceOutput.objects.create(
+                service_execution=execution,
+                output_name=request.data.get('output_name'),
+                output_type=request.data.get('output_type', 'json'),
+                file_extension=request.data.get('file_extension', ''),
+                mime_type=request.data.get('mime_type', ''),
+                file_size=request.data.get('file_size'),
+                output_data=request.data.get('output_data'),
+                output_text=request.data.get('output_text', ''),
+                download_url=request.data.get('download_url', ''),
+                preview_url=request.data.get('preview_url', ''),
+                output_metadata=request.data.get('output_metadata', {}),
+                is_primary=request.data.get('is_primary', False)
+            )
+
+            # Update execution output count
+            execution.output_count = execution.outputs.count()
+            execution.save()
+
+            return Response({
+                'id': output.id,
+                'output_name': output.output_name,
+                'output_type': output.output_type,
+                'created_at': output.created_at
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            logger.error(f"Error creating service output: {str(e)}")
+            return Response(
+                {'error': f'Failed to create service output: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )

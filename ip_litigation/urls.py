@@ -13,6 +13,8 @@ from .views import (
     ClaimChartSummaryView,
     InfringementSummaryView,
     ValiditySummaryView,
+    ServiceExecutionListCreateView,
+    ServiceOutputListCreateView,
 )
 
 app_name = 'ip_litigation'
@@ -46,4 +48,8 @@ urlpatterns = [
     path('claim-chart-summary/', ClaimChartSummaryView.as_view(), name='claim-chart-summary'),
     path('infringement-summary/', InfringementSummaryView.as_view(), name='infringement-summary'),
     path('validity-summary/', ValiditySummaryView.as_view(), name='validity-summary'),
+
+    # Service Execution Management
+    path('service-executions/', ServiceExecutionListCreateView.as_view(), name='service-executions'),
+    path('service-outputs/', ServiceOutputListCreateView.as_view(), name='service-outputs'),
 ]

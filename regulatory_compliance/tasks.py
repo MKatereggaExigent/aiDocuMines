@@ -10,11 +10,102 @@ from .utils import (
     extract_regulatory_requirements, analyze_policy_compliance,
     search_personal_data, redact_document_content, generate_compliance_report
 )
+
 import logging
 import json
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# Import AI services (will be available in production)
+try:
+    from document_search.tasks import semantic_search_task, index_file_task
+    from file_elasticsearch.utils import search_files, index_file
+    from grid_documents_interrogation.tasks import ask_question_task
+    from document_anonymizer.tasks import detect_pii_task, anonymize_document_task
+    from document_translation.tasks import translate_document_task
+    AI_SERVICES_AVAILABLE = True
+except ImportError:
+    # For local development - AI services not yet available
+    AI_SERVICES_AVAILABLE = False
+    logger.warning("AI services not available locally - will be available in production")
+
+
+def call_ai_regulatory_analysis(file_obj, user, regulation_type='general'):
+    """
+    Use AI services to analyze regulatory compliance.
+    Integrates with document_search (Milvus) and grid_documents_interrogation.
+    """
+    try:
+        if not AI_SERVICES_AVAILABLE:
+            # Fallback for local development
+            return _basic_regulatory_analysis(file_obj, regulation_type)
+
+        # Use semantic search to find similar regulatory documents
+        query_text = f"regulatory compliance {regulation_type} {file_obj.filename}"
+        if hasattr(file_obj, 'content') and file_obj.content:
+            query_text += f" {file_obj.content[:500]}"
+
+        # Call semantic search service (internal Django app)
+        search_result = semantic_search_task.delay(
+            query=query_text,
+            top_k=10,
+            file_id=file_obj.id,
+            user_id=user.id
+        ).get(timeout=30)
+
+        # Use document Q&A for intelligent regulatory analysis
+        if regulation_type == 'gdpr':
+            question = "Analyze this document for GDPR compliance. What personal data is processed? Are there compliance gaps?"
+        elif regulation_type == 'hipaa':
+            question = "Analyze this document for HIPAA compliance. What PHI is involved? Are there security requirements?"
+        elif regulation_type == 'sox':
+            question = "Analyze this document for SOX compliance. What financial controls and reporting requirements apply?"
+        else:
+            question = f"Analyze this document for {regulation_type} regulatory compliance requirements and gaps"
+
+        qa_result = ask_question_task.delay(
+            query=question,
+            file_ids=[file_obj.id],
+            user_id=user.id
+        ).get(timeout=60)
+
+        # Process AI results
+        return _process_ai_regulatory_results(search_result, qa_result, regulation_type)
+
+    except Exception as e:
+        logger.error(f"AI regulatory analysis failed for file {file_obj.id}: {str(e)}")
+        return _basic_regulatory_analysis(file_obj, regulation_type)
+
+
+def call_ai_data_discovery(file_obj, user):
+    """
+    Use AI services to discover personal data and sensitive information.
+    """
+    try:
+        if not AI_SERVICES_AVAILABLE:
+            return []
+
+        # Use AI PII detection service
+        pii_result = detect_pii_task.delay(
+            file_id=file_obj.id,
+            detection_threshold=0.8
+        ).get(timeout=30)
+
+        # Use document Q&A for data classification
+        question = "What types of personal data, sensitive information, or regulated data are contained in this document?"
+
+        qa_result = ask_question_task.delay(
+            query=question,
+            file_ids=[file_obj.id],
+            user_id=user.id
+        ).get(timeout=30)
+
+        return _process_ai_data_discovery_results(pii_result, qa_result, file_obj)
+
+    except Exception as e:
+        logger.error(f"AI data discovery failed for file {file_obj.id}: {str(e)}")
+        return []
 
 
 @shared_task(bind=True)
@@ -407,3 +498,83 @@ def generate_compliance_report_task(self, compliance_run_id, report_type, includ
     except Exception as e:
         logger.error(f"Error in generate_compliance_report_task: {str(e)}")
         raise self.retry(exc=e, countdown=60, max_retries=3)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔧 HELPER FUNCTIONS FOR AI INTEGRATION
+# ═══════════════════════════════════════════════════════════════
+
+def _basic_regulatory_analysis(file_obj, regulation_type):
+    """Basic regulatory analysis fallback for local development."""
+    filename_lower = file_obj.filename.lower()
+
+    # Basic analysis based on filename and regulation type
+    analysis_result = {
+        'regulation_type': regulation_type,
+        'compliance_status': 'unknown',
+        'risk_level': 'medium',
+        'confidence': 0.3,
+        'findings': []
+    }
+
+    # Basic keyword detection for regulatory content
+    if hasattr(file_obj, 'content') and file_obj.content:
+        content_lower = file_obj.content.lower()
+
+        if regulation_type == 'gdpr':
+            keywords = ['personal data', 'data subject', 'consent', 'privacy']
+        elif regulation_type == 'hipaa':
+            keywords = ['phi', 'protected health', 'medical', 'patient']
+        elif regulation_type == 'sox':
+            keywords = ['financial', 'controls', 'audit', 'reporting']
+        else:
+            keywords = ['compliance', 'regulation', 'requirement', 'policy']
+
+        for keyword in keywords:
+            if keyword in content_lower:
+                analysis_result['findings'].append(f"Found {regulation_type.upper()} element: {keyword}")
+
+    return analysis_result
+
+
+def _process_ai_regulatory_results(search_result, qa_result, regulation_type):
+    """Process AI regulatory analysis results."""
+    return {
+        'regulation_type': regulation_type,
+        'similar_documents': search_result.get('results', [])[:5] if search_result else [],
+        'ai_insights': qa_result.get('answer', '') if qa_result else '',
+        'compliance_gaps': [],
+        'confidence': qa_result.get('confidence', 0.5) if qa_result else 0.5
+    }
+
+
+def _process_ai_data_discovery_results(pii_result, qa_result, file_obj):
+    """Process AI data discovery results."""
+    discovered_data = []
+
+    # Process PII detection results
+    if pii_result and 'detections' in pii_result:
+        for detection in pii_result['detections']:
+            discovered_data.append({
+                'data_type': detection.get('type', 'unknown'),
+                'text': detection.get('text', ''),
+                'confidence': detection.get('confidence', 0.0),
+                'location': detection.get('location', {}),
+                'source': 'pii_detection'
+            })
+
+    # Process Q&A results
+    if qa_result and 'answer' in qa_result:
+        discovered_data.append({
+            'data_type': 'ai_analysis',
+            'description': qa_result['answer'],
+            'confidence': qa_result.get('confidence', 0.5),
+            'source': 'document_qa'
+        })
+
+    return {
+        'file': file_obj.filename,
+        'discovered_data': discovered_data,
+        'total_findings': len(discovered_data),
+        'confidence': 0.7
+    }

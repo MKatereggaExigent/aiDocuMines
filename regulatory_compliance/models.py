@@ -1,7 +1,9 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.core.files.storage import default_storage
 import uuid
+import json
 
 User = get_user_model()
 
@@ -469,3 +471,161 @@ class ComplianceAlert(models.Model):
 
     def __str__(self):
         return f"{self.alert_title} - {self.get_severity_display()}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🔄 COMPREHENSIVE SERVICE OUTPUT MODELS
+# ═══════════════════════════════════════════════════════════════
+
+class ServiceExecution(models.Model):
+    """
+    Tracks execution of all Regulatory Compliance services with comprehensive metadata.
+    """
+    SERVICE_TYPES = [
+        # Core Regulatory Compliance Services
+        ('rc-create-compliance-run', 'Create Compliance Run'),
+        ('rc-gap-analysis', 'Compliance Gap Analysis'),
+        ('rc-policy-mapping', 'Policy Mapping & Alignment'),
+        ('rc-audit-trail', 'Audit Trail Generation'),
+        ('rc-compliance-dashboard', 'Compliance Dashboard'),
+
+        # AI-Enhanced Regulatory Compliance Services
+        ('rc-regulatory-search', 'Regulatory Document Search'),
+        ('rc-document-qa', 'Compliance Q&A System'),
+        ('rc-structure-analysis', 'Regulatory Structure Analysis'),
+        ('rc-file-insights', 'Compliance File Insights'),
+        ('rc-document-anonymization', 'Compliance Anonymization'),
+        ('rc-ocr-regulatory', 'Regulatory Filing OCR'),
+        ('rc-project-summary', 'Compliance Project Summary'),
+        ('rc-service-summary', 'Compliance Audit Reports'),
+        ('rc-client-summary', 'Compliance Client Summary'),
+    ]
+
+    EXECUTION_STATUS = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    OUTPUT_TYPES = [
+        ('document', 'Document'),
+        ('pdf', 'PDF'),
+        ('text', 'Text'),
+        ('json', 'JSON Data'),
+        ('data', 'Data File'),
+        ('analytics', 'Analytics'),
+        ('report', 'Report'),
+        ('chart', 'Chart'),
+        ('dashboard', 'Dashboard'),
+        ('excel', 'Excel'),
+        ('matrix', 'Matrix'),
+        ('package', 'Package'),
+    ]
+
+    # Core identification
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='rc_service_executions')
+    compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='service_executions')
+
+    # Service details
+    service_type = models.CharField(max_length=50, choices=SERVICE_TYPES)
+    service_name = models.CharField(max_length=255, help_text="Human-readable service name")
+    service_version = models.CharField(max_length=20, default='1.0')
+
+    # Execution tracking
+    status = models.CharField(max_length=20, choices=EXECUTION_STATUS, default='pending')
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    execution_time_seconds = models.IntegerField(null=True, blank=True)
+
+    # Input/Output tracking
+    input_files = models.ManyToManyField('core.File', blank=True, related_name='rc_service_inputs')
+    input_parameters = models.JSONField(default=dict, help_text="Service input parameters")
+    output_type = models.CharField(max_length=20, choices=OUTPUT_TYPES, default='json')
+    output_count = models.IntegerField(default=0, help_text="Number of output files generated")
+
+    # Error handling
+    error_message = models.TextField(blank=True)
+    error_traceback = models.TextField(blank=True)
+
+    # Metadata
+    execution_metadata = models.JSONField(default=dict, help_text="Additional execution metadata")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'regulatory_compliance_service_execution'
+        ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['user', 'service_type']),
+            models.Index(fields=['compliance_run', 'status']),
+            models.Index(fields=['started_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.service_name} - {self.get_status_display()}"
+
+    @property
+    def duration(self):
+        """Calculate execution duration"""
+        if self.completed_at and self.started_at:
+            return (self.completed_at - self.started_at).total_seconds()
+        return None
+
+
+class ServiceOutput(models.Model):
+    """
+    Stores individual output files/data from service executions.
+    """
+    # Core identification
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
+
+    # Output details
+    output_name = models.CharField(max_length=255, help_text="Name/title of the output")
+    output_type = models.CharField(max_length=20, choices=ServiceExecution.OUTPUT_TYPES)
+    file_extension = models.CharField(max_length=10, blank=True, help_text="File extension if applicable")
+    mime_type = models.CharField(max_length=100, blank=True)
+
+    # File storage
+    output_file = models.FileField(upload_to='rc_service_outputs/%Y/%m/%d/', null=True, blank=True)
+    file_size = models.BigIntegerField(null=True, blank=True, help_text="File size in bytes")
+
+    # Data storage (for non-file outputs)
+    output_data = models.JSONField(null=True, blank=True, help_text="Structured data output")
+    output_text = models.TextField(blank=True, help_text="Text-based output")
+
+    # URLs and access
+    download_url = models.URLField(blank=True, help_text="Direct download URL")
+    preview_url = models.URLField(blank=True, help_text="Preview URL")
+
+    # Metadata
+    output_metadata = models.JSONField(default=dict, help_text="Additional output metadata")
+    is_primary = models.BooleanField(default=False, help_text="Primary output for the service")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'regulatory_compliance_service_output'
+        ordering = ['-is_primary', '-created_at']
+        indexes = [
+            models.Index(fields=['service_execution', 'output_type']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.output_name} ({self.get_output_type_display()})"
+
+    @property
+    def formatted_size(self):
+        """Return human-readable file size"""
+        if not self.file_size:
+            return "Unknown"
+
+        size = self.file_size
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} TB"

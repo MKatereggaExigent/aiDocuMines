@@ -5,7 +5,8 @@ from .views import (
     PolicyMappingView, DSARRequestView, DSARRequestDetailView,
     RedactionTaskView, ComplianceAlertView,
     ComplianceSummaryView, DSARSummaryView, RedactionSummaryView,
-    AlertSummaryView, ComplianceReportView
+    AlertSummaryView, ComplianceReportView,
+    ServiceExecutionListCreateView, ServiceOutputListCreateView
 )
 
 app_name = 'regulatory_compliance'
@@ -41,4 +42,8 @@ urlpatterns = [
     
     # Report Generation
     path('reports/generate/', ComplianceReportView.as_view(), name='generate-compliance-report'),
+
+    # Service Execution Management
+    path('service-executions/', ServiceExecutionListCreateView.as_view(), name='service-executions'),
+    path('service-outputs/', ServiceOutputListCreateView.as_view(), name='service-outputs'),
 ]
