@@ -11,6 +11,8 @@ from openai import OpenAI
 # Django models (for cached text lookup when using file_id)
 from core.models import File
 
+from langchain.schema import BaseMessage
+
 # Registry of model context limits (tokens)
 MODEL_CONTEXT_WINDOWS = {
     "gpt-4o": 128000,
@@ -186,6 +188,126 @@ def _build_messages_for_openai(previous_messages: Optional[List[dict]], chunk: s
     return messages
 
 
+
+def _history_to_text(previous_messages: Optional[List[dict]], limit: int = 10) -> str:
+    """
+    Collapse your {'role','content'} history into a compact plain-text prefix.
+    Keeps the last `limit` messages (user/assistant).
+    """
+    if not previous_messages:
+        return ""
+    lines: List[str] = []
+    for msg in previous_messages[-limit:]:
+        role = (msg.get("role") or "user").strip().lower()
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role not in ("user", "assistant", "system"):
+            role = "user"
+        lines.append(f"{role.capitalize()}: {content}")
+    return "\n".join(lines)
+
+
+def dispatch_to_llm(
+    query_text: str,
+    chunk: str,
+    llm_config: dict,
+    previous_messages: Optional[List[dict]] = None
+) -> str:
+    """
+    Provider-agnostic dispatcher that returns a STRING response.
+    Supported providers: 'openai', 'ollama'
+
+    llm_config:
+      - provider: 'openai' | 'ollama'
+      - model: model name (required for both)
+      - api_key: OpenAI key (openai only)
+      - endpoint: base URL (ollama only), e.g. 'http://ollama:11434'
+      - temperature: float (optional)
+      - timeout: int seconds (optional; openai handled by client, ollama handled by LC)
+      - num_ctx: int context tokens (ollama only, optional)
+    """
+    provider = (llm_config.get("provider") or "openai").lower()
+    model = llm_config.get("model") or "gpt-3.5-turbo"
+    temperature = float(llm_config.get("temperature", 0.2))
+    timeout = int(llm_config.get("timeout", 120))
+
+    if provider == "openai":
+        api_key = llm_config.get("api_key")
+        client = OpenAI(api_key=api_key) if api_key else OpenAI()
+
+        # Reuse your existing helper to respect token budgets
+        messages = _build_messages_for_openai(previous_messages, chunk, query_text, model)
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=1024,
+                temperature=temperature,
+                timeout=timeout,  # available on newer SDKs; safe to include
+            )
+            text = response.choices[0].message.content or ""
+            return text if isinstance(text, str) else str(text)
+        except Exception as e:
+            raise RuntimeError(f"OpenAI invocation failed (model={model}): {e}")
+
+    elif provider == "ollama":
+        # Choose endpoint: llm_config -> env -> default docker service name
+        base_url = (
+            llm_config.get("endpoint")
+            or os.getenv("OLLAMA_URL")
+            or "http://ollama:11434"
+        )
+
+        # LangChain's ChatOllama .invoke() returns an AIMessage; use .predict() to get str
+        # num_ctx is optional and only applied if provided
+        chat_kwargs = {
+            "model": model,
+            "base_url": base_url,
+            "temperature": temperature,
+        }
+        if "num_ctx" in llm_config:
+            chat_kwargs["num_ctx"] = int(llm_config["num_ctx"])
+
+        try:
+            chat = ChatOllama(**chat_kwargs)
+
+            history_text = _history_to_text(previous_messages, limit=10)
+            # A compact, consistent prompt that works for both small & larger models
+            prompt_parts = [
+                "You are a precise, concise data/document QA assistant.",
+                ("Conversation so far:\n" + history_text) if history_text else None,
+                "Document:\n" + (chunk or "")[:200000],  # guard against huge chunk strings
+                "Task:\nAnswer the user question using only the document facts. "
+                "If you are unsure, say so.",
+                "Question:\n" + (query_text or ""),
+                "Answer:"
+            ]
+            prompt = "\n\n".join([p for p in prompt_parts if p])
+
+            # ChatOllama doesn't expose a per-call timeout; rely on upstream task timeouts
+            text = chat.predict(prompt)
+            return text if isinstance(text, str) else str(text)
+
+        except Exception as e:
+            # Include url & model to make ops/debugging trivial
+            raise RuntimeError(f"Ollama invocation failed (url={base_url}, model={model}): {e}")
+
+    elif provider == "langchain":
+        raise NotImplementedError("LangChain provider wrapper is not implemented here.")
+
+    elif provider == "mcp":
+        raise NotImplementedError("MCP provider not yet integrated.")
+
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+
+
+
+
+
+'''
 def dispatch_to_llm(query_text: str, chunk: str, llm_config: dict, previous_messages: Optional[List[dict]] = None):
     provider = llm_config.get("provider", "openai")
     model = llm_config.get("model", "gpt-3.5-turbo")
@@ -227,7 +349,7 @@ def dispatch_to_llm(query_text: str, chunk: str, llm_config: dict, previous_mess
 
     else:
         raise ValueError(f"Unsupported provider: {provider}")
-
+'''
 
 # ───────────────────────── File path / id entrypoints ─────────────────────────
 

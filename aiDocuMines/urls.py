@@ -123,6 +123,9 @@ urlpatterns = [
     path('api/v1/ip-litigation/', include('ip_litigation.urls')),
     path('api/v1/regulatory-compliance/', include('regulatory_compliance.urls')),
 
+    # Service Analytics
+    path('api/v1/service-analytics/', include('service_analytics.urls')),
+
 ]
 
 # Serve static files for Swagger UI

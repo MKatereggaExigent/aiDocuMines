@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     "labor_employment",
     "ip_litigation",
     "regulatory_compliance",
+    "service_analytics",
 ]
 
 MIDDLEWARE = [

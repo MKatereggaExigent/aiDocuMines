@@ -41,19 +41,40 @@ services:
       - ./redis_watchdog:/watchdog
     networks: [captain-overlay-network]
 
+
   ollama:
-    image: ollama/ollama
+    image: ollama/ollama:latest          # pin latest or a specific version
     container_name: aidocumines_ollama
     restart: unless-stopped
     ports: ["11434:11434"]
+    environment:
+      # bind to localhost unless you *need* LAN/Internet access
+      # if you need LAN: use 0.0.0.0:11434 and protect with a reverse proxy / firewall
+      - OLLAMA_HOST=0.0.0.0:11434
     volumes:
       - ollama-data:/root/.ollama
     networks: [captain-overlay-network]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      # use the built-in ollama client; no curl/wget needed
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+        #  ollama:
+        # image: ollama/ollama
+        # container_name: aidocumines_ollama
+        # restart: unless-stopped
+        # ports: ["11434:11434"]
+        # volumes:
+        # - ollama-data:/root/.ollama
+        # networks: [captain-overlay-network]
+        # healthcheck:
+        # test: ["CMD", "curl", "-f", "http://localhost:11434"]
+        # interval: 10s
+        # timeout: 5s
+        # retries: 3
 
   db_prepare:
     build: { context: ., dockerfile: Dockerfile }

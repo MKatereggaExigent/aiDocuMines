@@ -381,21 +381,9 @@ class LoginView(APIView):
 
         login(request, user)  # Django login
 
-        # ✅ Get user roles from groups
-        roles = [group.name for group in user.groups.all()]
-
-        # ✅ Return flattened response for frontend compatibility
         return Response({
             "access_token": token.token,
-            "expires": token.expires.strftime("%Y-%m-%d %H:%M:%S"),
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "id": user.id,
-            "email": user.email,
-            "roles": roles,
-            "is_staff": user.is_staff,
-            "is_superuser": user.is_superuser,
-            "2fa_enabled": user.is_2fa_enabled
+            "expires": token.expires.strftime("%Y-%m-%d %H:%M:%S")
         }, status=status.HTTP_200_OK)
 
 
@@ -644,7 +632,7 @@ class DeactivateAccountView(APIView):
         user = request.user
         user.is_active = False
         user.save()
-
+        
         return Response({
             "message": "Account deactivated successfully",
             "user": {
@@ -1641,3 +1629,5 @@ class SupersuperuserCleanDatabaseView(APIView):
         except Exception as e:
             logger.error(f"❌ Cleanup failed: {e}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
