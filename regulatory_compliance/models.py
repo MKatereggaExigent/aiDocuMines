@@ -134,7 +134,7 @@ class RegulatoryRequirement(models.Model):
         unique_together = ['compliance_run', 'requirement_id']
         indexes = [
             models.Index(fields=['client', 'requirement_id']),
-            models.Index(fields=['client', 'requirement_category']),
+            models.Index(fields=['client', 'category']),
             models.Index(fields=['client', 'compliance_status']),
         ]
 
@@ -349,7 +349,7 @@ class DataInventory(models.Model):
         ordering = ['activity_name']
         indexes = [
             models.Index(fields=['client', 'activity_name']),
-            models.Index(fields=['client', 'data_category']),
+            models.Index(fields=['client', 'legal_basis']),
         ]
 
     def __str__(self):
