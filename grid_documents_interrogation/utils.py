@@ -11,8 +11,6 @@ from openai import OpenAI
 # Django models (for cached text lookup when using file_id)
 from core.models import File
 
-from langchain.schema import BaseMessage
-
 # Registry of model context limits (tokens)
 MODEL_CONTEXT_WINDOWS = {
     "gpt-4o": 128000,
