@@ -11,7 +11,9 @@ User = get_user_model()
 class MassClaimsRun(models.Model):
     """
     Represents a mass claims or class action case management run.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_mass_claims_runs')
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='mass_claims')
     case_name = models.CharField(max_length=255, help_text="Name of the class action case")
     case_number = models.CharField(max_length=100, help_text="Court case number")
@@ -54,6 +56,10 @@ class MassClaimsRun(models.Model):
     class Meta:
         db_table = 'class_actions_mass_claims_run'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'case_name']),
+        ]
 
     def __str__(self):
         return f"{self.case_name} - {self.case_number}"
@@ -62,7 +68,9 @@ class MassClaimsRun(models.Model):
 class IntakeForm(models.Model):
     """
     Stores intake form submissions from claimants.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_intake_forms')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_intake_forms')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='intake_forms')
     
@@ -101,6 +109,10 @@ class IntakeForm(models.Model):
     class Meta:
         db_table = 'class_actions_intake_form'
         ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['client', '-submitted_at']),
+            models.Index(fields=['client', 'processing_status']),
+        ]
 
     def __str__(self):
         return f"Intake Form {self.claimant_id} - {self.mass_claims_run.case_name}"
@@ -109,7 +121,9 @@ class IntakeForm(models.Model):
 class EvidenceDocument(models.Model):
     """
     Represents evidence documents with culling and relevance scoring.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_evidence_documents')
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ca_evidence')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_evidence_documents')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='evidence_documents')
@@ -155,6 +169,10 @@ class EvidenceDocument(models.Model):
     class Meta:
         db_table = 'class_actions_evidence_document'
         ordering = ['-relevance_score', '-created_at']
+        indexes = [
+            models.Index(fields=['client', '-relevance_score']),
+            models.Index(fields=['client', 'evidence_type']),
+        ]
 
     def __str__(self):
         return f"Evidence: {self.file.filename} - {self.get_evidence_type_display()}"
@@ -163,7 +181,9 @@ class EvidenceDocument(models.Model):
 class PIIRedaction(models.Model):
     """
     Stores PII redaction information for documents.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_pii_redactions')
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ca_pii_redactions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_pii_redactions')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='pii_redactions')
@@ -203,6 +223,9 @@ class PIIRedaction(models.Model):
     class Meta:
         db_table = 'class_actions_pii_redaction'
         ordering = ['page_number', 'position_start']
+        indexes = [
+            models.Index(fields=['client', 'pii_type']),
+        ]
 
     def __str__(self):
         return f"PII Redaction: {self.get_pii_type_display()} in {self.file.filename}"
@@ -211,7 +234,9 @@ class PIIRedaction(models.Model):
 class ExhibitPackage(models.Model):
     """
     Represents a package of documents for exhibit production with Bates stamping.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_exhibit_packages')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_exhibit_packages')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='exhibit_packages')
     
@@ -250,6 +275,10 @@ class ExhibitPackage(models.Model):
     class Meta:
         db_table = 'class_actions_exhibit_package'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'status']),
+        ]
 
     def __str__(self):
         return f"{self.package_name} ({self.bates_start} - {self.bates_end})"
@@ -258,7 +287,9 @@ class ExhibitPackage(models.Model):
 class SettlementTracking(models.Model):
     """
     Tracks settlement and notice information for mass claims.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_settlement_tracking')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='settlement_tracking')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_settlement_tracking')
     
@@ -320,6 +351,10 @@ class SettlementTracking(models.Model):
     class Meta:
         db_table = 'class_actions_settlement_tracking'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'status']),
+        ]
 
     def __str__(self):
         return f"Settlement Tracking - {self.mass_claims_run.case_name}"
@@ -328,7 +363,9 @@ class SettlementTracking(models.Model):
 class ClaimantCommunication(models.Model):
     """
     Tracks communications with claimants throughout the process.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_claimant_communications')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_claimant_communications')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='claimant_communications')
     intake_form = models.ForeignKey(IntakeForm, on_delete=models.CASCADE, related_name='communications')
@@ -363,6 +400,9 @@ class ClaimantCommunication(models.Model):
     class Meta:
         db_table = 'class_actions_claimant_communication'
         ordering = ['-sent_at']
+        indexes = [
+            models.Index(fields=['client', '-sent_at']),
+        ]
 
     def __str__(self):
         return f"{self.get_communication_type_display()} - {self.intake_form.claimant_id}"
@@ -375,6 +415,7 @@ class ClaimantCommunication(models.Model):
 class ServiceExecution(models.Model):
     """
     Tracks execution of all Class Actions services with comprehensive metadata.
+    Multi-tenant: Isolated by client.
     """
     SERVICE_TYPES = [
         # Core Class Actions Services
@@ -419,6 +460,7 @@ class ServiceExecution(models.Model):
 
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_service_executions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ca_service_executions')
     mass_claims_run = models.ForeignKey(MassClaimsRun, on_delete=models.CASCADE, related_name='service_executions')
 
@@ -452,6 +494,8 @@ class ServiceExecution(models.Model):
         db_table = 'class_actions_service_execution'
         ordering = ['-started_at']
         indexes = [
+            models.Index(fields=['client', '-started_at']),
+            models.Index(fields=['client', 'service_type']),
             models.Index(fields=['user', 'service_type']),
             models.Index(fields=['mass_claims_run', 'status']),
             models.Index(fields=['started_at']),
@@ -471,9 +515,11 @@ class ServiceExecution(models.Model):
 class ServiceOutput(models.Model):
     """
     Stores individual output files/data from service executions.
+    Multi-tenant: Isolated by client.
     """
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ca_service_outputs')
     service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
 
     # Output details
@@ -503,6 +549,7 @@ class ServiceOutput(models.Model):
         db_table = 'class_actions_service_output'
         ordering = ['-is_primary', '-created_at']
         indexes = [
+            models.Index(fields=['client', '-created_at']),
             models.Index(fields=['service_execution', 'output_type']),
             models.Index(fields=['created_at']),
         ]
