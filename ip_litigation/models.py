@@ -11,7 +11,9 @@ User = get_user_model()
 class PatentAnalysisRun(models.Model):
     """
     Represents a patent analysis run for IP litigation matters.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_analysis_runs')
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='patent_analysis')
     case_name = models.CharField(max_length=255, help_text="Name of the IP litigation case")
     

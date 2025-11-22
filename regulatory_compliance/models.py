@@ -11,7 +11,9 @@ User = get_user_model()
 class ComplianceRun(models.Model):
     """
     Represents a regulatory compliance analysis run.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_compliance_runs')
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='compliance_analysis')
     compliance_framework = models.CharField(
         max_length=100,
