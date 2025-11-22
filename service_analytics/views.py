@@ -469,3 +469,308 @@ class RecentActivityAPIView(APIView):
 
         return Response(recent_executions, status=status.HTTP_200_OK)
 
+
+class CreateServiceExecutionView(APIView):
+    """
+    POST /api/v1/service-analytics/executions/create/
+
+    Creates a service execution record for any of the 5 legal verticals.
+    This is a universal endpoint that routes to the appropriate vertical's ServiceExecution model.
+
+    Request Body:
+    {
+        "vertical": "class_actions",  // One of: private_equity, class_actions, labor_employment, ip_litigation, regulatory_compliance
+        "run_id": "uuid",  // The run ID for the vertical (e.g., mass_claims_run_id, due_diligence_run_id, etc.)
+        "service_type": "ca-intake-triage",
+        "service_name": "Process and triage intake forms",
+        "service_version": "1.0",
+        "input_file_ids": [1, 2, 3],  // Optional: List of File IDs
+        "input_parameters": {...},  // Optional: Service parameters
+        "output_file_ids": [4, 5],  // Optional: List of output File IDs
+        "output_type": "report",  // One of: json, pdf, excel, html, text, report
+        "output_count": 2,
+        "execution_time_seconds": 45,
+        "status": "completed",  // One of: pending, running, completed, failed, cancelled
+        "error_message": "",  // Optional: Error message if failed
+        "execution_metadata": {...}  // Optional: Additional metadata
+    }
+
+    Response:
+    {
+        "success": true,
+        "data": {
+            "id": "uuid",
+            "vertical": "class_actions",
+            "service_type": "ca-intake-triage",
+            "service_name": "Process and triage intake forms",
+            "status": "completed",
+            "started_at": "2024-11-22T14:30:22Z"
+        }
+    }
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        operation_description="Create a service execution record for any legal vertical",
+        manual_parameters=[client_id_param, client_secret_param],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['vertical', 'run_id', 'service_type', 'service_name'],
+            properties={
+                'vertical': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=['private_equity', 'class_actions', 'labor_employment', 'ip_litigation', 'regulatory_compliance'],
+                    description='Legal vertical'
+                ),
+                'run_id': openapi.Schema(type=openapi.TYPE_STRING, description='Run ID for the vertical'),
+                'service_type': openapi.Schema(type=openapi.TYPE_STRING, description='Service type code'),
+                'service_name': openapi.Schema(type=openapi.TYPE_STRING, description='Human-readable service name'),
+                'service_version': openapi.Schema(type=openapi.TYPE_STRING, description='Service version (default: 1.0)'),
+                'input_file_ids': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_INTEGER), description='List of input file IDs'),
+                'input_parameters': openapi.Schema(type=openapi.TYPE_OBJECT, description='Service input parameters'),
+                'output_file_ids': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_INTEGER), description='List of output file IDs'),
+                'output_type': openapi.Schema(type=openapi.TYPE_STRING, enum=['json', 'pdf', 'excel', 'html', 'text', 'report'], description='Output type'),
+                'output_count': openapi.Schema(type=openapi.TYPE_INTEGER, description='Number of output files'),
+                'execution_time_seconds': openapi.Schema(type=openapi.TYPE_INTEGER, description='Execution time in seconds'),
+                'status': openapi.Schema(type=openapi.TYPE_STRING, enum=['pending', 'running', 'completed', 'failed', 'cancelled'], description='Execution status'),
+                'error_message': openapi.Schema(type=openapi.TYPE_STRING, description='Error message if failed'),
+                'execution_metadata': openapi.Schema(type=openapi.TYPE_OBJECT, description='Additional metadata'),
+            }
+        ),
+        responses={
+            201: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                    'data': openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            'id': openapi.Schema(type=openapi.TYPE_STRING),
+                            'vertical': openapi.Schema(type=openapi.TYPE_STRING),
+                            'service_type': openapi.Schema(type=openapi.TYPE_STRING),
+                            'service_name': openapi.Schema(type=openapi.TYPE_STRING),
+                            'status': openapi.Schema(type=openapi.TYPE_STRING),
+                            'started_at': openapi.Schema(type=openapi.TYPE_STRING),
+                        }
+                    )
+                }
+            ),
+            400: "Bad Request - Missing required fields or invalid vertical",
+            404: "Run not found"
+        }
+    )
+    def post(self, request):
+        try:
+            # Get client and user from OAuth2
+            client_id = request.data.get('client_id') or request.query_params.get('client_id')
+            client_secret = request.data.get('client_secret') or request.query_params.get('client_secret')
+
+            if not client_id or not client_secret:
+                return Response({
+                    'success': False,
+                    'error': 'Missing client_id or client_secret'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                client = Client.objects.get(client_id=client_id, client_secret=client_secret)
+            except Client.DoesNotExist:
+                return Response({
+                    'success': False,
+                    'error': 'Invalid client credentials'
+                }, status=status.HTTP_401_UNAUTHORIZED)
+
+            user = request.user
+
+            # Extract request data
+            vertical = request.data.get('vertical')
+            run_id = request.data.get('run_id')
+            service_type = request.data.get('service_type')
+            service_name = request.data.get('service_name')
+            service_version = request.data.get('service_version', '1.0')
+            input_file_ids = request.data.get('input_file_ids', [])
+            input_parameters = request.data.get('input_parameters', {})
+            output_file_ids = request.data.get('output_file_ids', [])
+            output_type = request.data.get('output_type', 'json')
+            output_count = request.data.get('output_count', 0)
+            execution_time_seconds = request.data.get('execution_time_seconds')
+            exec_status = request.data.get('status', 'pending')
+            error_message = request.data.get('error_message', '')
+            execution_metadata = request.data.get('execution_metadata', {})
+
+            # Validate required fields
+            if not vertical or not run_id or not service_type or not service_name:
+                return Response({
+                    'success': False,
+                    'error': 'Missing required fields: vertical, run_id, service_type, service_name'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Route to appropriate vertical
+            execution = None
+
+            if vertical == 'private_equity':
+                from private_equity.models import DueDiligenceRun
+                try:
+                    run = DueDiligenceRun.objects.get(id=run_id, client=client)
+                except DueDiligenceRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': f'DueDiligenceRun with ID {run_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                execution = PEServiceExecution.objects.create(
+                    client=client,
+                    user=user,
+                    due_diligence_run=run,
+                    service_type=service_type,
+                    service_name=service_name,
+                    service_version=service_version,
+                    status=exec_status,
+                    input_parameters=input_parameters,
+                    output_type=output_type,
+                    output_count=output_count,
+                    execution_time_seconds=execution_time_seconds,
+                    error_message=error_message,
+                    execution_metadata=execution_metadata
+                )
+
+            elif vertical == 'class_actions':
+                from class_actions.models import MassClaimsRun
+                try:
+                    run = MassClaimsRun.objects.get(id=run_id, client=client)
+                except MassClaimsRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': f'MassClaimsRun with ID {run_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                execution = CAServiceExecution.objects.create(
+                    client=client,
+                    user=user,
+                    mass_claims_run=run,
+                    service_type=service_type,
+                    service_name=service_name,
+                    service_version=service_version,
+                    status=exec_status,
+                    input_parameters=input_parameters,
+                    output_type=output_type,
+                    output_count=output_count,
+                    execution_time_seconds=execution_time_seconds,
+                    error_message=error_message,
+                    execution_metadata=execution_metadata
+                )
+
+            elif vertical == 'labor_employment':
+                from labor_employment.models import WorkplaceCommunicationsRun
+                try:
+                    run = WorkplaceCommunicationsRun.objects.get(id=run_id, client=client)
+                except WorkplaceCommunicationsRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': f'WorkplaceCommunicationsRun with ID {run_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                execution = LEServiceExecution.objects.create(
+                    client=client,
+                    user=user,
+                    workplace_communications_run=run,
+                    service_type=service_type,
+                    service_name=service_name,
+                    service_version=service_version,
+                    status=exec_status,
+                    input_parameters=input_parameters,
+                    output_type=output_type,
+                    output_count=output_count,
+                    execution_time_seconds=execution_time_seconds,
+                    error_message=error_message,
+                    execution_metadata=execution_metadata
+                )
+
+            elif vertical == 'ip_litigation':
+                from ip_litigation.models import PatentAnalysisRun
+                try:
+                    run = PatentAnalysisRun.objects.get(id=run_id, client=client)
+                except PatentAnalysisRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': f'PatentAnalysisRun with ID {run_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                execution = IPServiceExecution.objects.create(
+                    client=client,
+                    user=user,
+                    patent_analysis_run=run,
+                    service_type=service_type,
+                    service_name=service_name,
+                    service_version=service_version,
+                    status=exec_status,
+                    input_parameters=input_parameters,
+                    output_type=output_type,
+                    output_count=output_count,
+                    execution_time_seconds=execution_time_seconds,
+                    error_message=error_message,
+                    execution_metadata=execution_metadata
+                )
+
+            elif vertical == 'regulatory_compliance':
+                from regulatory_compliance.models import ComplianceAuditRun
+                try:
+                    run = ComplianceAuditRun.objects.get(id=run_id, client=client)
+                except ComplianceAuditRun.DoesNotExist:
+                    return Response({
+                        'success': False,
+                        'error': f'ComplianceAuditRun with ID {run_id} not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                execution = RCServiceExecution.objects.create(
+                    client=client,
+                    user=user,
+                    compliance_audit_run=run,
+                    service_type=service_type,
+                    service_name=service_name,
+                    service_version=service_version,
+                    status=exec_status,
+                    input_parameters=input_parameters,
+                    output_type=output_type,
+                    output_count=output_count,
+                    execution_time_seconds=execution_time_seconds,
+                    error_message=error_message,
+                    execution_metadata=execution_metadata
+                )
+            else:
+                return Response({
+                    'success': False,
+                    'error': f'Invalid vertical: {vertical}. Must be one of: private_equity, class_actions, labor_employment, ip_litigation, regulatory_compliance'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add input files if provided
+            if input_file_ids:
+                from core.models import File
+                input_files = File.objects.filter(id__in=input_file_ids)
+                execution.input_files.set(input_files)
+
+            # Return response
+            return Response({
+                'success': True,
+                'data': {
+                    'id': str(execution.id),
+                    'vertical': vertical,
+                    'service_type': execution.service_type,
+                    'service_name': execution.service_name,
+                    'status': execution.status,
+                    'started_at': execution.started_at.isoformat()
+                }
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            import traceback
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error creating service execution: {str(e)}")
+            logger.error(traceback.format_exc())
+            return Response({
+                'success': False,
+                'error': f'Failed to create service execution: {str(e)}',
+                'traceback': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

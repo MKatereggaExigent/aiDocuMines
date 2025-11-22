@@ -43,7 +43,7 @@ from .models import FileAccessEntry
 from django.contrib.auth import get_user_model
 from document_operations.utils import set_password_protection
 from document_operations.models import FileAuditLog
-from rest_framework.parsers import JSONParser  # 🔁 Import this at the top
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser  # 🔁 Import this at the top
 
 User = get_user_model()
 
@@ -643,6 +643,239 @@ class FolderListCreateView(APIView):
         folder = serializer.save()
         return Response(FolderSerializer(folder).data, status=201)
 
+
+
+class CreateChildFolderView(APIView):
+    """
+    POST /api/v1/document-operations/folders/create-child/
+
+    Creates a child folder under a parent folder.
+    This is specifically designed for service execution outputs.
+
+    Request Body:
+    {
+        "parent_folder_id": "uuid",
+        "folder_name": "Intake_Triage_20241122_143022",
+        "project_id": "optional_project_id",
+        "service_id": "optional_service_id"
+    }
+
+    Response:
+    {
+        "id": "uuid",
+        "name": "Intake_Triage_20241122_143022",
+        "parent": "parent_uuid",
+        "project_id": "...",
+        "service_id": "...",
+        "created_at": "2024-11-22T14:30:22Z"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Create a child folder under a parent folder for service execution outputs",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['parent_folder_id', 'folder_name'],
+            properties={
+                'parent_folder_id': openapi.Schema(type=openapi.TYPE_STRING, description='UUID of parent folder'),
+                'folder_name': openapi.Schema(type=openapi.TYPE_STRING, description='Name of the new child folder'),
+                'project_id': openapi.Schema(type=openapi.TYPE_STRING, description='Optional project ID'),
+                'service_id': openapi.Schema(type=openapi.TYPE_STRING, description='Optional service ID'),
+            }
+        ),
+        responses={
+            201: FolderSerializer(),
+            400: "Bad Request - Missing required fields or invalid parent folder",
+            404: "Parent folder not found"
+        }
+    )
+    def post(self, request):
+        try:
+            # Extract request data
+            parent_folder_id = request.data.get('parent_folder_id')
+            folder_name = request.data.get('folder_name')
+            project_id = request.data.get('project_id')
+            service_id = request.data.get('service_id')
+
+            # Validate required fields
+            if not parent_folder_id or not folder_name:
+                return Response({
+                    'error': 'Missing required fields: parent_folder_id and folder_name are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get parent folder
+            try:
+                parent_folder = Folder.objects.get(pk=parent_folder_id, user=request.user)
+            except Folder.DoesNotExist:
+                return Response({
+                    'error': f'Parent folder with ID {parent_folder_id} not found or you do not have access'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Inherit project_id and service_id from parent if not provided
+            if not project_id:
+                project_id = parent_folder.project_id
+            if not service_id:
+                service_id = parent_folder.service_id
+
+            # Create child folder
+            child_folder = Folder.objects.create(
+                name=folder_name,
+                parent=parent_folder,
+                user=request.user,
+                project_id=project_id,
+                service_id=service_id
+            )
+
+            # Serialize and return
+            serializer = FolderSerializer(child_folder)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({
+                'error': f'Failed to create child folder: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UploadFileToFolderView(APIView):
+    """
+    POST /api/v1/document-operations/files/upload-to-folder/
+
+    Uploads a file and links it to a specific folder.
+    This is specifically designed for service execution output files.
+
+    Request (multipart/form-data):
+    - file: File to upload
+    - folder_id: UUID of the folder to upload to
+    - filename: Optional custom filename
+
+    Response:
+    {
+        "id": "file_id",
+        "filename": "triage_report.pdf",
+        "folder_id": "folder_uuid",
+        "file_size": 2457600,
+        "file_type": "pdf",
+        "download_url": "https://...",
+        "created_at": "2024-11-22T14:30:22Z"
+    }
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @swagger_auto_schema(
+        operation_description="Upload a file to a specific folder",
+        manual_parameters=[
+            openapi.Parameter('file', openapi.IN_FORM, type=openapi.TYPE_FILE, required=True, description='File to upload'),
+            openapi.Parameter('folder_id', openapi.IN_FORM, type=openapi.TYPE_STRING, required=True, description='UUID of folder'),
+            openapi.Parameter('filename', openapi.IN_FORM, type=openapi.TYPE_STRING, required=False, description='Custom filename'),
+        ],
+        responses={
+            201: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'filename': openapi.Schema(type=openapi.TYPE_STRING),
+                    'folder_id': openapi.Schema(type=openapi.TYPE_STRING),
+                    'file_size': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'file_type': openapi.Schema(type=openapi.TYPE_STRING),
+                    'download_url': openapi.Schema(type=openapi.TYPE_STRING),
+                }
+            ),
+            400: "Bad Request - Missing file or folder_id",
+            404: "Folder not found"
+        }
+    )
+    def post(self, request):
+        try:
+            # Extract request data
+            uploaded_file = request.FILES.get('file')
+            folder_id = request.data.get('folder_id')
+            custom_filename = request.data.get('filename')
+
+            # Validate required fields
+            if not uploaded_file:
+                return Response({
+                    'error': 'Missing required field: file'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if not folder_id:
+                return Response({
+                    'error': 'Missing required field: folder_id'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Get folder
+            try:
+                folder = Folder.objects.get(pk=folder_id, user=request.user)
+            except Folder.DoesNotExist:
+                return Response({
+                    'error': f'Folder with ID {folder_id} not found or you do not have access'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Determine filename
+            filename = custom_filename if custom_filename else uploaded_file.name
+
+            # Save file to storage
+            import os
+            from django.conf import settings
+            import uuid as uuid_lib
+
+            # Create upload directory if it doesn't exist
+            upload_dir = os.path.join(settings.MEDIA_ROOT, 'service_outputs', str(request.user.id), str(folder_id))
+            os.makedirs(upload_dir, exist_ok=True)
+
+            # Generate unique filename to avoid collisions
+            file_extension = os.path.splitext(filename)[1]
+            unique_filename = f"{uuid_lib.uuid4()}{file_extension}"
+            file_path = os.path.join(upload_dir, unique_filename)
+
+            # Write file to disk
+            with open(file_path, 'wb+') as destination:
+                for chunk in uploaded_file.chunks():
+                    destination.write(chunk)
+
+            # Get file size
+            file_size = os.path.getsize(file_path)
+
+            # Determine file type
+            file_type = file_extension.replace('.', '').lower() if file_extension else 'unknown'
+
+            # Create File record
+            file_record = File.objects.create(
+                user=request.user,
+                filename=filename,
+                filepath=file_path,
+                file_size=file_size,
+                file_type=file_type,
+                status='Uploaded'
+            )
+
+            # Create FileFolderLink to associate file with folder
+            FileFolderLink.objects.create(
+                file=file_record,
+                folder=folder
+            )
+
+            # Generate download URL
+            download_url = f"/api/v1/core/files/{file_record.id}/download/"
+
+            # Return response
+            return Response({
+                'id': file_record.id,
+                'filename': file_record.filename,
+                'folder_id': str(folder_id),
+                'file_size': file_size,
+                'file_type': file_type,
+                'download_url': download_url,
+                'created_at': file_record.created_at.isoformat()
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            import traceback
+            return Response({
+                'error': f'Failed to upload file: {str(e)}',
+                'traceback': traceback.format_exc()
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ShareWithGroupView(APIView):

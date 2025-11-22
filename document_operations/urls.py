@@ -12,7 +12,8 @@ from .views import (
     FilePreviewView, FileAuditLogView,
     PublicSharedFileView, FolderListView,
     FolderCreateView, TrashSingleFileView, FolderListCreateView,
-    ShareWithGroupView, SetAccessLevelView, GrantPublicLinkView
+    ShareWithGroupView, SetAccessLevelView, GrantPublicLinkView,
+    CreateChildFolderView, UploadFileToFolderView
 )
 
 urlpatterns = [
@@ -20,6 +21,7 @@ urlpatterns = [
     # path("folders/", FolderListView.as_view(), name="folder_list"),
     # path("folders/", FolderCreateView.as_view(), name="create-folder"),
     path("folders/", FolderListCreateView.as_view(), name="folder_list_create"),
+    path("folders/create-child/", CreateChildFolderView.as_view(), name="folder_create_child"),
     path("files/<int:pk>/trash/", TrashSingleFileView.as_view(), name="trash-file"),
     path("folders/<uuid:pk>/", FolderDetailView.as_view(), name="folder_detail"),
     path("folders/<uuid:pk>/rename/", RenameFolderView.as_view(), name="folder_rename"),
@@ -27,6 +29,7 @@ urlpatterns = [
     path("folders/<uuid:pk>/restore/", RestoreFolderView.as_view(), name="folder_restore"),
 
     # 📄 FILE OPERATIONS
+    path("files/upload-to-folder/", UploadFileToFolderView.as_view(), name="file_upload_to_folder"),
     path("files/<int:pk>/", FileDetailView.as_view(), name="file_detail"),
     path("files/<int:pk>/rename/", RenameFileView.as_view(), name="file_rename"),
     path("files/<int:pk>/delete/", DeleteFileView.as_view(), name="file_delete"),
