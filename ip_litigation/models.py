@@ -58,7 +58,7 @@ class PatentAnalysisRun(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['client', '-created_at']),
-            models.Index(fields=['client', 'analysis_type']),
+            models.Index(fields=['client', 'litigation_type']),
         ]
 
     def __str__(self):
