@@ -56,6 +56,10 @@ class PatentAnalysisRun(models.Model):
     class Meta:
         db_table = 'ip_litigation_patent_analysis_run'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'analysis_type']),
+        ]
 
     def __str__(self):
         return f"{self.case_name} - {self.get_litigation_type_display()}"
@@ -133,6 +137,11 @@ class PatentDocument(models.Model):
         db_table = 'ip_litigation_patent_document'
         ordering = ['-filing_date']
         unique_together = ['patent_number', 'analysis_run']
+        indexes = [
+            models.Index(fields=['client', '-filing_date']),
+            models.Index(fields=['client', 'patent_number']),
+            models.Index(fields=['client', 'document_type']),
+        ]
 
     def __str__(self):
         return f"{self.patent_number} - {self.title[:50]}..."
@@ -181,6 +190,10 @@ class PatentClaim(models.Model):
         db_table = 'ip_litigation_patent_claim'
         ordering = ['claim_number']
         unique_together = ['patent_document', 'claim_number']
+        indexes = [
+            models.Index(fields=['client', 'claim_number']),
+            models.Index(fields=['client', 'claim_type']),
+        ]
 
     def __str__(self):
         return f"Claim {self.claim_number} - {self.patent_document.patent_number}"
@@ -233,6 +246,11 @@ class PriorArtDocument(models.Model):
     class Meta:
         db_table = 'ip_litigation_prior_art_document'
         ordering = ['-relevance_score', '-publication_date']
+        indexes = [
+            models.Index(fields=['client', '-relevance_score']),
+            models.Index(fields=['client', '-publication_date']),
+            models.Index(fields=['client', 'document_type']),
+        ]
 
     def __str__(self):
         return f"{self.document_id} - {self.title[:50]}..."
@@ -290,6 +308,10 @@ class ClaimChart(models.Model):
     class Meta:
         db_table = 'ip_litigation_claim_chart'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'chart_type']),
+        ]
 
     def __str__(self):
         return f"{self.chart_name} - {self.patent_claim}"
@@ -330,6 +352,10 @@ class PatentLandscape(models.Model):
     class Meta:
         db_table = 'ip_litigation_patent_landscape'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'technology_area']),
+        ]
 
     def __str__(self):
         return f"{self.landscape_name} - {self.technology_area}"
@@ -408,6 +434,11 @@ class InfringementAnalysis(models.Model):
     class Meta:
         db_table = 'ip_litigation_infringement_analysis'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'infringement_type']),
+            models.Index(fields=['client', '-infringement_likelihood']),
+        ]
 
     def __str__(self):
         return f"{self.analysis_name} - {self.accused_product}"
@@ -461,6 +492,11 @@ class ValidityChallenge(models.Model):
     class Meta:
         db_table = 'ip_litigation_validity_challenge'
         ordering = ['-success_likelihood', '-created_at']
+        indexes = [
+            models.Index(fields=['client', '-success_likelihood']),
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'challenge_type']),
+        ]
 
     def __str__(self):
         return f"{self.challenge_name} - {self.target_patent.patent_number}"

@@ -50,6 +50,10 @@ class ComplianceRun(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_run'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'compliance_framework']),
+        ]
 
     def __str__(self):
         return f"{self.organization_name} - {self.get_compliance_framework_display()}"
@@ -128,6 +132,11 @@ class RegulatoryRequirement(models.Model):
         db_table = 'regulatory_compliance_requirement'
         ordering = ['requirement_id']
         unique_together = ['compliance_run', 'requirement_id']
+        indexes = [
+            models.Index(fields=['client', 'requirement_id']),
+            models.Index(fields=['client', 'requirement_category']),
+            models.Index(fields=['client', 'compliance_status']),
+        ]
 
     def __str__(self):
         return f"{self.requirement_id} - {self.requirement_title[:50]}..."
@@ -171,6 +180,10 @@ class PolicyMapping(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_policy_mapping'
         ordering = ['-mapping_confidence']
+        indexes = [
+            models.Index(fields=['client', '-mapping_confidence']),
+            models.Index(fields=['client', 'gap_status']),
+        ]
 
     def __str__(self):
         return f"{self.policy_name} -> {self.regulatory_requirement.requirement_id}"
@@ -262,6 +275,11 @@ class DSARRequest(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_dsar_request'
         ordering = ['-request_date']
+        indexes = [
+            models.Index(fields=['client', '-request_date']),
+            models.Index(fields=['client', 'request_type']),
+            models.Index(fields=['client', 'status']),
+        ]
 
     def __str__(self):
         return f"DSAR-{self.request_id} - {self.data_subject_name} ({self.get_request_type_display()})"
@@ -329,6 +347,10 @@ class DataInventory(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_data_inventory'
         ordering = ['activity_name']
+        indexes = [
+            models.Index(fields=['client', 'activity_name']),
+            models.Index(fields=['client', 'data_category']),
+        ]
 
     def __str__(self):
         return f"{self.activity_name} - {self.get_legal_basis_display()}"
@@ -396,6 +418,10 @@ class RedactionTask(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_redaction_task'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'status']),
+        ]
 
     def __str__(self):
         return f"{self.task_name} - {self.get_redaction_type_display()}"
@@ -482,6 +508,11 @@ class ComplianceAlert(models.Model):
     class Meta:
         db_table = 'regulatory_compliance_alert'
         ordering = ['-severity', '-created_at']
+        indexes = [
+            models.Index(fields=['client', '-severity', '-created_at']),
+            models.Index(fields=['client', 'alert_type']),
+            models.Index(fields=['client', 'status']),
+        ]
 
     def __str__(self):
         return f"{self.alert_title} - {self.get_severity_display()}"
