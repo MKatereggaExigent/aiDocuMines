@@ -16,14 +16,18 @@ class FolderSerializer(serializers.ModelSerializer):
 class FileFolderLinkSerializer(serializers.ModelSerializer):
     file_name = serializers.CharField(source='file.filename', read_only=True)
     file_id = serializers.IntegerField(source='file.id', read_only=True)
+    file_size = serializers.IntegerField(source='file.file_size', read_only=True)
+    file_type = serializers.CharField(source='file.file_type', read_only=True)
+    created_at = serializers.DateTimeField(source='file.created_at', read_only=True)
+    updated_at = serializers.DateTimeField(source='file.updated_at', read_only=True)
     shared_with = serializers.SerializerMethodField()
 
     class Meta:
         model = FileFolderLink
         fields = [
-            'id', 'file_id', 'file_name', 'folder', 'is_trashed',
-            'is_shared', 'password_protected', 'password_hint',
-            'shared_with'
+            'id', 'file_id', 'file_name', 'file_size', 'file_type',
+            'folder', 'is_trashed', 'is_shared', 'password_protected',
+            'password_hint', 'shared_with', 'created_at', 'updated_at'
         ]
 
     def get_shared_with(self, obj):
@@ -82,7 +86,7 @@ class RecursiveFolderSerializer(serializers.ModelSerializer):
         model  = Folder
         fields = [
             "id", "name", "project_id", "service_id", "parent",
-            "created_at", "subfolders", "files",
+            "created_at", "is_trashed", "is_protected", "subfolders", "files",
         ]
 
     # ──────────────────────────────────────────
@@ -97,7 +101,13 @@ class RecursiveFolderSerializer(serializers.ModelSerializer):
         if not self.context.get("include_files", True):
             return []
 
-        links = obj.files.filter(is_trashed=False).select_related("file")
+        # Respect include_trashed context parameter
+        include_trashed = self.context.get("include_trashed", False)
+        if include_trashed:
+            links = obj.files.all().select_related("file")
+        else:
+            links = obj.files.filter(is_trashed=False).select_related("file")
+
         # forward context here as well
         return FileFolderLinkSerializer(
             links, many=True, context=self.context

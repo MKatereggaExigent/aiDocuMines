@@ -627,7 +627,11 @@ class FolderListCreateView(APIView):
         if not include_trashed:
             qs = qs.filter(is_trashed=False)
 
-        ctx = {"include_files": include_files, "request": request}
+        ctx = {
+            "include_files": include_files,
+            "include_trashed": include_trashed,
+            "request": request
+        }
         serializer = RecursiveFolderSerializer(qs, many=True, context=ctx)
         return Response(serializer.data, status=200)
 
