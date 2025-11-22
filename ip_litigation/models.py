@@ -140,7 +140,7 @@ class PatentDocument(models.Model):
         indexes = [
             models.Index(fields=['client', '-filing_date']),
             models.Index(fields=['client', 'patent_number']),
-            models.Index(fields=['client', 'document_type']),
+            models.Index(fields=['client', 'status']),
         ]
 
     def __str__(self):
