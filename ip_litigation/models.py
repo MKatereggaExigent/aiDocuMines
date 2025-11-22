@@ -436,8 +436,8 @@ class InfringementAnalysis(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['client', '-created_at']),
-            models.Index(fields=['client', 'infringement_type']),
-            models.Index(fields=['client', '-infringement_likelihood']),
+            models.Index(fields=['client', 'infringement_conclusion']),
+            models.Index(fields=['client', 'confidence_level']),
         ]
 
     def __str__(self):
@@ -495,7 +495,7 @@ class ValidityChallenge(models.Model):
         indexes = [
             models.Index(fields=['client', '-success_likelihood']),
             models.Index(fields=['client', '-created_at']),
-            models.Index(fields=['client', 'challenge_type']),
+            models.Index(fields=['client', 'challenge_strength']),
         ]
 
     def __str__(self):
