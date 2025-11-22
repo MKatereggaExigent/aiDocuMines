@@ -58,7 +58,9 @@ class ComplianceRun(models.Model):
 class RegulatoryRequirement(models.Model):
     """
     Individual regulatory requirements and controls.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_regulatory_requirements')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='regulatory_requirements')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='regulatory_requirements')
     
@@ -134,7 +136,9 @@ class RegulatoryRequirement(models.Model):
 class PolicyMapping(models.Model):
     """
     Mapping between organizational policies and regulatory requirements.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_policy_mappings')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='policy_mappings')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='policy_mappings')
     regulatory_requirement = models.ForeignKey(RegulatoryRequirement, on_delete=models.CASCADE, related_name='policy_mappings')
@@ -175,7 +179,9 @@ class PolicyMapping(models.Model):
 class DSARRequest(models.Model):
     """
     Data Subject Access Request (DSAR) for GDPR and other privacy regulations.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_dsar_requests')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='dsar_requests')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='dsar_requests')
     
@@ -264,7 +270,9 @@ class DSARRequest(models.Model):
 class DataInventory(models.Model):
     """
     Data inventory for tracking personal data processing activities.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_data_inventories')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='data_inventories')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='data_inventories')
     
@@ -329,7 +337,9 @@ class DataInventory(models.Model):
 class RedactionTask(models.Model):
     """
     Document redaction tasks for privacy protection.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_redaction_tasks')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='redaction_tasks')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='redaction_tasks')
     
@@ -394,7 +404,9 @@ class RedactionTask(models.Model):
 class ComplianceAlert(models.Model):
     """
     Compliance alerts for regulatory violations or risks.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_compliance_alerts')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='compliance_alerts')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='compliance_alerts')
     
@@ -528,6 +540,7 @@ class ServiceExecution(models.Model):
 
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_service_executions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='rc_service_executions')
     compliance_run = models.ForeignKey(ComplianceRun, on_delete=models.CASCADE, related_name='service_executions')
 
@@ -580,9 +593,11 @@ class ServiceExecution(models.Model):
 class ServiceOutput(models.Model):
     """
     Stores individual output files/data from service executions.
+    Multi-tenant: Isolated by client.
     """
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='rc_service_outputs')
     service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
 
     # Output details

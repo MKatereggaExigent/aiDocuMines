@@ -64,7 +64,9 @@ class PatentAnalysisRun(models.Model):
 class PatentDocument(models.Model):
     """
     Represents patent documents from various patent offices.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_documents')
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ip_patent_documents')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_documents')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_documents')
@@ -139,7 +141,9 @@ class PatentDocument(models.Model):
 class PatentClaim(models.Model):
     """
     Individual patent claims extracted from patent documents.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_claims')
     patent_document = models.ForeignKey(PatentDocument, on_delete=models.CASCADE, related_name='claims')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_claims')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_claims')
@@ -185,7 +189,9 @@ class PatentClaim(models.Model):
 class PriorArtDocument(models.Model):
     """
     Prior art documents for patent analysis and invalidity challenges.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_prior_art_documents')
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ip_prior_art_documents')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_prior_art_documents')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='prior_art_documents')
@@ -235,7 +241,9 @@ class PriorArtDocument(models.Model):
 class ClaimChart(models.Model):
     """
     Claim charts mapping patent claims to accused products or prior art.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_claim_charts')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_claim_charts')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='claim_charts')
     patent_claim = models.ForeignKey(PatentClaim, on_delete=models.CASCADE, related_name='claim_charts')
@@ -290,7 +298,9 @@ class ClaimChart(models.Model):
 class PatentLandscape(models.Model):
     """
     Patent landscape analysis for technology areas.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_landscapes')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_landscapes')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_landscapes')
     
@@ -328,7 +338,9 @@ class PatentLandscape(models.Model):
 class InfringementAnalysis(models.Model):
     """
     Comprehensive infringement analysis for patent litigation.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_infringement_analyses')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_infringement_analyses')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='infringement_analyses')
     
@@ -404,7 +416,9 @@ class InfringementAnalysis(models.Model):
 class ValidityChallenge(models.Model):
     """
     Patent validity challenge analysis using prior art.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_validity_challenges')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_validity_challenges')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='validity_challenges')
     target_patent = models.ForeignKey(PatentDocument, on_delete=models.CASCADE, related_name='validity_challenges')
@@ -503,6 +517,7 @@ class ServiceExecution(models.Model):
 
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_service_executions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_service_executions')
     patent_analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='service_executions')
 
@@ -555,9 +570,11 @@ class ServiceExecution(models.Model):
 class ServiceOutput(models.Model):
     """
     Stores individual output files/data from service executions.
+    Multi-tenant: Isolated by client.
     """
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_service_outputs')
     service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
 
     # Output details
