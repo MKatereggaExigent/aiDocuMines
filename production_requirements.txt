@@ -162,6 +162,7 @@ langchain-core
 langchain-community
 langchain-ollama
 ollama  # Optional, only if running local models
+dspy-ai  # DSPy for structured LLM programming
 
 # ➕ Token Counting and Chunking
 tiktoken  # Required for OpenAI-style token estimation

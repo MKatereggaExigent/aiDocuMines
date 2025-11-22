@@ -13,6 +13,9 @@ class DueDiligenceRun(models.Model):
     Represents a due diligence run for M&A or Private Equity transactions.
     Extends the core Run concept for DD-specific workflows.
     """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_dd_runs')
+
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='due_diligence')
     deal_name = models.CharField(max_length=255, help_text="Name of the deal/transaction")
     target_company = models.CharField(max_length=255, help_text="Target company name")
@@ -45,6 +48,10 @@ class DueDiligenceRun(models.Model):
     class Meta:
         db_table = 'private_equity_due_diligence_run'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'deal_name']),
+        ]
 
     def __str__(self):
         return f"{self.deal_name} - {self.target_company}"
@@ -54,6 +61,9 @@ class DocumentClassification(models.Model):
     """
     Stores AI-based classification results for uploaded documents.
     """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_doc_classifications')
+
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='pe_classifications')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_document_classifications')
     due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='document_classifications')
@@ -94,6 +104,9 @@ class RiskClause(models.Model):
     """
     Stores extracted risky clauses from documents with risk assessment.
     """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_risk_clauses')
+
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='pe_risk_clauses')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_risk_clauses')
     due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='risk_clauses')
@@ -145,6 +158,9 @@ class FindingsReport(models.Model):
     """
     Comprehensive findings report for a due diligence run.
     """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_findings_reports')
+
     due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='findings_reports')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_findings_reports')
     
@@ -191,6 +207,9 @@ class DataRoomConnector(models.Model):
     """
     Configuration for connecting to external data rooms (Google Drive, SharePoint, etc.).
     """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_data_room_connectors')
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_data_room_connectors')
     due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='data_room_connectors')
     
@@ -286,6 +305,10 @@ class ServiceExecution(models.Model):
 
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_service_executions')
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='pe_service_executions')
     due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='service_executions')
 
@@ -341,6 +364,10 @@ class ServiceOutput(models.Model):
     """
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_service_outputs')
+
     service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
 
     # Output details

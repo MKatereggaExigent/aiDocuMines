@@ -180,21 +180,22 @@ class DueDiligenceRunCreateSerializer(serializers.ModelSerializer):
         ]
     
     def create(self, validated_data):
-        """Create a new Run and associated DueDiligenceRun"""
+        """Create a new Run and associated DueDiligenceRun with client context"""
         user = self.context['request'].user
-        
+
         # Create the core Run first
         run = Run.objects.create(
             user=user,
             status='Uploaded'
         )
-        
-        # Create the DueDiligenceRun
+
+        # Create the DueDiligenceRun with client for multi-tenancy
         due_diligence_run = DueDiligenceRun.objects.create(
             run=run,
+            client=user.client,  # Add client for multi-tenancy
             **validated_data
         )
-        
+
         return due_diligence_run
 
 

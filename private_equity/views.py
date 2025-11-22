@@ -10,6 +10,7 @@ from drf_yasg import openapi
 import logging
 
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
+from core.vertical_permissions import IsClientMember, IsClientAdmin, IsOwnerOrClientAdmin
 from core.models import File
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause,
@@ -51,8 +52,12 @@ class DueDiligenceRunListCreateView(APIView):
         responses={200: DueDiligenceRunSerializer(many=True)}
     )
     def get(self, request):
-        """List all due diligence runs for the user"""
-        runs = DueDiligenceRun.objects.filter(run__user=request.user)
+        """List all due diligence runs for the user's client"""
+        # Filter by client for multi-tenancy
+        runs = DueDiligenceRun.objects.filter(
+            client=request.user.client,
+            run__user=request.user
+        )
         serializer = DueDiligenceRunSerializer(runs, many=True)
         return Response(serializer.data)
     
@@ -80,8 +85,13 @@ class DueDiligenceRunDetailView(APIView):
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
     
     def get_object(self, pk, user):
-        """Get due diligence run ensuring user ownership"""
-        return get_object_or_404(DueDiligenceRun, pk=pk, run__user=user)
+        """Get due diligence run ensuring client ownership"""
+        return get_object_or_404(
+            DueDiligenceRun,
+            pk=pk,
+            client=user.client,
+            run__user=user
+        )
     
     @swagger_auto_schema(
         operation_description="Retrieve a specific due diligence run",
