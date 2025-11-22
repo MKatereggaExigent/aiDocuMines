@@ -11,7 +11,9 @@ User = get_user_model()
 class WorkplaceCommunicationsRun(models.Model):
     """
     Represents a workplace communications analysis run for employment matters.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_communications_runs')
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='workplace_communications')
     case_name = models.CharField(max_length=255, help_text="Name of the employment case")
     company_name = models.CharField(max_length=255, help_text="Company being analyzed")
@@ -53,6 +55,10 @@ class WorkplaceCommunicationsRun(models.Model):
     class Meta:
         db_table = 'labor_employment_communications_run'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'case_name']),
+        ]
 
     def __str__(self):
         return f"{self.case_name} - {self.company_name}"
@@ -61,7 +67,9 @@ class WorkplaceCommunicationsRun(models.Model):
 class CommunicationMessage(models.Model):
     """
     Represents individual communication messages (emails, chats, etc.).
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_communication_messages')
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='le_communication_messages')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_communication_messages')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='messages')
@@ -112,6 +120,10 @@ class CommunicationMessage(models.Model):
         db_table = 'labor_employment_communication_message'
         ordering = ['-sent_datetime']
         unique_together = ['message_id', 'communications_run']
+        indexes = [
+            models.Index(fields=['client', '-sent_datetime']),
+            models.Index(fields=['client', 'message_type']),
+        ]
 
     def __str__(self):
         return f"{self.message_type}: {self.sender} - {self.sent_datetime}"
@@ -120,7 +132,9 @@ class CommunicationMessage(models.Model):
 class WageHourAnalysis(models.Model):
     """
     Stores wage and hour analysis results for employees.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_wage_hour_analyses')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_wage_hour_analyses')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='wage_hour_analyses')
     
@@ -165,6 +179,10 @@ class WageHourAnalysis(models.Model):
         db_table = 'labor_employment_wage_hour_analysis'
         ordering = ['-created_at']
         unique_together = ['employee_name', 'communications_run', 'analysis_start_date']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'employee_name']),
+        ]
 
     def __str__(self):
         return f"Wage Analysis: {self.employee_name} ({self.analysis_start_date} - {self.analysis_end_date})"
@@ -173,7 +191,9 @@ class WageHourAnalysis(models.Model):
 class PolicyComparison(models.Model):
     """
     Compares company policies against communications and best practices.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_policy_comparisons')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_policy_comparisons')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='policy_comparisons')
     
@@ -215,6 +235,10 @@ class PolicyComparison(models.Model):
     class Meta:
         db_table = 'labor_employment_policy_comparison'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'policy_type']),
+        ]
 
     def __str__(self):
         return f"Policy Analysis: {self.policy_name} - {self.get_policy_type_display()}"
@@ -223,7 +247,9 @@ class PolicyComparison(models.Model):
 class EEOCPacket(models.Model):
     """
     Generates EEOC complaint packets with relevant communications and analysis.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_eeoc_packets')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_eeoc_packets')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='eeoc_packets')
     
@@ -285,6 +311,10 @@ class EEOCPacket(models.Model):
     class Meta:
         db_table = 'labor_employment_eeoc_packet'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'complaint_type']),
+        ]
 
     def __str__(self):
         return f"EEOC Packet: {self.packet_name} - {self.complainant_name}"
@@ -293,7 +323,9 @@ class EEOCPacket(models.Model):
 class CommunicationPattern(models.Model):
     """
     Identifies patterns in workplace communications that may indicate issues.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_communication_patterns')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_communication_patterns')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='communication_patterns')
     
@@ -336,6 +368,10 @@ class CommunicationPattern(models.Model):
     class Meta:
         db_table = 'labor_employment_communication_pattern'
         ordering = ['-severity_score', '-confidence_score']
+        indexes = [
+            models.Index(fields=['client', '-severity_score']),
+            models.Index(fields=['client', 'pattern_type']),
+        ]
 
     def __str__(self):
         return f"Pattern: {self.pattern_name} ({self.get_pattern_type_display()})"
@@ -344,7 +380,9 @@ class CommunicationPattern(models.Model):
 class ComplianceAlert(models.Model):
     """
     Automated alerts for potential compliance issues found in communications.
+    Multi-tenant: Isolated by client.
     """
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_compliance_alerts')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_compliance_alerts')
     communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='compliance_alerts')
     
@@ -412,6 +450,10 @@ class ComplianceAlert(models.Model):
     class Meta:
         db_table = 'labor_employment_compliance_alert'
         ordering = ['-severity', '-priority', '-created_at']
+        indexes = [
+            models.Index(fields=['client', '-created_at']),
+            models.Index(fields=['client', 'alert_type', 'status']),
+        ]
 
     def __str__(self):
         return f"Alert: {self.alert_title} ({self.get_severity_display()})"
@@ -468,6 +510,7 @@ class ServiceExecution(models.Model):
 
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_service_executions')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='le_service_executions')
     workplace_communications_run = models.ForeignKey(WorkplaceCommunicationsRun, on_delete=models.CASCADE, related_name='service_executions')
 
@@ -501,6 +544,8 @@ class ServiceExecution(models.Model):
         db_table = 'labor_employment_service_execution'
         ordering = ['-started_at']
         indexes = [
+            models.Index(fields=['client', '-started_at']),
+            models.Index(fields=['client', 'service_type']),
             models.Index(fields=['user', 'service_type']),
             models.Index(fields=['workplace_communications_run', 'status']),
             models.Index(fields=['started_at']),
@@ -520,9 +565,11 @@ class ServiceExecution(models.Model):
 class ServiceOutput(models.Model):
     """
     Stores individual output files/data from service executions.
+    Multi-tenant: Isolated by client.
     """
     # Core identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='le_service_outputs')
     service_execution = models.ForeignKey(ServiceExecution, on_delete=models.CASCADE, related_name='outputs')
 
     # Output details
@@ -552,6 +599,7 @@ class ServiceOutput(models.Model):
         db_table = 'labor_employment_service_output'
         ordering = ['-is_primary', '-created_at']
         indexes = [
+            models.Index(fields=['client', '-created_at']),
             models.Index(fields=['service_execution', 'output_type']),
             models.Index(fields=['created_at']),
         ]
