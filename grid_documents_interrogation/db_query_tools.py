@@ -4,7 +4,7 @@ import pandas as pd
 import sqlalchemy
 from sqlalchemy import create_engine, inspect
 from langchain_ollama import ChatOllama
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from urllib.parse import unquote
 from sqlalchemy.engine.url import make_url
