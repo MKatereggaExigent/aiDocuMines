@@ -182,7 +182,7 @@ class PolicyMapping(models.Model):
         ordering = ['-mapping_confidence']
         indexes = [
             models.Index(fields=['client', '-mapping_confidence']),
-            models.Index(fields=['client', 'gap_status']),
+            models.Index(fields=['client', 'mapping_strength']),
         ]
 
     def __str__(self):
