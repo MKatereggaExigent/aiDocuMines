@@ -10,6 +10,9 @@ from oauth2_provider.models import Application
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
+# Import Client model
+from custom_authentication.models import Client
+
 # Import ServiceExecution models from all 5 vertical apps
 from private_equity.models import ServiceExecution as PEServiceExecution
 from class_actions.models import ServiceExecution as CAServiceExecution
