@@ -1,8 +1,9 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from core.models import File, Run
+from custom_authentication.models import Client
 from .models import (
-    DueDiligenceRun, DocumentClassification, RiskClause, 
+    DueDiligenceRun, DocumentClassification, RiskClause,
     FindingsReport, DataRoomConnector
 )
 
@@ -183,6 +184,19 @@ class DueDiligenceRunCreateSerializer(serializers.ModelSerializer):
         """Create a new Run and associated DueDiligenceRun with client context"""
         user = self.context['request'].user
 
+        # Handle admin users without a client - get or create default client
+        if not user.client:
+            client, _ = Client.objects.get_or_create(
+                name="System Admin",
+                defaults={
+                    "address": "System",
+                    "industry": "Legal Tech",
+                    "use_case": "Administrative Operations"
+                }
+            )
+        else:
+            client = user.client
+
         # Create the core Run first
         run = Run.objects.create(
             user=user,
@@ -192,7 +206,7 @@ class DueDiligenceRunCreateSerializer(serializers.ModelSerializer):
         # Create the DueDiligenceRun with client for multi-tenancy
         due_diligence_run = DueDiligenceRun.objects.create(
             run=run,
-            client=user.client,  # Add client for multi-tenancy
+            client=client,
             **validated_data
         )
 

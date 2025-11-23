@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from core.models import File, Run
+from custom_authentication.models import Client
 from .models import (
     WorkplaceCommunicationsRun, CommunicationMessage, WageHourAnalysis,
     PolicyComparison, EEOCPacket, CommunicationPattern, ComplianceAlert
@@ -260,6 +261,19 @@ class WorkplaceCommunicationsRunCreateSerializer(serializers.ModelSerializer):
         """Create a new Run and associated WorkplaceCommunicationsRun with client context"""
         user = self.context['request'].user
 
+        # Handle admin users without a client - get or create default client
+        if not user.client:
+            client, _ = Client.objects.get_or_create(
+                name="System Admin",
+                defaults={
+                    "address": "System",
+                    "industry": "Legal Tech",
+                    "use_case": "Administrative Operations"
+                }
+            )
+        else:
+            client = user.client
+
         # Create the core Run first
         run = Run.objects.create(
             user=user,
@@ -269,7 +283,7 @@ class WorkplaceCommunicationsRunCreateSerializer(serializers.ModelSerializer):
         # Create the WorkplaceCommunicationsRun with client for multi-tenancy
         communications_run = WorkplaceCommunicationsRun.objects.create(
             run=run,
-            client=user.client,  # Add client for multi-tenancy
+            client=client,
             **validated_data
         )
 

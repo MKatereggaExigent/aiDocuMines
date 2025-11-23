@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from core.models import Run, File
+from custom_authentication.models import Client
 from .models import (
     ComplianceRun, RegulatoryRequirement, PolicyMapping, DSARRequest,
     DataInventory, RedactionTask, ComplianceAlert
@@ -28,7 +29,21 @@ class ComplianceRunSerializer(serializers.ModelSerializer):
         run_id = validated_data.pop('run_id')
         user = self.context['request'].user
         run = Run.objects.get(id=run_id, user=user)
-        return ComplianceRun.objects.create(run=run, client=user.client, **validated_data)
+
+        # Handle admin users without a client - get or create default client
+        if not user.client:
+            client, _ = Client.objects.get_or_create(
+                name="System Admin",
+                defaults={
+                    "address": "System",
+                    "industry": "Legal Tech",
+                    "use_case": "Administrative Operations"
+                }
+            )
+        else:
+            client = user.client
+
+        return ComplianceRun.objects.create(run=run, client=client, **validated_data)
     
     def validate_assessment_dates(self, data):
         """Validate assessment date range"""

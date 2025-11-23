@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from core.models import Run, File
+from custom_authentication.models import Client
 from .models import (
     PatentAnalysisRun, PatentDocument, PatentClaim, PriorArtDocument,
     ClaimChart, PatentLandscape, InfringementAnalysis, ValidityChallenge
@@ -27,7 +28,21 @@ class PatentAnalysisRunSerializer(serializers.ModelSerializer):
         run_id = validated_data.pop('run_id')
         user = self.context['request'].user
         run = Run.objects.get(id=run_id, user=user)
-        return PatentAnalysisRun.objects.create(run=run, client=user.client, **validated_data)
+
+        # Handle admin users without a client - get or create default client
+        if not user.client:
+            client, _ = Client.objects.get_or_create(
+                name="System Admin",
+                defaults={
+                    "address": "System",
+                    "industry": "Legal Tech",
+                    "use_case": "Administrative Operations"
+                }
+            )
+        else:
+            client = user.client
+
+        return PatentAnalysisRun.objects.create(run=run, client=client, **validated_data)
     
     def validate_patents_in_suit(self, value):
         """Validate patents in suit format"""
