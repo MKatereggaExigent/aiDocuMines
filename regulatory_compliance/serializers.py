@@ -26,8 +26,9 @@ class ComplianceRunSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         run_id = validated_data.pop('run_id')
-        run = Run.objects.get(id=run_id, user=self.context['request'].user)
-        return ComplianceRun.objects.create(run=run, **validated_data)
+        user = self.context['request'].user
+        run = Run.objects.get(id=run_id, user=user)
+        return ComplianceRun.objects.create(run=run, client=user.client, **validated_data)
     
     def validate_assessment_dates(self, data):
         """Validate assessment date range"""

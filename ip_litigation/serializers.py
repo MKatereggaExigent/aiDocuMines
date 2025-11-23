@@ -25,8 +25,9 @@ class PatentAnalysisRunSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         run_id = validated_data.pop('run_id')
-        run = Run.objects.get(id=run_id, user=self.context['request'].user)
-        return PatentAnalysisRun.objects.create(run=run, **validated_data)
+        user = self.context['request'].user
+        run = Run.objects.get(id=run_id, user=user)
+        return PatentAnalysisRun.objects.create(run=run, client=user.client, **validated_data)
     
     def validate_patents_in_suit(self, value):
         """Validate patents in suit format"""

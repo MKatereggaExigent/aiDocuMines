@@ -223,21 +223,22 @@ class MassClaimsRunCreateSerializer(serializers.ModelSerializer):
         ]
     
     def create(self, validated_data):
-        """Create a new Run and associated MassClaimsRun"""
+        """Create a new Run and associated MassClaimsRun with client context"""
         user = self.context['request'].user
-        
+
         # Create the core Run first
         run = Run.objects.create(
             user=user,
             status='Uploaded'
         )
-        
-        # Create the MassClaimsRun
+
+        # Create the MassClaimsRun with client for multi-tenancy
         mass_claims_run = MassClaimsRun.objects.create(
             run=run,
+            client=user.client,  # Add client for multi-tenancy
             **validated_data
         )
-        
+
         return mass_claims_run
 
 

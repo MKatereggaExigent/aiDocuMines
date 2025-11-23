@@ -257,21 +257,22 @@ class WorkplaceCommunicationsRunCreateSerializer(serializers.ModelSerializer):
         ]
     
     def create(self, validated_data):
-        """Create a new Run and associated WorkplaceCommunicationsRun"""
+        """Create a new Run and associated WorkplaceCommunicationsRun with client context"""
         user = self.context['request'].user
-        
+
         # Create the core Run first
         run = Run.objects.create(
             user=user,
             status='Uploaded'
         )
-        
-        # Create the WorkplaceCommunicationsRun
+
+        # Create the WorkplaceCommunicationsRun with client for multi-tenancy
         communications_run = WorkplaceCommunicationsRun.objects.create(
             run=run,
+            client=user.client,  # Add client for multi-tenancy
             **validated_data
         )
-        
+
         return communications_run
 
 
