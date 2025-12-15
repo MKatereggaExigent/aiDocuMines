@@ -34,7 +34,7 @@ class MassClaimsRun(models.Model):
         default='consumer_protection'
     )
     
-    claim_deadline = models.DateTimeField(help_text="Deadline for claim submissions")
+    claim_deadline = models.DateTimeField(null=True, blank=True, help_text="Deadline for claim submissions")
     settlement_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     
     # Case status
