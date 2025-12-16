@@ -18,7 +18,8 @@ from .models import (
     ServiceExecution, ServiceOutput
 )
 from .serializers import (
-    ComplianceRunSerializer, RegulatoryRequirementSerializer, PolicyMappingSerializer,
+    ComplianceRunSerializer, ComplianceRunCreateSerializer,
+    RegulatoryRequirementSerializer, PolicyMappingSerializer,
     DSARRequestSerializer, DataInventorySerializer, RedactionTaskSerializer,
     ComplianceAlertSerializer, ComplianceSummarySerializer, DSARSummarySerializer,
     RedactionSummarySerializer, AlertSummarySerializer
@@ -51,15 +52,16 @@ class ComplianceRunListCreateView(APIView):
     @swagger_auto_schema(
         operation_description="Create a new compliance run",
         tags=["Regulatory Compliance - Analysis Runs"],
-        request_body=ComplianceRunSerializer,
+        request_body=ComplianceRunCreateSerializer,
         responses={201: ComplianceRunSerializer}
     )
     def post(self, request):
         """Create a new compliance run"""
-        serializer = ComplianceRunSerializer(data=request.data, context={'request': request})
+        serializer = ComplianceRunCreateSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             compliance_run = serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            response_serializer = ComplianceRunSerializer(compliance_run)
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 

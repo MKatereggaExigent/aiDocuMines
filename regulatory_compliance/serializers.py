@@ -12,23 +12,81 @@ User = get_user_model()
 
 class ComplianceRunSerializer(serializers.ModelSerializer):
     """
-    Serializer for ComplianceRun model.
+    Serializer for ComplianceRun model (read operations).
     """
-    run_id = serializers.IntegerField(write_only=True, help_text="ID of the core Run to associate with")
-    
+    run_id = serializers.UUIDField(source='run.run_id', read_only=True)
+    user_email = serializers.EmailField(source='run.user.email', read_only=True)
+
     class Meta:
         model = ComplianceRun
         fields = [
-            'id', 'run_id', 'compliance_framework', 'organization_name', 'assessment_scope',
+            'id', 'run_id', 'user_email', 'compliance_framework', 'organization_name', 'assessment_scope',
             'applicable_regulations', 'jurisdiction', 'assessment_start_date', 'assessment_end_date',
             'compliance_officer', 'legal_counsel', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
+        read_only_fields = ['id', 'run_id', 'user_email', 'created_at', 'updated_at']
+
+
+class ComplianceRunCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating ComplianceRun.
+    Creates the core Run internally and accepts frontend field names.
+    """
+    # Frontend field aliases (write_only)
+    framework = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Compliance framework - maps to compliance_framework")
+    organization = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Organization name")
+    scope = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Assessment scope")
+    regulations = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Applicable regulations - comma separated")
+    start_date = serializers.DateField(write_only=True, required=False, allow_null=True, help_text="Assessment start date")
+    end_date = serializers.DateField(write_only=True, required=False, allow_null=True, help_text="Assessment end date")
+    officer = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Compliance officer")
+    counsel = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Legal counsel")
+
+    class Meta:
+        model = ComplianceRun
+        fields = [
+            'compliance_framework', 'organization_name', 'assessment_scope',
+            'applicable_regulations', 'jurisdiction', 'assessment_start_date', 'assessment_end_date',
+            'compliance_officer', 'legal_counsel',
+            # Frontend field aliases
+            'framework', 'organization', 'scope', 'regulations', 'start_date', 'end_date', 'officer', 'counsel'
+        ]
+
+    def to_internal_value(self, data):
+        """Transform frontend field names to backend field names before validation."""
+        data = data.copy() if hasattr(data, 'copy') else dict(data)
+
+        # Map frontend field names to backend field names
+        field_mapping = {
+            'framework': 'compliance_framework',
+            'organization': 'organization_name',
+            'scope': 'assessment_scope',
+            'regulations': 'applicable_regulations',
+            'start_date': 'assessment_start_date',
+            'end_date': 'assessment_end_date',
+            'officer': 'compliance_officer',
+            'counsel': 'legal_counsel',
+        }
+
+        for frontend_field, backend_field in field_mapping.items():
+            if frontend_field in data and backend_field not in data:
+                value = data.get(frontend_field)
+                if frontend_field == 'regulations' and isinstance(value, str):
+                    # Convert comma-separated to list
+                    data[backend_field] = [r.strip() for r in value.split(',') if r.strip()]
+                else:
+                    data[backend_field] = value
+
+        return super().to_internal_value(data)
+
     def create(self, validated_data):
-        run_id = validated_data.pop('run_id')
+        """Create a new Run and associated ComplianceRun with client context"""
         user = self.context['request'].user
-        run = Run.objects.get(id=run_id, user=user)
+
+        # Remove frontend-only fields that don't exist in the model
+        frontend_fields = ['framework', 'organization', 'scope', 'regulations', 'start_date', 'end_date', 'officer', 'counsel']
+        for field in frontend_fields:
+            validated_data.pop(field, None)
 
         # Handle admin users without a client - get or create default client
         if not user.client:
@@ -43,16 +101,29 @@ class ComplianceRunSerializer(serializers.ModelSerializer):
         else:
             client = user.client
 
-        return ComplianceRun.objects.create(run=run, client=client, **validated_data)
-    
-    def validate_assessment_dates(self, data):
+        # Create the core Run first
+        run = Run.objects.create(
+            user=user,
+            status='Uploaded'
+        )
+
+        # Create the ComplianceRun with client for multi-tenancy
+        compliance_run = ComplianceRun.objects.create(
+            run=run,
+            client=client,
+            **validated_data
+        )
+
+        return compliance_run
+
+    def validate(self, data):
         """Validate assessment date range"""
         start_date = data.get('assessment_start_date')
         end_date = data.get('assessment_end_date')
-        
+
         if start_date and end_date and start_date >= end_date:
             raise serializers.ValidationError("Assessment start date must be before end date")
-        
+
         return data
 
 

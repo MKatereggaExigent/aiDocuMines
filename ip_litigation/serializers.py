@@ -12,22 +12,92 @@ User = get_user_model()
 
 class PatentAnalysisRunSerializer(serializers.ModelSerializer):
     """
-    Serializer for PatentAnalysisRun model.
+    Serializer for PatentAnalysisRun model (read operations).
     """
-    run_id = serializers.IntegerField(write_only=True, help_text="ID of the core Run to associate with")
-    
+    run_id = serializers.UUIDField(source='run.run_id', read_only=True)
+    user_email = serializers.EmailField(source='run.user.email', read_only=True)
+
     class Meta:
         model = PatentAnalysisRun
         fields = [
-            'id', 'run_id', 'case_name', 'litigation_type', 'patent_sources',
+            'id', 'run_id', 'user_email', 'case_name', 'litigation_type', 'patent_sources',
             'patents_in_suit', 'technology_area', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
-    
+        read_only_fields = ['id', 'run_id', 'user_email', 'created_at', 'updated_at']
+
+
+class PatentAnalysisRunCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating PatentAnalysisRun.
+    Creates the core Run internally and accepts frontend field names.
+    """
+    # Frontend field aliases (write_only)
+    patent_number = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Patent number(s) - comma separated")
+    patent_title = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Patent title")
+    analysis_type = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Analysis type - maps to litigation_type")
+    patent_assignee = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Patent assignee/owner")
+    opposing_party = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Opposing party name")
+    key_claims = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Key claims to analyze")
+    court_jurisdiction = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Court/venue")
+    case_stage = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Current case stage")
+    priority_date = serializers.DateField(write_only=True, required=False, allow_null=True, help_text="Patent priority date")
+    deadline = serializers.DateField(write_only=True, required=False, allow_null=True, help_text="Key deadline")
+    notes = serializers.CharField(write_only=True, required=False, allow_blank=True, help_text="Additional notes")
+
+    class Meta:
+        model = PatentAnalysisRun
+        fields = [
+            'case_name', 'litigation_type', 'patent_sources', 'patents_in_suit', 'technology_area',
+            # Frontend field aliases
+            'patent_number', 'patent_title', 'analysis_type', 'patent_assignee',
+            'opposing_party', 'key_claims', 'court_jurisdiction', 'case_stage',
+            'priority_date', 'deadline', 'notes'
+        ]
+
+    def to_internal_value(self, data):
+        """Transform frontend field names to backend field names before validation."""
+        data = data.copy() if hasattr(data, 'copy') else dict(data)
+
+        # Map analysis_type to litigation_type
+        if 'analysis_type' in data and 'litigation_type' not in data:
+            analysis_type_map = {
+                'infringement': 'patent_infringement',
+                'validity': 'validity_challenge',
+                'prior_art': 'patent_infringement',
+                'claim_construction': 'patent_infringement',
+                'fto': 'licensing_dispute',
+                'landscape': 'other',
+            }
+            data['litigation_type'] = analysis_type_map.get(data.get('analysis_type'), 'patent_infringement')
+
+        # Map patent_number to patents_in_suit (convert comma-separated to list)
+        if 'patent_number' in data and 'patents_in_suit' not in data:
+            patent_numbers = data.get('patent_number', '')
+            if isinstance(patent_numbers, str) and patent_numbers.strip():
+                data['patents_in_suit'] = [p.strip() for p in patent_numbers.split(',') if p.strip()]
+            else:
+                data['patents_in_suit'] = []
+
+        # Initialize patent_sources if not provided
+        if 'patent_sources' not in data:
+            data['patent_sources'] = ['USPTO']  # Default to USPTO
+
+        return super().to_internal_value(data)
+
     def create(self, validated_data):
-        run_id = validated_data.pop('run_id')
+        """Create a new Run and associated PatentAnalysisRun with client context"""
         user = self.context['request'].user
-        run = Run.objects.get(id=run_id, user=user)
+
+        # Remove frontend-only fields that don't exist in the model
+        frontend_fields = ['patent_number', 'patent_title', 'analysis_type', 'patent_assignee',
+                          'opposing_party', 'key_claims', 'court_jurisdiction', 'case_stage',
+                          'priority_date', 'deadline', 'notes']
+
+        # Store extra data for metadata
+        extra_data = {}
+        for field in frontend_fields:
+            if field in validated_data:
+                extra_data[field] = validated_data.pop(field)
 
         # Handle admin users without a client - get or create default client
         if not user.client:
@@ -42,17 +112,32 @@ class PatentAnalysisRunSerializer(serializers.ModelSerializer):
         else:
             client = user.client
 
-        return PatentAnalysisRun.objects.create(run=run, client=client, **validated_data)
-    
+        # Create the core Run first (like MassClaimsRunCreateSerializer)
+        run = Run.objects.create(
+            user=user,
+            status='Uploaded'
+        )
+
+        # Create the PatentAnalysisRun with client for multi-tenancy
+        analysis_run = PatentAnalysisRun.objects.create(
+            run=run,
+            client=client,
+            **validated_data
+        )
+
+        return analysis_run
+
     def validate_patents_in_suit(self, value):
         """Validate patents in suit format"""
+        if value is None:
+            return []
         if not isinstance(value, list):
             raise serializers.ValidationError("Patents in suit must be a list")
-        
+
         for patent in value:
             if not isinstance(patent, str) or len(patent.strip()) == 0:
                 raise serializers.ValidationError("Each patent number must be a non-empty string")
-        
+
         return value
 
 

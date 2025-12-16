@@ -17,7 +17,8 @@ from .models import (
     ServiceExecution, ServiceOutput
 )
 from .serializers import (
-    PatentAnalysisRunSerializer, PatentDocumentSerializer, PatentClaimSerializer,
+    PatentAnalysisRunSerializer, PatentAnalysisRunCreateSerializer,
+    PatentDocumentSerializer, PatentClaimSerializer,
     PriorArtDocumentSerializer, ClaimChartSerializer, PatentLandscapeSerializer,
     InfringementAnalysisSerializer, ValidityChallengeSerializer,
     PatentAnalysisSummarySerializer, ClaimChartSummarySerializer,
@@ -50,15 +51,16 @@ class PatentAnalysisRunListCreateView(APIView):
     @swagger_auto_schema(
         operation_description="Create a new patent analysis run",
         tags=["IP Litigation - Analysis Runs"],
-        request_body=PatentAnalysisRunSerializer,
+        request_body=PatentAnalysisRunCreateSerializer,
         responses={201: PatentAnalysisRunSerializer}
     )
     def post(self, request):
         """Create a new patent analysis run"""
-        serializer = PatentAnalysisRunSerializer(data=request.data, context={'request': request})
+        serializer = PatentAnalysisRunCreateSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             analysis_run = serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            response_serializer = PatentAnalysisRunSerializer(analysis_run)
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
