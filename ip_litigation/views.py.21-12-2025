@@ -36,7 +36,7 @@ class PatentAnalysisRunListCreateView(APIView):
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
-
+    
     @swagger_auto_schema(
         operation_description="Get list of patent analysis runs",
         tags=["IP Litigation - Analysis Runs"],
@@ -47,7 +47,7 @@ class PatentAnalysisRunListCreateView(APIView):
         runs = PatentAnalysisRun.objects.filter(run__user=request.user)
         serializer = PatentAnalysisRunSerializer(runs, many=True)
         return Response(serializer.data)
-
+    
     @swagger_auto_schema(
         operation_description="Create a new patent analysis run",
         tags=["IP Litigation - Analysis Runs"],
@@ -70,7 +70,7 @@ class PatentAnalysisRunDetailView(APIView):
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
-
+    
     @swagger_auto_schema(
         operation_description="Get patent analysis run details",
         tags=["IP Litigation - Analysis Runs"],
@@ -81,7 +81,7 @@ class PatentAnalysisRunDetailView(APIView):
         analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
         serializer = PatentAnalysisRunSerializer(analysis_run)
         return Response(serializer.data)
-
+    
     @swagger_auto_schema(
         operation_description="Update patent analysis run",
         tags=["IP Litigation - Analysis Runs"],
@@ -96,7 +96,7 @@ class PatentAnalysisRunDetailView(APIView):
             serializer.save()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+    
     @swagger_auto_schema(
         operation_description="Delete patent analysis run",
         tags=["IP Litigation - Analysis Runs"],
@@ -115,7 +115,7 @@ class PatentDocumentView(APIView):
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
-
+    
     @swagger_auto_schema(
         operation_description="Get patent documents for an analysis run",
         tags=["IP Litigation - Patent Documents"],
@@ -128,19 +128,19 @@ class PatentDocumentView(APIView):
         """Get patent documents for an analysis run"""
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
-            return Response({"error": "analysis_run_id parameter is required"},
+            return Response({"error": "analysis_run_id parameter is required"}, 
                           status=status.HTTP_400_BAD_REQUEST)
-
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
+        
         documents = PatentDocument.objects.filter(
             analysis_run=analysis_run,
             user=request.user
         )
-
         serializer = PatentDocumentSerializer(documents, many=True)
         return Response(serializer.data)
-
+    
     @swagger_auto_schema(
         operation_description="Add a patent document to analysis",
         tags=["IP Litigation - Patent Documents"],
@@ -152,13 +152,12 @@ class PatentDocumentView(APIView):
         serializer = PatentDocumentSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             document = serializer.save()
-
+            
             # Trigger patent data extraction task
             extract_patent_data_task.delay(document.id, request.user.id)
-
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 
 class PatentClaimView(APIView):
@@ -167,7 +166,7 @@ class PatentClaimView(APIView):
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
-
+    
     @swagger_auto_schema(
         operation_description="Get patent claims for a patent document",
         tags=["IP Litigation - Patent Claims"],
@@ -180,19 +179,19 @@ class PatentClaimView(APIView):
         """Get patent claims for a patent document"""
         patent_document_id = request.query_params.get('patent_document_id')
         if not patent_document_id:
-            return Response({"error": "patent_document_id parameter is required"},
+            return Response({"error": "patent_document_id parameter is required"}, 
                           status=status.HTTP_400_BAD_REQUEST)
-
+        
         # Ensure user owns the patent document
         patent_document = get_object_or_404(PatentDocument, pk=patent_document_id, user=request.user)
+        
         claims = PatentClaim.objects.filter(
             patent_document=patent_document,
             user=request.user
         )
-
         serializer = PatentClaimSerializer(claims, many=True)
         return Response(serializer.data)
-
+    
     @swagger_auto_schema(
         operation_description="Trigger patent claim analysis",
         tags=["IP Litigation - Patent Claims"],
@@ -208,19 +207,19 @@ class PatentClaimView(APIView):
     def post(self, request):
         """Trigger patent claim analysis"""
         patent_document_id = request.data.get('patent_document_id')
-
+        
         if not patent_document_id:
             return Response(
-                {"error": "patent_document_id is required"},
+                {"error": "patent_document_id is required"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+        
         # Ensure user owns the patent document
         patent_document = get_object_or_404(PatentDocument, pk=patent_document_id, user=request.user)
-
+        
         # Trigger claim analysis task
         task = analyze_patent_claims_task.delay(patent_document.id, request.user.id)
-
+        
         return Response({
             "message": "Patent claim analysis started",
             "task_id": task.id,
@@ -234,7 +233,7 @@ class PriorArtDocumentView(APIView):
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
-
+    
     @swagger_auto_schema(
         operation_description="Get prior art documents for an analysis run",
         tags=["IP Litigation - Prior Art"],
@@ -248,24 +247,25 @@ class PriorArtDocumentView(APIView):
         """Get prior art documents for an analysis run"""
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
-            return Response({"error": "analysis_run_id parameter is required"},
+            return Response({"error": "analysis_run_id parameter is required"}, 
                           status=status.HTTP_400_BAD_REQUEST)
-
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
+        
         documents = PriorArtDocument.objects.filter(
             analysis_run=analysis_run,
             user=request.user
         )
-
+        
         # Apply document type filter
         document_type = request.query_params.get('document_type')
         if document_type:
             documents = documents.filter(document_type=document_type)
-
+        
         serializer = PriorArtDocumentSerializer(documents, many=True)
         return Response(serializer.data)
-
+    
     @swagger_auto_schema(
         operation_description="Add a prior art document",
         tags=["IP Litigation - Prior Art"],
@@ -277,10 +277,10 @@ class PriorArtDocumentView(APIView):
         serializer = PriorArtDocumentSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             document = serializer.save()
-
+            
             # Trigger prior art analysis task
             search_prior_art_task.delay(document.id, request.user.id)
-
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -308,8 +308,9 @@ class ClaimChartView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
+
         charts = ClaimChart.objects.filter(
             analysis_run=analysis_run,
             user=request.user
@@ -409,13 +410,13 @@ class InfringementAnalysisView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
+
         analyses = InfringementAnalysis.objects.filter(
             analysis_run=analysis_run,
             user=request.user
         )
-
         serializer = InfringementAnalysisSerializer(analyses, many=True)
         return Response(serializer.data)
 
@@ -460,16 +461,15 @@ class ValidityChallengeView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
+
         challenges = ValidityChallenge.objects.filter(
             analysis_run=analysis_run,
             user=request.user
         )
-
         serializer = ValidityChallengeSerializer(challenges, many=True)
         return Response(serializer.data)
-
 
     @swagger_auto_schema(
         operation_description="Create a new validity challenge",
@@ -512,8 +512,8 @@ class PatentAnalysisSummaryView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
 
         # Get summary statistics
         patents = PatentDocument.objects.filter(analysis_run=analysis_run, user=request.user)
@@ -579,8 +579,8 @@ class ClaimChartSummaryView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
 
         # Get summary statistics grouped by chart type
         summary_data = []
@@ -632,8 +632,8 @@ class InfringementSummaryView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
 
         # Get infringement analysis summary
         analyses = InfringementAnalysis.objects.filter(
@@ -700,8 +700,8 @@ class ValiditySummaryView(APIView):
             return Response({"error": "analysis_run_id parameter is required"},
                           status=status.HTTP_400_BAD_REQUEST)
 
-        # Ensure user owns the analysis run (lookup by UUID)
-        analysis_run = get_object_or_404(PatentAnalysisRun, analysis_run_uuid=analysis_run_id, run__user=request.user)
+        # Ensure user owns the analysis run
+        analysis_run = get_object_or_404(PatentAnalysisRun, pk=analysis_run_id, run__user=request.user)
 
         # Get validity challenge summary
         challenges = ValidityChallenge.objects.filter(

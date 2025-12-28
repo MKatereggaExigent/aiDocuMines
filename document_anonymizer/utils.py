@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import re
 import logging
@@ -9,7 +10,7 @@ from presidio_analyzer import AnalyzerEngine
 from presidio_anonymizer import AnonymizerEngine
 from unstructured.partition.pdf import partition_pdf
 from document_anonymizer.models import Anonymize
-
+import sys
 from django.db.models import Avg, Count, Q
 from document_anonymizer.models import AnonymizationRun, Anonymize, DeAnonymize
 
@@ -18,17 +19,59 @@ from functools import lru_cache
 logger = logging.getLogger(__name__)
 
 
+
+def _skip_heavy_init() -> bool:
+    if os.getenv("SKIP_NLP_INIT") == "1":
+        return True
+    # avoid heavy init during management commands
+    mgmt_cmds = {"collectstatic", "migrate", "makemigrations", "check", "createsuperuser"}
+    return any(cmd in sys.argv for cmd in mgmt_cmds)
+
+
+
 class AnonymizationService:
     """
     Handles document extraction, full Presidio ➔ SpaCy anonymization pipeline, and de-anonymization.
     Now supports structured PDF extraction using unstructured.
     """
 
+
+    def __init__(self):
+        logger.info("📦 Initializing AnonymizationService with shared models...")
+        self.analyzer = AnalyzerEngine()
+        self.anonymizer = AnonymizerEngine()
+
+        self._spacy_model = os.getenv("SPACY_MODEL", "en_core_web_lg")
+        self.nlp = None
+
+        if _skip_heavy_init():
+            logger.info(f"⏭️ Skipping spaCy load (SPACY_MODEL={self._spacy_model}) due to build/management command.")
+        else:
+            self._ensure_nlp_loaded()
+
+
+    def _ensure_nlp_loaded(self):
+        if self.nlp is not None:
+            return
+        try:
+            self.nlp = spacy.load(self._spacy_model)
+            logger.info(f"✅ spaCy model loaded: {self._spacy_model}")
+        except OSError as e:
+            logger.error(
+                f"❌ spaCy model '{self._spacy_model}' not installed. "
+                f"Install it in the image or set SPACY_MODEL to an installed model."
+            )
+            raise
+
+
+    ''' 
     def __init__(self):
         logger.info("📦 Initializing AnonymizationService with shared models...")
         self.analyzer = AnalyzerEngine()
         self.anonymizer = AnonymizerEngine()
         self.nlp = spacy.load("en_core_web_lg")  # Load once per task
+    '''
+
 
     def extract_text_from_file(self, file_path):
         logger.info(f"🔄 Extracting text from: {file_path}")
@@ -100,6 +143,9 @@ class AnonymizationService:
         Reuses shared engine instances for performance and memory efficiency.
         """
         logger.info("🔄 Running Presidio anonymization...")
+
+        self._ensure_nlp_loaded()
+
         presidio_results = self.analyzer.analyze(text=text, entities=[], language="en")
         presidio_map = {}
         presidio_counter = {}
@@ -159,192 +205,6 @@ class AnonymizationService:
                 block["text"] = new_text
                 return True
         return False
-
-    '''
-    def compute_risk_score(self, original_text: str, presidio_map: dict, spacy_map: dict):
-        """
-        Comprehensive PII risk scoring using Presidio + spaCy.
-
-        - De-dupes by (normalized_value, label) across engines
-        - Weights labels by severity (gov IDs/financial IDs > medical > contact > generic)
-        - Scales by density per 1,000 tokens (document-size proportional)
-        - Covers full spaCy NER (OntoNotes) + the Presidio entities you enumerated
-        - Still resilient to unknown/custom labels (sane defaults)
-
-        Returns:
-          {
-            "risk_score": float (0..100),
-            "risk_level": "Ok" | "Low" | "Medium" | "High",
-            "breakdown": { label: count }
-          }
-        """
-        import re
-
-        text = (original_text or "").strip()
-        # token count (fallback to 1 to avoid div-by-zero)
-        doc_tokens = max(1, len(re.findall(r"\w+", text)))
-
-        # -------- helpers --------
-        def label_of(mask_key: str) -> str:
-            # e.g. "EMAIL_ADDRESS_MASKED_3" -> "EMAIL_ADDRESS"
-            return (mask_key or "").split("_MASKED_")[0].upper().strip()
-
-        def norm_val(v: str) -> str:
-            # normalize entity surface form for de-duping
-            v = (v or "").strip().lower()
-            v = re.sub(r"\s+", " ", v)
-            return v
-
-        # -------- spaCy labels (canonical + common alternates) --------
-        SPACY_STD = {
-            "PERSON", "NORP", "FAC", "ORG", "GPE", "LOC", "PRODUCT", "EVENT",
-            "WORK_OF_ART", "LAW", "LANGUAGE", "DATE", "TIME", "PERCENT", "MONEY",
-            "QUANTITY", "ORDINAL", "CARDINAL"
-        }
-        # multilingual / alternate label forms you mentioned
-        SPACY_ALIASES = {
-            "PER": "PERSON",
-            "ORG": "ORG",
-            "LOC": "LOC",
-            "MISC": "MISC",
-        }
-
-        # -------- Presidio entities (from your lists) --------
-        # Finance / credentials
-        PRES_FINANCE_STRICT = {
-            "CREDIT_CARD", "US_BANK_NUMBER", "IBAN_CODE", "CRYPTO",
-        }
-        # Contact & network
-        PRES_CONTACT = {
-            "EMAIL_ADDRESS", "PHONE_NUMBER", "IP_ADDRESS", "URL",
-        }
-        # Generic person/location (Presidio’s logical entities)
-        PRES_GENERIC = {"PERSON", "LOCATION", "NRP"}  # NRP ~ NORP
-        # Medical
-        PRES_MEDICAL = {"MEDICAL_LICENSE", "UK_NHS", "AU_MEDICARE"}
-        # US IDs
-        PRES_US = {"US_SSN", "US_ITIN", "US_PASSPORT", "US_DRIVER_LICENSE"}
-        # UK
-        PRES_UK = {"UK_NHS", "UK_NINO"}
-        # Spain
-        PRES_ES = {"ES_NIF", "ES_NIE"}
-        # Italy
-        PRES_IT = {"IT_FISCAL_CODE", "IT_DRIVER_LICENSE", "IT_VAT_CODE", "IT_PASSPORT", "IT_IDENTITY_CARD"}
-        # Poland
-        PRES_PL = {"PL_PESEL"}
-        # Singapore
-        PRES_SG = {"SG_NRIC_FIN", "SG_UEN"}
-        # Australia
-        PRES_AU = {"AU_ABN", "AU_ACN", "AU_TFN", "AU_MEDICARE"}
-        # India
-        PRES_IN = {"IN_PAN", "IN_AADHAAR", "IN_VEHICLE_REGISTRATION", "IN_VOTER", "IN_PASSPORT"}
-        # Finland
-        PRES_FI = {"FI_PERSONAL_IDENTITY_CODE"}
-        # Korea
-        PRES_KR = {"KR_RRN"}
-        # Thailand
-        PRES_TH = {"TH_TNIN"}
-        # Date/time (Presidio combined)
-        PRES_DATETIME = {"DATE_TIME"}
-
-        # -------- severity groups (weights) --------
-        # High severity: government/strong identifiers and financial credentials
-        HIGH = (
-            PRES_FINANCE_STRICT
-            | PRES_US | PRES_UK | PRES_ES | PRES_IT | PRES_PL | PRES_SG
-            | PRES_AU | PRES_IN | PRES_FI | PRES_KR | PRES_TH
-            | {"IT_PASSPORT", "IN_PASSPORT"}  # already included above; kept for clarity
-        )
-        # Medium-High: medical identifiers (very sensitive); some org ID numbers
-        MED_HIGH = PRES_MEDICAL | {"SG_UEN", "AU_ABN", "AU_ACN", "IT_VAT_CODE"}
-        # Medium: direct contact/trackers + demographic groupings
-        MED = PRES_CONTACT | {"NRP", "NORP"}
-        # Low+: generic entities and temporal/values
-        LOW = (
-            PRES_GENERIC
-            | PRES_DATETIME
-            | {
-                "PERSON", "GPE", "LOC", "ORG", "FAC", "PRODUCT", "EVENT", "WORK_OF_ART",
-                "LAW", "LANGUAGE", "DATE", "TIME", "PERCENT", "MONEY",
-                "QUANTITY", "ORDINAL", "CARDINAL", "MISC"
-            }
-        )
-
-        def canonicalize_label(raw: str) -> str:
-            L = (raw or "").upper().strip()
-            # unify spaCy alternates (PER→PERSON etc.)
-            if L in SPACY_ALIASES:
-                return SPACY_ALIASES[L]
-            return L
-
-        def weight_for(label: str) -> float:
-            L = canonicalize_label(label)
-            if L in HIGH:      return 8.0
-            if L in MED_HIGH:  return 6.0
-            if L in MED:       return 4.5
-            if L in LOW:       return 2.5
-            # Fallback heuristics (catch unknown/custom labels)
-            if re.search(r"(SSN|PASSPORT|DRIVER|LICENSE|NINO|NRIC|PESEL|TFN|AADHAAR|RRN|TNIN|ID(ENTITY)?|IBAN|BANK|ACCOUNT|CREDIT|CARD|CRYPTO)", L):
-                return 7.0
-            if re.search(r"(EMAIL|PHONE|MOBILE|TEL|IP|URL|DOMAIN)", L):
-                return 4.0
-            if re.search(r"(DATE|TIME|MONEY|PERCENT|QUANTITY|ORDINAL|CARDINAL)", L):
-                return 2.0
-            return 3.0  # sensible default
-
-        # -------- merge & de-duplicate across engines --------
-        merged = {}  # (value_norm, label) -> entry
-        def ingest(src_map: dict):
-            for mask, val in (src_map or {}).items():
-                raw_label = label_of(mask)
-                label = canonicalize_label(raw_label)
-                v_norm = norm_val(val)
-                if not v_norm:
-                    continue
-                key = (v_norm, label)
-                entry = merged.setdefault(key, {
-                    "value": v_norm,
-                    "label": label,
-                    "count": 0,
-                    "weight": weight_for(label),
-                    "tokens": len(re.findall(r"\w+", v_norm)),
-                    "chars": len(v_norm),
-                })
-                entry["count"] += 1
-
-        ingest(presidio_map or {})
-        ingest(spacy_map or {})
-
-        # -------- aggregate & scale --------
-        total_occurrences = sum(e["count"] for e in merged.values())
-        total_weighted    = sum(e["weight"] * e["count"] for e in merged.values())
-
-        # density per 1k tokens => doc-size proportional
-        density_per_1k  = (total_occurrences / doc_tokens) * 1000.0
-        severity_per_1k = (total_weighted    / doc_tokens) * 1000.0
-
-        # Blend density (60%) + severity (40%), each with a soft cap
-        risk = (
-            min(1.0, density_per_1k  / 20.0) * 0.60 +
-            min(1.0, severity_per_1k / 30.0) * 0.40
-        ) * 100.0
-        risk_score = round(min(100.0, risk), 2)
-
-        if   risk_score >= 60: risk_level = "High"
-        elif risk_score >= 20: risk_level = "Medium"
-        elif risk_score >  0:  risk_level = "Low"
-        else:                  risk_level = "Ok"
-
-        breakdown = {}
-        for e in merged.values():
-            breakdown[e["label"]] = breakdown.get(e["label"], 0) + e["count"]
-
-        return {
-            "risk_score": risk_score,
-            "risk_level": risk_level,
-            "breakdown": dict(sorted(breakdown.items(), key=lambda kv: (-kv[1], kv[0]))),
-        }
-    '''
 
 
     def compute_risk_score(self, original_text: str, presidio_map: dict, spacy_map: dict):

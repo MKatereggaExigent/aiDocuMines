@@ -57,7 +57,12 @@ COPY supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel numpy
 
 COPY production_requirements.txt /app/
+
 RUN pip install --no-cache-dir --prefer-binary -r production_requirements.txt gunicorn
+
+# Install spaCy model deterministically (avoid runtime/build-time downloads)
+RUN pip install --no-cache-dir \
+  https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl
 
 RUN mkdir -p /app/media /app/logs && chown -R www-data:www-data /app/media
 
@@ -80,7 +85,12 @@ COPY . /app/
 # Ensure logs directory exists
 RUN mkdir -p /app/logs /app/media && chown -R www-data:www-data /app/media
 
+# RUN python manage.py collectstatic --noinput
+
+ENV SKIP_NLP_INIT=1
 RUN python manage.py collectstatic --noinput
+ENV SKIP_NLP_INIT=0
+
 
 EXPOSE 8020
 EXPOSE 80

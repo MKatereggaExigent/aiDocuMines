@@ -15,12 +15,8 @@ class PatentAnalysisRun(models.Model):
     """
     client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_analysis_runs')
     run = models.OneToOneField('core.Run', on_delete=models.CASCADE, related_name='patent_analysis')
-
-    # Auto-generated UUID for external references (API, frontend)
-    analysis_run_uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, help_text="Unique identifier for this analysis run")
-
     case_name = models.CharField(max_length=255, help_text="Name of the IP litigation case")
-
+    
     litigation_type = models.CharField(
         max_length=100,
         choices=[
@@ -34,26 +30,26 @@ class PatentAnalysisRun(models.Model):
         ],
         default='patent_infringement'
     )
-
+    
     # Patent office sources
     patent_sources = models.JSONField(
         default=list,
         help_text="List of patent office sources (USPTO, EPO, JPO, etc.)"
     )
-
+    
     # Key patents in dispute
     patents_in_suit = models.JSONField(
         default=list,
         help_text="List of patent numbers in the litigation"
     )
-
+    
     # Technology area
     technology_area = models.CharField(
         max_length=255,
         blank=True,
         help_text="Technology area or field of the patents"
     )
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -78,12 +74,12 @@ class PatentDocument(models.Model):
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ip_patent_documents')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_documents')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_documents')
-
+    
     # Patent identification
     patent_number = models.CharField(max_length=100, help_text="Patent number (e.g., US10123456B2)")
     application_number = models.CharField(max_length=100, blank=True, help_text="Patent application number")
     publication_number = models.CharField(max_length=100, blank=True, help_text="Publication number")
-
+    
     # Patent office and jurisdiction
     patent_office = models.CharField(
         max_length=50,
@@ -97,18 +93,18 @@ class PatentDocument(models.Model):
             ('other', 'Other Patent Office')
         ]
     )
-
+    
     # Patent metadata
     title = models.CharField(max_length=500, help_text="Patent title")
     inventors = models.JSONField(default=list, help_text="List of inventors")
     assignees = models.JSONField(default=list, help_text="List of assignees/owners")
-
+    
     # Dates
     filing_date = models.DateField(null=True, blank=True)
     publication_date = models.DateField(null=True, blank=True)
     grant_date = models.DateField(null=True, blank=True)
     expiration_date = models.DateField(null=True, blank=True)
-
+    
     # Patent status
     status = models.CharField(
         max_length=50,
@@ -121,19 +117,19 @@ class PatentDocument(models.Model):
         ],
         default='pending'
     )
-
+    
     # Classification
     ipc_classes = models.JSONField(default=list, help_text="International Patent Classification codes")
     cpc_classes = models.JSONField(default=list, help_text="Cooperative Patent Classification codes")
-
+    
     # Content extraction
     abstract = models.TextField(blank=True, help_text="Patent abstract")
     claims_text = models.TextField(blank=True, help_text="Patent claims text")
     description_text = models.TextField(blank=True, help_text="Patent description text")
-
+    
     # Processing metadata
     processing_metadata = models.JSONField(default=dict, blank=True)
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -160,10 +156,10 @@ class PatentClaim(models.Model):
     patent_document = models.ForeignKey(PatentDocument, on_delete=models.CASCADE, related_name='claims')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_claims')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_claims')
-
+    
     claim_number = models.IntegerField(help_text="Claim number within the patent")
     claim_text = models.TextField(help_text="Full text of the patent claim")
-
+    
     # Claim type
     claim_type = models.CharField(
         max_length=50,
@@ -176,17 +172,17 @@ class PatentClaim(models.Model):
             ('composition', 'Composition Claim')
         ]
     )
-
+    
     # Dependency relationships
     depends_on_claims = models.JSONField(default=list, help_text="List of claim numbers this claim depends on")
-
+    
     # Claim elements (parsed components)
     claim_elements = models.JSONField(default=list, help_text="Parsed claim elements/limitations")
-
+    
     # Analysis results
     element_count = models.IntegerField(default=0, help_text="Number of claim elements")
     complexity_score = models.FloatField(null=True, blank=True, help_text="Claim complexity score (0.0-1.0)")
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -212,7 +208,7 @@ class PriorArtDocument(models.Model):
     file = models.ForeignKey('core.File', on_delete=models.CASCADE, related_name='ip_prior_art_documents')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_prior_art_documents')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='prior_art_documents')
-
+    
     # Document identification
     document_id = models.CharField(max_length=255, help_text="Document identifier (patent number, publication ID, etc.)")
     document_type = models.CharField(
@@ -226,24 +222,24 @@ class PriorArtDocument(models.Model):
             ('other', 'Other Document')
         ]
     )
-
+    
     # Document metadata
     title = models.CharField(max_length=500)
     authors = models.JSONField(default=list, help_text="List of authors")
     publication_date = models.DateField(null=True, blank=True)
     source = models.CharField(max_length=255, blank=True, help_text="Publication source or venue")
-
+    
     # Content
     abstract = models.TextField(blank=True)
     content_text = models.TextField(blank=True, help_text="Extracted document content")
-
+    
     # Relevance analysis
     relevance_score = models.FloatField(null=True, blank=True, help_text="Relevance to patents in suit (0.0-1.0)")
     relevance_explanation = models.TextField(blank=True, help_text="Explanation of relevance")
-
+    
     # Prior art categories
     art_categories = models.JSONField(default=list, help_text="Categories of prior art disclosed")
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -269,7 +265,7 @@ class ClaimChart(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_claim_charts')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='claim_charts')
     patent_claim = models.ForeignKey(PatentClaim, on_delete=models.CASCADE, related_name='claim_charts')
-
+    
     chart_name = models.CharField(max_length=255, help_text="Name of the claim chart")
     chart_type = models.CharField(
         max_length=50,
@@ -279,14 +275,14 @@ class ClaimChart(models.Model):
             ('non_infringement', 'Non-Infringement Analysis')
         ]
     )
-
+    
     # Target of analysis
     target_product = models.CharField(max_length=255, blank=True, help_text="Accused product or system")
     target_prior_art = models.ForeignKey(PriorArtDocument, on_delete=models.SET_NULL, null=True, blank=True, related_name='claim_charts')
-
+    
     # Claim chart mappings
     element_mappings = models.JSONField(default=list, help_text="Mappings of claim elements to product features or prior art")
-
+    
     # Analysis results
     overall_conclusion = models.CharField(
         max_length=50,
@@ -299,13 +295,13 @@ class ClaimChart(models.Model):
         ],
         default='unclear'
     )
-
+    
     confidence_score = models.FloatField(null=True, blank=True, help_text="Confidence in analysis (0.0-1.0)")
     analysis_notes = models.TextField(blank=True, help_text="Detailed analysis notes")
-
+    
     # Supporting evidence
     supporting_documents = models.ManyToManyField('core.File', related_name='ip_claim_charts', blank=True)
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -329,27 +325,27 @@ class PatentLandscape(models.Model):
     client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_patent_landscapes')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_patent_landscapes')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='patent_landscapes')
-
+    
     landscape_name = models.CharField(max_length=255, help_text="Name of the patent landscape")
     technology_area = models.CharField(max_length=255, help_text="Technology area being analyzed")
-
+    
     # Search parameters
     search_keywords = models.JSONField(default=list, help_text="Keywords used for patent search")
     classification_codes = models.JSONField(default=list, help_text="Patent classification codes searched")
     date_range_start = models.DateField(null=True, blank=True)
     date_range_end = models.DateField(null=True, blank=True)
-
+    
     # Analysis results
     total_patents_found = models.IntegerField(default=0)
     key_players = models.JSONField(default=list, help_text="Key patent holders/assignees")
     technology_trends = models.JSONField(default=list, help_text="Identified technology trends")
-
+    
     # Patent clusters
     patent_clusters = models.JSONField(default=list, help_text="Clustered patent groups by technology")
-
+    
     # Landscape metadata
     landscape_metadata = models.JSONField(default=dict, blank=True)
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -373,16 +369,16 @@ class InfringementAnalysis(models.Model):
     client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='ipl_infringement_analyses')
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_infringement_analyses')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='infringement_analyses')
-
+    
     analysis_name = models.CharField(max_length=255, help_text="Name of the infringement analysis")
     accused_product = models.CharField(max_length=255, help_text="Product or system accused of infringement")
-
+    
     # Patents being asserted
     asserted_patents = models.ManyToManyField(PatentDocument, related_name='infringement_analyses')
-
+    
     # Analysis methodology
     analysis_methodology = models.TextField(help_text="Description of analysis methodology")
-
+    
     # Infringement findings
     literal_infringement = models.CharField(
         max_length=50,
@@ -394,7 +390,7 @@ class InfringementAnalysis(models.Model):
         ],
         default='unclear'
     )
-
+    
     doctrine_of_equivalents = models.CharField(
         max_length=50,
         choices=[
@@ -405,7 +401,7 @@ class InfringementAnalysis(models.Model):
         ],
         default='not_applicable'
     )
-
+    
     # Overall conclusion
     infringement_conclusion = models.CharField(
         max_length=50,
@@ -417,7 +413,7 @@ class InfringementAnalysis(models.Model):
         ],
         default='inconclusive'
     )
-
+    
     confidence_level = models.CharField(
         max_length=20,
         choices=[
@@ -427,11 +423,11 @@ class InfringementAnalysis(models.Model):
         ],
         default='medium'
     )
-
+    
     # Analysis details
     detailed_findings = models.JSONField(default=dict, help_text="Detailed infringement findings")
     recommendations = models.JSONField(default=list, help_text="Recommendations based on analysis")
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -457,22 +453,22 @@ class ValidityChallenge(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ip_validity_challenges')
     analysis_run = models.ForeignKey(PatentAnalysisRun, on_delete=models.CASCADE, related_name='validity_challenges')
     target_patent = models.ForeignKey(PatentDocument, on_delete=models.CASCADE, related_name='validity_challenges')
-
+    
     challenge_name = models.CharField(max_length=255, help_text="Name of the validity challenge")
-
+    
     # Challenge grounds
     challenge_grounds = models.JSONField(
         default=list,
         help_text="Grounds for invalidity (anticipation, obviousness, etc.)"
     )
-
+    
     # Prior art references
     prior_art_references = models.ManyToManyField(PriorArtDocument, related_name='validity_challenges')
-
+    
     # Invalidity analysis
     anticipation_analysis = models.TextField(blank=True, help_text="Anticipation analysis under 35 U.S.C. § 102")
     obviousness_analysis = models.TextField(blank=True, help_text="Obviousness analysis under 35 U.S.C. § 103")
-
+    
     # Challenge strength
     challenge_strength = models.CharField(
         max_length=20,
@@ -483,13 +479,13 @@ class ValidityChallenge(models.Model):
         ],
         default='moderate'
     )
-
+    
     # Likelihood of success
     success_likelihood = models.FloatField(null=True, blank=True, help_text="Likelihood of success (0.0-1.0)")
-
+    
     # Challenge details
     detailed_analysis = models.JSONField(default=dict, help_text="Detailed validity challenge analysis")
-
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

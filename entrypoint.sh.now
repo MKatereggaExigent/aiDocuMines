@@ -1,35 +1,22 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
 echo "🚀 Starting System Services..."
-echo "🧭 SERVICE_NAME=${SERVICE_NAME:-}"
+echo "🧭 SERVICE_NAME=${SERVICE_NAME}"
 
 ########################################
-# Load .env (ONLY fill missing vars; do NOT override docker/compose env)
+# Load .env
 ########################################
 if [ -f "/app/.env" ]; then
-    echo "✅ .env found (will only fill missing vars)"
+    echo "✅ Loading environment variables from .env"
+    set -o allexport
     while IFS='=' read -r key value; do
-        # Skip blanks and comments (also handles leading whitespace before #)
-        [[ -z "${key:-}" || "$key" =~ ^[[:space:]]*# ]] && continue
-
-        # Trim whitespace around key
-        key="$(printf '%s' "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-
-        # Remove possible Windows CR at end of value
-        value="${value%$'\r'}"
-
-        # Trim whitespace around value (NO xargs)
-        value="$(printf '%s' "${value:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-
-        # Strip surrounding double quotes if present
-        value="${value#\"}"; value="${value%\"}"
-
-        # Only set if not already present in environment
-        if [ -z "${!key+x}" ]; then
-            export "$key=$value"
-        fi
+        [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+        key="$(echo "$key" | xargs)"
+        value="$(echo "$value" | xargs | sed -E 's/^"(.*)"$/\1/')"
+        export "$key=$value"
     done < /app/.env
+    set +o allexport
 else
     echo "⚠️ .env file not found, relying on container env"
 fi
@@ -46,7 +33,7 @@ required_vars=(
 )
 
 for var in "${required_vars[@]}"; do
-    if [ -z "${!var:-}" ]; then
+    if [ -z "${!var}" ]; then
         echo "❌ Missing required env var: $var"
         exit 1
     fi
@@ -65,7 +52,7 @@ echo "✅ PostgreSQL is ready!"
 ########################################
 # DB PREPARE (INIT CONTAINER)
 ########################################
-if [ "${SERVICE_NAME:-}" = "db_prepare" ]; then
+if [ "$SERVICE_NAME" = "db_prepare" ]; then
     echo "🛠️ Running database preparation..."
 
     python manage.py migrate --noinput
@@ -122,7 +109,7 @@ fi
 ########################################
 # WEB (GUNICORN)
 ########################################
-if [ "${SERVICE_NAME:-}" = "web" ]; then
+if [ "$SERVICE_NAME" = "web" ]; then
     echo "📂 Collecting static files..."
     python manage.py collectstatic --noinput
 
@@ -136,12 +123,12 @@ fi
 ########################################
 # CELERY
 ########################################
-if [ "${SERVICE_NAME:-}" = "celery" ]; then
+if [ "$SERVICE_NAME" = "celery" ]; then
     echo "🚀 Starting Celery worker..."
     exec celery -A aiDocuMines worker --loglevel=info --concurrency=4
 fi
 
-if [ "${SERVICE_NAME:-}" = "celery_beat" ]; then
+if [ "$SERVICE_NAME" = "celery_beat" ]; then
     echo "🚀 Starting Celery beat..."
     exec celery -A aiDocuMines beat \
         --loglevel=info \
@@ -151,7 +138,7 @@ fi
 ########################################
 # FILE MONITOR
 ########################################
-if [ "${SERVICE_NAME:-}" = "file_monitor" ]; then
+if [ "$SERVICE_NAME" = "file_monitor" ]; then
     echo "👁️ Starting Supervisor..."
     exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
 fi
@@ -159,7 +146,7 @@ fi
 ########################################
 # OLLAMA
 ########################################
-if [ "${SERVICE_NAME:-}" = "ollama" ]; then
+if [ "$SERVICE_NAME" = "ollama" ]; then
     echo "📦 Pulling Ollama models..."
     ollama pull mistral || true
     ollama pull llama3 || true
@@ -171,6 +158,6 @@ fi
 ########################################
 # SAFETY NET
 ########################################
-echo "❌ Unknown SERVICE_NAME='${SERVICE_NAME:-}'"
+echo "❌ Unknown SERVICE_NAME='$SERVICE_NAME'"
 exit 1
 

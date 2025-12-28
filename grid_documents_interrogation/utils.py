@@ -11,6 +11,8 @@ from openai import OpenAI
 # Django models (for cached text lookup when using file_id)
 from core.models import File
 
+from langchain_core.output_parsers import StrOutputParser
+
 # Registry of model context limits (tokens)
 MODEL_CONTEXT_WINDOWS = {
     "gpt-4o": 128000,
@@ -284,7 +286,8 @@ def dispatch_to_llm(
             prompt = "\n\n".join([p for p in prompt_parts if p])
 
             # ChatOllama doesn't expose a per-call timeout; rely on upstream task timeouts
-            text = chat.predict(prompt)
+            # text = chat.predict(prompt)
+            text = (chat | StrOutputParser()).invoke(prompt)
             return text if isinstance(text, str) else str(text)
 
         except Exception as e:
@@ -322,6 +325,8 @@ def dispatch_to_llm(query_text: str, chunk: str, llm_config: dict, previous_mess
             temperature=0.2,
         )
         return response.choices[0].message.content
+        curl -L https://iterm2.com/shell_integration/install_shell_integration_and_utilities.sh | bash
+
 
     elif provider == "ollama":
         try:

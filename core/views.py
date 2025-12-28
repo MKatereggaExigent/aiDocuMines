@@ -181,7 +181,22 @@ class FileUploadView(APIView):
                     extension=dup_self.extension,
                 )
                 register_file_folder_link(clone)
-                _link_to_folder(clone, user, project_id, service_id)
+                #_link_to_folder(clone, user, project_id, service_id)
+                
+
+                folder_name = request.data.get("folder_name") or request.query_params.get("folder_name")
+                if folder_name:
+                    folder, _ = Folder.objects.get_or_create(
+                        name=folder_name,
+                        user=user,
+                        project_id=project_id,
+                        service_id=service_id,
+                        defaults={"created_at": timezone.now()},
+                    )
+                    FileFolderLink.objects.get_or_create(file=clone, folder=folder)
+                else:
+                    _link_to_folder(clone, user, project_id, service_id)
+
                 file_payload.append(_resp(clone, "File cloned for reuse."))
                 continue  # next upload
 
@@ -204,7 +219,23 @@ class FileUploadView(APIView):
                     extension=dup_other.extension
                 )
                 register_file_folder_link(reused)
-                _link_to_folder(reused, user, project_id, service_id)
+                # _link_to_folder(reused, user, project_id, service_id)
+
+
+                folder_name = request.data.get("folder_name") or request.query_params.get("folder_name")
+                if folder_name:
+                    folder, _ = Folder.objects.get_or_create(
+                        name=folder_name,
+                        user=user,
+                        project_id=project_id,
+                        service_id=service_id,
+                        defaults={"created_at": timezone.now()},
+                    )
+                    FileFolderLink.objects.get_or_create(file=reused, folder=folder)
+                else:
+                    _link_to_folder(reused, user, project_id, service_id)
+
+
                 file_payload.append(_resp(reused, "Duplicate file reused from another user."))
                 continue
 
@@ -242,7 +273,22 @@ class FileUploadView(APIView):
                 extension=extension
             )
             register_file_folder_link(fresh)
-            _link_to_folder(fresh, user, project_id, service_id)
+            # _link_to_folder(fresh, user, project_id, service_id)
+            
+
+            folder_name = request.data.get("folder_name") or request.query_params.get("folder_name")
+            if folder_name:
+                folder, _ = Folder.objects.get_or_create(
+                    name=folder_name,
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                    defaults={"created_at": timezone.now()},
+                )
+                FileFolderLink.objects.get_or_create(file=fresh, folder=folder)
+            else:
+                _link_to_folder(fresh, user, project_id, service_id)
+
             file_payload.append(_resp(fresh, "File uploaded successfully."))
 
 

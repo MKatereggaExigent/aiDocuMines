@@ -5,10 +5,8 @@ Provides high-level services for patent analysis, infringement detection, and va
 
 import dspy
 import json
-import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, date
-from django.conf import settings
 
 from .schemas import (
     PatentClassificationInput, PatentClassificationOutput,
@@ -23,69 +21,29 @@ from .dspy_signatures import (
 )
 from .models import PatentDocument, PatentClaim, InfringementAnalysis, ValidityChallenge
 
-logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# DSPy Configuration
-# ============================================================================
-
-def configure_dspy():
-    """Configure DSPy with the appropriate LLM"""
-    try:
-        # Try to use Ollama first (local development)
-        lm = dspy.OllamaLocal(
-            model=getattr(settings, 'DSPY_MODEL', 'llama3'),
-            base_url=getattr(settings, 'OLLAMA_BASE_URL', 'http://localhost:11434'),
-            max_tokens=4000,
-        )
-        dspy.settings.configure(lm=lm)
-        logger.info("DSPy configured with Ollama for IP Litigation")
-    except Exception as e:
-        logger.warning(f"Failed to configure Ollama: {e}. Falling back to OpenAI.")
-        try:
-            # Fallback to OpenAI
-            lm = dspy.OpenAI(
-                model=getattr(settings, 'OPENAI_MODEL', 'gpt-3.5-turbo'),
-                api_key=getattr(settings, 'OPENAI_API_KEY', ''),
-                max_tokens=4000,
-            )
-            dspy.settings.configure(lm=lm)
-            logger.info("DSPy configured with OpenAI for IP Litigation")
-        except Exception as e2:
-            logger.error(f"Failed to configure DSPy for IP Litigation: {e2}")
-            raise
-
-
-# Initialize DSPy on module load
-try:
-    configure_dspy()
-except Exception as e:
-    logger.error(f"Failed to initialize DSPy for IP Litigation: {e}")
-
 
 class PatentDocumentClassifier:
     """
     Service for classifying patent documents and extracting metadata.
     Uses DSPy to analyze patent documents and save results to the database.
     """
-
+    
     def __init__(self, lm: Optional[dspy.LM] = None):
         """Initialize with optional language model"""
         if lm:
             dspy.settings.configure(lm=lm)
         self.classifier = dspy.ChainOfThought(ClassifyPatentDocument)
-
+    
     def classify(self, input_data: PatentClassificationInput, analysis_run, user, client) -> PatentClassificationOutput:
         """
         Classify a patent document and save to database.
-
+        
         Args:
             input_data: Patent classification input
             analysis_run: PatentAnalysisRun instance
             user: User performing the classification
             client: Client organization
-
+            
         Returns:
             PatentClassificationOutput with classification results
         """
@@ -94,10 +52,10 @@ class PatentDocumentClassifier:
             document_text=input_data.document_text,
             document_title=input_data.document_title or ""
         )
-
+        
         # Parse IPC classes
         ipc_classes = [c.strip() for c in result.ipc_classes.split(',') if c.strip()]
-
+        
         # Parse filing date
         filing_date = None
         if result.filing_date:
@@ -105,7 +63,7 @@ class PatentDocumentClassifier:
                 filing_date = datetime.strptime(result.filing_date, '%Y-%m-%d').date()
             except:
                 pass
-
+        
         # Create output
         output = PatentClassificationOutput(
             document_type=PatentDocumentType(result.document_type),
@@ -118,7 +76,7 @@ class PatentDocumentClassifier:
             ipc_classes=ipc_classes,
             confidence=float(result.confidence)
         )
-
+        
         return output
 
 
@@ -127,23 +85,23 @@ class PatentClaimExtractor:
     Service for extracting and analyzing patent claims.
     Uses DSPy to parse claims and save to the database.
     """
-
+    
     def __init__(self, lm: Optional[dspy.LM] = None):
         """Initialize with optional language model"""
         if lm:
             dspy.settings.configure(lm=lm)
         self.extractor = dspy.ChainOfThought(ExtractPatentClaims)
-
+    
     def extract_claims(self, input_data: ClaimExtractionInput, patent_document, user, client) -> ClaimExtractionOutput:
         """
         Extract claims from a patent document and save to database.
-
+        
         Args:
             input_data: Claim extraction input
             patent_document: PatentDocument instance
             user: User performing the extraction
             client: Client organization
-
+            
         Returns:
             ClaimExtractionOutput with extracted claims
         """
@@ -152,13 +110,13 @@ class PatentClaimExtractor:
             patent_text=input_data.patent_text,
             patent_number=input_data.patent_number
         )
-
+        
         # Parse claims JSON
         try:
             claims_data = json.loads(result.claims_json)
         except:
             claims_data = []
-
+        
         # Create ExtractedClaim objects
         extracted_claims = []
         for claim_data in claims_data:
@@ -170,7 +128,7 @@ class PatentClaimExtractor:
                 key_limitations=claim_data.get('key_limitations', [])
             )
             extracted_claims.append(claim)
-
+            
             # Save to database
             PatentClaim.objects.create(
                 client=client,
@@ -182,7 +140,7 @@ class PatentClaimExtractor:
                 dependencies=claim.dependencies,
                 key_limitations=claim.key_limitations
             )
-
+        
         # Create output
         output = ClaimExtractionOutput(
             claims=extracted_claims,
@@ -190,7 +148,7 @@ class PatentClaimExtractor:
             independent_claims=int(result.independent_claims),
             dependent_claims=int(result.dependent_claims)
         )
-
+        
         return output
 
 
@@ -199,13 +157,13 @@ class InfringementAnalyzer:
     Service for analyzing patent infringement.
     Uses DSPy to compare patent claims against accused products.
     """
-
+    
     def __init__(self, lm: Optional[dspy.LM] = None):
         """Initialize with optional language model"""
         if lm:
             dspy.settings.configure(lm=lm)
         self.analyzer = dspy.ChainOfThought(AnalyzeInfringement)
-
+    
     def analyze(self, input_data: InfringementAnalysisInput, analysis_run, user, client) -> InfringementAnalysisOutput:
         """
         Analyze potential patent infringement and save to database.
@@ -346,3 +304,4 @@ class ValidityChallengeAnalyzer:
         )
 
         return output
+
