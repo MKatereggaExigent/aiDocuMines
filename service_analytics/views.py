@@ -20,6 +20,26 @@ from labor_employment.models import ServiceExecution as LEServiceExecution
 from ip_litigation.models import ServiceExecution as IPServiceExecution
 from regulatory_compliance.models import ServiceExecution as RCServiceExecution
 
+# Import tool output models from all 5 verticals for data insights
+from private_equity.models import (
+    DueDiligenceRun, DocumentClassification, RiskClause, DueDiligenceReport
+)
+from class_actions.models import (
+    MassClaimsRun, IntakeForm, EvidenceDocument, SettlementTracking
+)
+from labor_employment.models import (
+    WorkplaceCommunicationsRun, CommunicationMessage, WageHourAnalysis,
+    ComplianceAlert as LEComplianceAlert
+)
+from ip_litigation.models import (
+    PatentAnalysisRun, PatentDocument, PatentClaim, PriorArtDocument,
+    ClaimChart, PatentLandscape
+)
+from regulatory_compliance.models import (
+    ComplianceRun, RegulatoryRequirement, PolicyMapping, DSARRequest,
+    ComplianceAlert as RCComplianceAlert
+)
+
 from service_analytics.serializers import (
     OverviewSerializer,
     ServiceExecutionSerializer,
@@ -73,12 +93,23 @@ class ServiceAnalyticsOverviewAPIView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
-        # Get all service executions for this user from all 5 verticals
-        pe_executions = PEServiceExecution.objects.filter(user=user)
-        ca_executions = CAServiceExecution.objects.filter(user=user)
-        le_executions = LEServiceExecution.objects.filter(user=user)
-        ip_executions = IPServiceExecution.objects.filter(user=user)
-        rc_executions = RCServiceExecution.objects.filter(user=user)
+        # Get client for multi-tenant filtering
+        client = user.client if hasattr(user, 'client') and user.client else None
+
+        # Get all service executions for this client from all 5 verticals (multi-tenant)
+        if client:
+            pe_executions = PEServiceExecution.objects.filter(client=client)
+            ca_executions = CAServiceExecution.objects.filter(client=client)
+            le_executions = LEServiceExecution.objects.filter(client=client)
+            ip_executions = IPServiceExecution.objects.filter(client=client)
+            rc_executions = RCServiceExecution.objects.filter(client=client)
+        else:
+            # Fallback to user-based filtering for users without a client
+            pe_executions = PEServiceExecution.objects.filter(user=user)
+            ca_executions = CAServiceExecution.objects.filter(user=user)
+            le_executions = LEServiceExecution.objects.filter(user=user)
+            ip_executions = IPServiceExecution.objects.filter(user=user)
+            rc_executions = RCServiceExecution.objects.filter(user=user)
 
         # Calculate overall statistics
         total_executions = (
@@ -236,7 +267,7 @@ class ServiceAnalyticsOverviewAPIView(APIView):
             })
 
         # Most used services (top 10)
-        most_used_services = self._get_most_used_services(user)
+        most_used_services = self._get_most_used_services(client, user)
 
         response_data = {
             'total_executions': total_executions,
@@ -254,12 +285,26 @@ class ServiceAnalyticsOverviewAPIView(APIView):
 
         return Response(response_data, status=status.HTTP_200_OK)
 
-    def _get_most_used_services(self, user):
-        """Get most used services across all verticals"""
+    def _get_most_used_services(self, client, user):
+        """Get most used services across all verticals (multi-tenant)"""
         services = []
 
+        # Build filter based on client or user
+        if client:
+            pe_filter = {'client': client}
+            ca_filter = {'client': client}
+            le_filter = {'client': client}
+            ip_filter = {'client': client}
+            rc_filter = {'client': client}
+        else:
+            pe_filter = {'user': user}
+            ca_filter = {'user': user}
+            le_filter = {'user': user}
+            ip_filter = {'user': user}
+            rc_filter = {'user': user}
+
         # Private Equity services
-        pe_services = PEServiceExecution.objects.filter(user=user).values('service_type', 'service_name').annotate(
+        pe_services = PEServiceExecution.objects.filter(**pe_filter).values('service_type', 'service_name').annotate(
             count=Count('id'),
             completed_count=Count('id', filter=Q(status='completed'))
         ).order_by('-count')
@@ -271,11 +316,11 @@ class ServiceAnalyticsOverviewAPIView(APIView):
                 'vertical': 'Private Equity',
                 'count': service['count'],
                 'success_rate': (service['completed_count'] / service['count'] * 100) if service['count'] > 0 else 0,
-                'avg_execution_time': None  # Can be calculated if needed
+                'avg_execution_time': None
             })
 
         # Class Actions services
-        ca_services = CAServiceExecution.objects.filter(user=user).values('service_type', 'service_name').annotate(
+        ca_services = CAServiceExecution.objects.filter(**ca_filter).values('service_type', 'service_name').annotate(
             count=Count('id'),
             completed_count=Count('id', filter=Q(status='completed'))
         ).order_by('-count')
@@ -291,7 +336,7 @@ class ServiceAnalyticsOverviewAPIView(APIView):
             })
 
         # Labor Employment services
-        le_services = LEServiceExecution.objects.filter(user=user).values('service_type', 'service_name').annotate(
+        le_services = LEServiceExecution.objects.filter(**le_filter).values('service_type', 'service_name').annotate(
             count=Count('id'),
             completed_count=Count('id', filter=Q(status='completed'))
         ).order_by('-count')
@@ -307,7 +352,7 @@ class ServiceAnalyticsOverviewAPIView(APIView):
             })
 
         # IP Litigation services
-        ip_services = IPServiceExecution.objects.filter(user=user).values('service_type', 'service_name').annotate(
+        ip_services = IPServiceExecution.objects.filter(**ip_filter).values('service_type', 'service_name').annotate(
             count=Count('id'),
             completed_count=Count('id', filter=Q(status='completed'))
         ).order_by('-count')
@@ -323,7 +368,7 @@ class ServiceAnalyticsOverviewAPIView(APIView):
             })
 
         # Regulatory Compliance services
-        rc_services = RCServiceExecution.objects.filter(user=user).values('service_type', 'service_name').annotate(
+        rc_services = RCServiceExecution.objects.filter(**rc_filter).values('service_type', 'service_name').annotate(
             count=Count('id'),
             completed_count=Count('id', filter=Q(status='completed'))
         ).order_by('-count')
@@ -378,11 +423,20 @@ class RecentActivityAPIView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
 
+        # Get client for multi-tenant filtering
+        client = user.client if hasattr(user, 'client') and user.client else None
+
+        # Build filter based on client or user
+        if client:
+            filter_kwargs = {'client': client}
+        else:
+            filter_kwargs = {'user': user}
+
         # Get recent executions from all verticals
         recent_executions = []
 
         # Private Equity
-        pe_executions = PEServiceExecution.objects.filter(user=user).order_by('-started_at')[:limit]
+        pe_executions = PEServiceExecution.objects.filter(**filter_kwargs).order_by('-started_at')[:limit]
         for exec in pe_executions:
             recent_executions.append({
                 'id': exec.id,
@@ -399,7 +453,7 @@ class RecentActivityAPIView(APIView):
             })
 
         # Class Actions
-        ca_executions = CAServiceExecution.objects.filter(user=user).order_by('-started_at')[:limit]
+        ca_executions = CAServiceExecution.objects.filter(**filter_kwargs).order_by('-started_at')[:limit]
         for exec in ca_executions:
             recent_executions.append({
                 'id': exec.id,
@@ -416,7 +470,7 @@ class RecentActivityAPIView(APIView):
             })
 
         # Labor Employment
-        le_executions = LEServiceExecution.objects.filter(user=user).order_by('-started_at')[:limit]
+        le_executions = LEServiceExecution.objects.filter(**filter_kwargs).order_by('-started_at')[:limit]
         for exec in le_executions:
             recent_executions.append({
                 'id': exec.id,
@@ -433,7 +487,7 @@ class RecentActivityAPIView(APIView):
             })
 
         # IP Litigation
-        ip_executions = IPServiceExecution.objects.filter(user=user).order_by('-started_at')[:limit]
+        ip_executions = IPServiceExecution.objects.filter(**filter_kwargs).order_by('-started_at')[:limit]
         for exec in ip_executions:
             recent_executions.append({
                 'id': exec.id,
@@ -450,7 +504,7 @@ class RecentActivityAPIView(APIView):
             })
 
         # Regulatory Compliance
-        rc_executions = RCServiceExecution.objects.filter(user=user).order_by('-started_at')[:limit]
+        rc_executions = RCServiceExecution.objects.filter(**filter_kwargs).order_by('-started_at')[:limit]
         for exec in rc_executions:
             recent_executions.append({
                 'id': exec.id,
@@ -777,3 +831,372 @@ class CreateServiceExecutionView(APIView):
                 'traceback': traceback.format_exc()
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+
+class ToolDataInsightsAPIView(APIView):
+    """
+    Get actual tool output data from all 5 legal verticals.
+    Returns aggregated insights from tool outputs like documents, claims, risks, etc.
+    Multi-tenant: Data is filtered by client.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            client_id_param,
+            client_secret_param,
+            openapi.Parameter("vertical", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False,
+                            description="Filter by vertical: private_equity, class_actions, labor_employment, ip_litigation, regulatory_compliance"),
+            openapi.Parameter("limit", openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False,
+                            description="Number of records per category (default: 10)")
+        ],
+        operation_description="Get tool output data insights across all legal verticals",
+        responses={200: openapi.Response("Tool data insights")}
+    )
+    def get(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+        vertical_filter = request.query_params.get("vertical", None)
+        limit = int(request.query_params.get("limit", 10))
+
+        if not all([client_id, client_secret]):
+            return Response(
+                {"error": "Missing X-Client-ID or X-Client-Secret headers"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = get_user_from_client_id(client_id)
+        if not user:
+            return Response(
+                {"error": "Invalid client credentials"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        # Get client for multi-tenant filtering
+        client = user.client if hasattr(user, 'client') and user.client else None
+        if not client:
+            return Response(
+                {"error": "User is not associated with a client"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        response_data = {}
+
+        # Private Equity tool data
+        if not vertical_filter or vertical_filter == 'private_equity':
+            response_data['private_equity'] = self._get_pe_tool_data(client, limit)
+
+        # Class Actions tool data
+        if not vertical_filter or vertical_filter == 'class_actions':
+            response_data['class_actions'] = self._get_ca_tool_data(client, limit)
+
+        # Labor Employment tool data
+        if not vertical_filter or vertical_filter == 'labor_employment':
+            response_data['labor_employment'] = self._get_le_tool_data(client, limit)
+
+        # IP Litigation tool data
+        if not vertical_filter or vertical_filter == 'ip_litigation':
+            response_data['ip_litigation'] = self._get_ip_tool_data(client, limit)
+
+        # Regulatory Compliance tool data
+        if not vertical_filter or vertical_filter == 'regulatory_compliance':
+            response_data['regulatory_compliance'] = self._get_rc_tool_data(client, limit)
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def _get_pe_tool_data(self, client, limit):
+        """Get Private Equity tool output data"""
+        # Due Diligence Runs
+        dd_runs = DueDiligenceRun.objects.filter(client=client).order_by('-created_at')[:limit]
+        dd_runs_data = [{
+            'id': run.id,
+            'deal_name': run.deal_name,
+            'target_company': run.target_company,
+            'deal_type': run.deal_type,
+            'deal_value': str(run.deal_value) if run.deal_value else None,
+            'created_at': run.created_at.isoformat()
+        } for run in dd_runs]
+
+        # Document Classifications
+        doc_classifications = DocumentClassification.objects.filter(
+            due_diligence_run__client=client
+        ).order_by('-created_at')[:limit]
+        doc_class_data = [{
+            'id': doc.id,
+            'document_type': doc.document_type,
+            'confidence_score': doc.confidence_score,
+            'is_duplicate': doc.is_duplicate,
+            'created_at': doc.created_at.isoformat()
+        } for doc in doc_classifications]
+
+        # Risk Clauses
+        risk_clauses = RiskClause.objects.filter(
+            due_diligence_run__client=client
+        ).order_by('-created_at')[:limit]
+        risk_data = [{
+            'id': clause.id,
+            'clause_type': clause.clause_type,
+            'risk_level': clause.risk_level,
+            'clause_text': clause.clause_text[:200] + '...' if len(clause.clause_text) > 200 else clause.clause_text,
+            'created_at': clause.created_at.isoformat()
+        } for clause in risk_clauses]
+
+        # Summary stats
+        total_runs = DueDiligenceRun.objects.filter(client=client).count()
+        total_docs = DocumentClassification.objects.filter(due_diligence_run__client=client).count()
+        total_risks = RiskClause.objects.filter(due_diligence_run__client=client).count()
+        high_risks = RiskClause.objects.filter(due_diligence_run__client=client, risk_level='high').count()
+
+        return {
+            'summary': {
+                'total_due_diligence_runs': total_runs,
+                'total_documents_classified': total_docs,
+                'total_risk_clauses': total_risks,
+                'high_risk_clauses': high_risks
+            },
+            'recent_runs': dd_runs_data,
+            'recent_classifications': doc_class_data,
+            'recent_risk_clauses': risk_data
+        }
+
+    def _get_ca_tool_data(self, client, limit):
+        """Get Class Actions tool output data"""
+        # Mass Claims Runs
+        claims_runs = MassClaimsRun.objects.filter(client=client).order_by('-created_at')[:limit]
+        runs_data = [{
+            'id': run.id,
+            'case_name': run.case_name,
+            'case_number': run.case_number,
+            'case_type': run.case_type,
+            'status': run.status,
+            'settlement_amount': str(run.settlement_amount) if run.settlement_amount else None,
+            'created_at': run.created_at.isoformat()
+        } for run in claims_runs]
+
+        # Intake Forms
+        intake_forms = IntakeForm.objects.filter(
+            mass_claims_run__client=client
+        ).order_by('-submitted_at')[:limit]
+        intake_data = [{
+            'id': form.id,
+            'claimant_id': str(form.claimant_id),
+            'processing_status': form.processing_status,
+            'is_duplicate': form.is_duplicate,
+            'is_valid': form.is_valid,
+            'submitted_at': form.submitted_at.isoformat()
+        } for form in intake_forms]
+
+        # Evidence Documents
+        evidence_docs = EvidenceDocument.objects.filter(
+            mass_claims_run__client=client
+        ).order_by('-created_at')[:limit]
+        evidence_data = [{
+            'id': doc.id,
+            'evidence_type': doc.evidence_type,
+            'relevance_score': doc.relevance_score,
+            'is_culled': doc.is_culled,
+            'contains_pii': doc.contains_pii,
+            'created_at': doc.created_at.isoformat()
+        } for doc in evidence_docs]
+
+        # Summary stats
+        total_runs = MassClaimsRun.objects.filter(client=client).count()
+        total_intakes = IntakeForm.objects.filter(mass_claims_run__client=client).count()
+        approved_claims = IntakeForm.objects.filter(
+            mass_claims_run__client=client, processing_status='approved'
+        ).count()
+        total_evidence = EvidenceDocument.objects.filter(mass_claims_run__client=client).count()
+
+        return {
+            'summary': {
+                'total_mass_claims_runs': total_runs,
+                'total_intake_forms': total_intakes,
+                'approved_claims': approved_claims,
+                'total_evidence_documents': total_evidence
+            },
+            'recent_runs': runs_data,
+            'recent_intake_forms': intake_data,
+            'recent_evidence_documents': evidence_data
+        }
+
+    def _get_le_tool_data(self, client, limit):
+        """Get Labor Employment tool output data"""
+        # Workplace Communications Runs
+        comm_runs = WorkplaceCommunicationsRun.objects.filter(client=client).order_by('-created_at')[:limit]
+        runs_data = [{
+            'id': run.id,
+            'case_name': run.case_name,
+            'company_name': run.company_name,
+            'case_type': run.case_type,
+            'data_sources': run.data_sources,
+            'created_at': run.created_at.isoformat()
+        } for run in comm_runs]
+
+        # Communication Messages (with sentiment data)
+        messages = CommunicationMessage.objects.filter(
+            communications_run__client=client
+        ).order_by('-sent_datetime')[:limit]
+        message_data = [{
+            'id': m.id,
+            'message_type': m.message_type,
+            'sender': m.sender,
+            'sentiment_score': m.sentiment_score,
+            'toxicity_score': m.toxicity_score,
+            'is_flagged': m.is_flagged,
+            'sent_datetime': m.sent_datetime.isoformat()
+        } for m in messages]
+
+        # Compliance Alerts
+        alerts = LEComplianceAlert.objects.filter(
+            communications_run__client=client
+        ).order_by('-created_at')[:limit]
+        alert_data = [{
+            'id': a.id,
+            'alert_type': a.alert_type,
+            'alert_title': a.alert_title,
+            'severity': a.severity,
+            'priority': a.priority,
+            'created_at': a.created_at.isoformat()
+        } for a in alerts]
+
+        # Summary stats
+        total_runs = WorkplaceCommunicationsRun.objects.filter(client=client).count()
+        total_messages = CommunicationMessage.objects.filter(communications_run__client=client).count()
+        flagged_messages = CommunicationMessage.objects.filter(
+            communications_run__client=client, is_flagged=True
+        ).count()
+        total_alerts = LEComplianceAlert.objects.filter(communications_run__client=client).count()
+
+        return {
+            'summary': {
+                'total_communications_runs': total_runs,
+                'total_messages': total_messages,
+                'flagged_messages': flagged_messages,
+                'total_compliance_alerts': total_alerts
+            },
+            'recent_runs': runs_data,
+            'recent_messages': message_data,
+            'recent_compliance_alerts': alert_data
+        }
+
+    def _get_ip_tool_data(self, client, limit):
+        """Get IP Litigation tool output data"""
+        # Patent Analysis Runs
+        patent_runs = PatentAnalysisRun.objects.filter(client=client).order_by('-created_at')[:limit]
+        runs_data = [{
+            'id': run.id,
+            'case_name': run.case_name,
+            'litigation_type': run.litigation_type,
+            'technology_area': run.technology_area,
+            'patents_in_suit': run.patents_in_suit,
+            'created_at': run.created_at.isoformat()
+        } for run in patent_runs]
+
+        # Patent Documents
+        patents = PatentDocument.objects.filter(
+            analysis_run__client=client
+        ).order_by('-created_at')[:limit]
+        patent_data = [{
+            'id': p.id,
+            'patent_number': p.patent_number,
+            'title': p.title,
+            'assignees': p.assignees,
+            'status': p.status,
+            'filing_date': p.filing_date.isoformat() if p.filing_date else None,
+            'created_at': p.created_at.isoformat()
+        } for p in patents]
+
+        # Claim Charts
+        charts = ClaimChart.objects.filter(
+            analysis_run__client=client
+        ).order_by('-created_at')[:limit]
+        chart_data = [{
+            'id': c.id,
+            'chart_name': c.chart_name,
+            'chart_type': c.chart_type,
+            'target_product': c.target_product,
+            'overall_conclusion': c.overall_conclusion,
+            'confidence_score': c.confidence_score,
+            'created_at': c.created_at.isoformat()
+        } for c in charts]
+
+        # Summary stats
+        total_runs = PatentAnalysisRun.objects.filter(client=client).count()
+        total_patents = PatentDocument.objects.filter(analysis_run__client=client).count()
+        total_charts = ClaimChart.objects.filter(analysis_run__client=client).count()
+
+        return {
+            'summary': {
+                'total_patent_analysis_runs': total_runs,
+                'total_patent_documents': total_patents,
+                'total_claim_charts': total_charts
+            },
+            'recent_runs': runs_data,
+            'recent_patents': patent_data,
+            'recent_claim_charts': chart_data
+        }
+
+    def _get_rc_tool_data(self, client, limit):
+        """Get Regulatory Compliance tool output data"""
+        # Compliance Runs
+        comp_runs = ComplianceRun.objects.filter(client=client).order_by('-created_at')[:limit]
+        runs_data = [{
+            'id': run.id,
+            'organization_name': run.organization_name,
+            'compliance_framework': run.compliance_framework,
+            'jurisdiction': run.jurisdiction,
+            'created_at': run.created_at.isoformat()
+        } for run in comp_runs]
+
+        # Regulatory Requirements
+        requirements = RegulatoryRequirement.objects.filter(
+            compliance_run__client=client
+        ).order_by('-created_at')[:limit]
+        requirement_data = [{
+            'id': r.id,
+            'requirement_id': r.requirement_id,
+            'requirement_title': r.requirement_title,
+            'category': r.category,
+            'compliance_status': r.compliance_status,
+            'risk_level': r.risk_level,
+            'created_at': r.created_at.isoformat()
+        } for r in requirements]
+
+        # Compliance Alerts
+        alerts = RCComplianceAlert.objects.filter(
+            compliance_run__client=client
+        ).order_by('-created_at')[:limit]
+        alert_data = [{
+            'id': a.id,
+            'alert_type': a.alert_type,
+            'alert_title': a.alert_title,
+            'severity': a.severity,
+            'priority': a.priority,
+            'status': a.status,
+            'created_at': a.created_at.isoformat()
+        } for a in alerts]
+
+        # Summary stats
+        total_runs = ComplianceRun.objects.filter(client=client).count()
+        total_requirements = RegulatoryRequirement.objects.filter(compliance_run__client=client).count()
+        non_compliant = RegulatoryRequirement.objects.filter(
+            compliance_run__client=client, compliance_status='non_compliant'
+        ).count()
+        total_alerts = RCComplianceAlert.objects.filter(compliance_run__client=client).count()
+        critical_alerts = RCComplianceAlert.objects.filter(
+            compliance_run__client=client, severity='critical'
+        ).count()
+
+        return {
+            'summary': {
+                'total_compliance_runs': total_runs,
+                'total_requirements': total_requirements,
+                'non_compliant_requirements': non_compliant,
+                'total_alerts': total_alerts,
+                'critical_alerts': critical_alerts
+            },
+            'recent_runs': runs_data,
+            'recent_requirements': requirement_data,
+            'recent_alerts': alert_data
+        }
