@@ -43,8 +43,13 @@ class PatentAnalysisRunListCreateView(APIView):
         responses={200: PatentAnalysisRunSerializer(many=True)}
     )
     def get(self, request):
-        """Get list of patent analysis runs for the user"""
-        runs = PatentAnalysisRun.objects.filter(run__user=request.user)
+        """Get list of patent analysis runs for the client (multi-tenant)"""
+        # Filter by client for multi-tenant isolation
+        # Fall back to user filter if client is not available
+        if hasattr(request.user, 'client') and request.user.client:
+            runs = PatentAnalysisRun.objects.filter(client=request.user.client)
+        else:
+            runs = PatentAnalysisRun.objects.filter(run__user=request.user)
         serializer = PatentAnalysisRunSerializer(runs, many=True)
         return Response(serializer.data)
 
@@ -78,7 +83,11 @@ class PatentAnalysisRunDetailView(APIView):
     )
     def get(self, request, pk):
         """Get patent analysis run details"""
-        analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
+        # Filter by client for multi-tenant isolation
+        if hasattr(request.user, 'client') and request.user.client:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, client=request.user.client)
+        else:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
         serializer = PatentAnalysisRunSerializer(analysis_run)
         return Response(serializer.data)
 
@@ -90,7 +99,11 @@ class PatentAnalysisRunDetailView(APIView):
     )
     def put(self, request, pk):
         """Update patent analysis run"""
-        analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
+        # Filter by client for multi-tenant isolation
+        if hasattr(request.user, 'client') and request.user.client:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, client=request.user.client)
+        else:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
         serializer = PatentAnalysisRunSerializer(analysis_run, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
@@ -104,7 +117,11 @@ class PatentAnalysisRunDetailView(APIView):
     )
     def delete(self, request, pk):
         """Delete patent analysis run"""
-        analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
+        # Filter by client for multi-tenant isolation
+        if hasattr(request.user, 'client') and request.user.client:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, client=request.user.client)
+        else:
+            analysis_run = get_object_or_404(PatentAnalysisRun, pk=pk, run__user=request.user)
         analysis_run.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
