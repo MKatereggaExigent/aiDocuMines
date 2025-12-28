@@ -60,6 +60,8 @@ class PatentAnalysisRun(models.Model):
     class Meta:
         db_table = 'ip_litigation_patent_analysis_run'
         ordering = ['-created_at']
+        # Prevent duplicate case names within the same client
+        unique_together = ['case_name', 'client']
         indexes = [
             models.Index(fields=['client', '-created_at']),
             models.Index(fields=['client', 'litigation_type']),
