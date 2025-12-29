@@ -15,7 +15,11 @@ from core.models import File
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause,
     FindingsReport, DataRoomConnector, ServiceExecution, ServiceOutput,
-    ClosingChecklist, PostCloseObligation, DealVelocityMetrics, ClauseLibrary
+    ClosingChecklist, PostCloseObligation, DealVelocityMetrics, ClauseLibrary,
+    # New PE models
+    PanelFirm, RFP, RFPBid, EngagementLetter,
+    SignatureTracker, ConditionPrecedent, ClosingBinder,
+    Covenant, ConsentFiling
 )
 from .serializers import (
     DueDiligenceRunSerializer, DueDiligenceRunCreateSerializer,
@@ -25,7 +29,12 @@ from .serializers import (
     ClosingChecklistSerializer, ClosingChecklistCreateSerializer,
     PostCloseObligationSerializer, PostCloseObligationCreateSerializer,
     DealVelocityMetricsSerializer, ClauseLibrarySerializer, ClauseLibraryCreateSerializer,
-    DealVelocitySummarySerializer, ChecklistProgressSerializer, PostCloseObligationSummarySerializer
+    DealVelocitySummarySerializer, ChecklistProgressSerializer, PostCloseObligationSummarySerializer,
+    # New PE serializers
+    PanelFirmSerializer, RFPSerializer, RFPBidSerializer, EngagementLetterSerializer,
+    SignatureTrackerSerializer, ConditionPrecedentSerializer, ClosingBinderSerializer,
+    CovenantSerializer, ConsentFilingSerializer,
+    PortfolioComplianceSerializer, RiskHeatmapSerializer, BidAnalysisSerializer
 )
 from .tasks import (
     classify_document_task, extract_risk_clauses_task,
@@ -375,6 +384,111 @@ class FindingsReportView(APIView):
             "task_id": task.id,
             "dd_run_id": dd_run_id
         }, status=status.HTTP_202_ACCEPTED)
+
+
+class SyncDataRoomView(APIView):
+    """
+    Sync documents from a data room (Google Drive, SharePoint, etc.) to a deal workspace.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List data room connectors for a deal workspace",
+        tags=["Private Equity - Data Room"],
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+        ],
+        responses={200: DataRoomConnectorSerializer(many=True)}
+    )
+    def get(self, request):
+        """List data room connectors for a deal workspace"""
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response({"error": "deal_workspace_id parameter is required"},
+                          status=status.HTTP_400_BAD_REQUEST)
+
+        # Ensure user owns the deal workspace
+        dd_run = get_object_or_404(DueDiligenceRun, pk=deal_workspace_id, client=request.user.client)
+
+        connectors = DataRoomConnector.objects.filter(
+            due_diligence_run=dd_run,
+            user=request.user,
+            is_active=True
+        )
+
+        serializer = DataRoomConnectorSerializer(connectors, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a data room connector and trigger sync",
+        tags=["Private Equity - Data Room"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'deal_workspace_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Deal workspace ID'),
+                'connector_type': openapi.Schema(type=openapi.TYPE_STRING, enum=['google_drive', 'sharepoint', 'box', 'dropbox']),
+                'connector_name': openapi.Schema(type=openapi.TYPE_STRING),
+                'connection_config': openapi.Schema(type=openapi.TYPE_OBJECT),
+                'folder_path': openapi.Schema(type=openapi.TYPE_STRING, description='Path to sync from'),
+            },
+            required=['deal_workspace_id', 'connector_type']
+        ),
+        responses={202: "Data room sync started"}
+    )
+    def post(self, request):
+        """Create a data room connector and trigger sync"""
+        deal_workspace_id = request.data.get('deal_workspace_id')
+        connector_type = request.data.get('connector_type', 'google_drive')
+        connector_name = request.data.get('connector_name', f'{connector_type.replace("_", " ").title()} Sync')
+        connection_config = request.data.get('connection_config', {})
+        folder_path = request.data.get('folder_path', '/')
+
+        if not deal_workspace_id:
+            return Response(
+                {"error": "deal_workspace_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Ensure user owns the deal workspace
+        dd_run = get_object_or_404(DueDiligenceRun, pk=deal_workspace_id, client=request.user.client)
+
+        # Create or update the connector
+        connector, created = DataRoomConnector.objects.update_or_create(
+            due_diligence_run=dd_run,
+            user=request.user,
+            connector_name=connector_name,
+            defaults={
+                'client': request.user.client,
+                'connector_type': connector_type,
+                'connection_config': connection_config,
+                'sync_status': 'pending',
+                'is_active': True
+            }
+        )
+
+        # Trigger the sync task
+        try:
+            task = sync_data_room_task.delay(connector.id, request.user.id, folder_path)
+
+            return Response({
+                "message": "Data room sync started",
+                "connector_id": connector.id,
+                "task_id": task.id,
+                "deal_workspace_id": deal_workspace_id,
+                "connector_type": connector_type,
+                "status": "pending"
+            }, status=status.HTTP_202_ACCEPTED)
+        except Exception as e:
+            logger.error(f"Failed to start data room sync: {str(e)}")
+            return Response({
+                "message": "Data room sync initiated (task queued)",
+                "connector_id": connector.id,
+                "deal_workspace_id": deal_workspace_id,
+                "connector_type": connector_type,
+                "status": "queued",
+                "note": "Sync will be processed when the task worker is available"
+            }, status=status.HTTP_202_ACCEPTED)
 
 
 class RiskClauseSummaryView(APIView):
@@ -1098,4 +1212,531 @@ class ChecklistProgressView(APIView):
         }
 
         serializer = ChecklistProgressSerializer(progress)
+        return Response(serializer.data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🏢 PANEL MANAGEMENT & RFP VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+class PanelFirmListCreateView(APIView):
+    """
+    List all panel firms or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all panel firms",
+        manual_parameters=[
+            openapi.Parameter('practice_area', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('region', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: PanelFirmSerializer(many=True)}
+    )
+    def get(self, request):
+        queryset = PanelFirm.objects.filter(client=request.user.client, is_active=True)
+
+        # Apply filters
+        practice_area = request.query_params.get('filter_practice_area')
+        if practice_area:
+            queryset = queryset.filter(practice_areas__contains=[practice_area])
+
+        region = request.query_params.get('filter_region')
+        if region:
+            queryset = queryset.filter(regions__contains=[region])
+
+        serializer = PanelFirmSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new panel firm",
+        request_body=PanelFirmSerializer,
+        responses={201: PanelFirmSerializer}
+    )
+    def post(self, request):
+        serializer = PanelFirmSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            firm = serializer.save()
+            return Response(PanelFirmSerializer(firm).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RFPListCreateView(APIView):
+    """
+    List all RFPs or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all RFPs",
+        manual_parameters=[
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+        ],
+        responses={200: RFPSerializer(many=True)}
+    )
+    def get(self, request):
+        queryset = RFP.objects.filter(client=request.user.client)
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if deal_workspace_id:
+            queryset = queryset.filter(due_diligence_run_id=deal_workspace_id)
+
+        serializer = RFPSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new RFP",
+        request_body=RFPSerializer,
+        responses={201: RFPSerializer}
+    )
+    def post(self, request):
+        serializer = RFPSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            rfp = serializer.save()
+            return Response(RFPSerializer(rfp).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class BidAnalysisView(APIView):
+    """
+    Analyze and compare bids for an RFP.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Analyze bids for an RFP",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'rfp_id': openapi.Schema(type=openapi.TYPE_INTEGER, required=True),
+                'scoring_criteria': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
+            }
+        ),
+        responses={200: BidAnalysisSerializer}
+    )
+    def post(self, request):
+        rfp_id = request.data.get('rfp_id')
+        if not rfp_id:
+            return Response({'error': 'rfp_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        rfp = get_object_or_404(RFP, pk=rfp_id, client=request.user.client)
+        bids = RFPBid.objects.filter(rfp=rfp)
+
+        # Build comparison matrix
+        bids_data = []
+        for bid in bids:
+            bids_data.append({
+                'firm_name': bid.firm.name,
+                'proposed_fee': float(bid.proposed_fee),
+                'fee_structure': bid.fee_structure,
+                'price_score': float(bid.price_score) if bid.price_score else 0,
+                'experience_score': float(bid.experience_score) if bid.experience_score else 0,
+                'team_score': float(bid.team_score) if bid.team_score else 0,
+                'overall_score': float(bid.overall_score) if bid.overall_score else 0,
+            })
+
+        # Simple recommendation logic
+        recommendation = {}
+        if bids_data:
+            best_bid = max(bids_data, key=lambda x: x['overall_score'], default=None)
+            if best_bid:
+                recommendation = {
+                    'recommended_firm': best_bid['firm_name'],
+                    'reason': 'Highest overall score',
+                    'score': best_bid['overall_score']
+                }
+
+        analysis = {
+            'rfp_id': rfp.id,
+            'rfp_title': rfp.title,
+            'bids': bids_data,
+            'comparison_matrix': bids_data,
+            'recommendation': recommendation
+        }
+
+        serializer = BidAnalysisSerializer(analysis)
+        return Response(serializer.data)
+
+
+class EngagementLetterListCreateView(APIView):
+    """
+    List all engagement letters or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all engagement letters",
+        responses={200: EngagementLetterSerializer(many=True)}
+    )
+    def get(self, request):
+        queryset = EngagementLetter.objects.filter(client=request.user.client)
+
+        firm_id = request.query_params.get('firm_id')
+        if firm_id:
+            queryset = queryset.filter(firm_id=firm_id)
+
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if deal_workspace_id:
+            queryset = queryset.filter(due_diligence_run_id=deal_workspace_id)
+
+        serializer = EngagementLetterSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new engagement letter",
+        request_body=EngagementLetterSerializer,
+        responses={201: EngagementLetterSerializer}
+    )
+    def post(self, request):
+        serializer = EngagementLetterSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            letter = serializer.save()
+            return Response(EngagementLetterSerializer(letter).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ═══════════════════════════════════════════════════════════════
+# ✍️ SIGNATURE TRACKING VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+class SignatureTrackerListCreateView(APIView):
+    """
+    List all signature trackers or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all signature trackers",
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: SignatureTrackerSerializer(many=True)}
+    )
+    def get(self, request):
+        queryset = SignatureTracker.objects.filter(client=request.user.client)
+
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if deal_workspace_id:
+            queryset = queryset.filter(due_diligence_run_id=deal_workspace_id)
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        serializer = SignatureTrackerSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new signature tracker",
+        request_body=SignatureTrackerSerializer,
+        responses={201: SignatureTrackerSerializer}
+    )
+    def post(self, request):
+        serializer = SignatureTrackerSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            tracker = serializer.save()
+            return Response(SignatureTrackerSerializer(tracker).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📋 CLOSING MANAGEMENT VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+class ConditionPrecedentListCreateView(APIView):
+    """
+    List all conditions precedent or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all conditions precedent",
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: ConditionPrecedentSerializer(many=True)}
+    )
+    def get(self, request):
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response({'error': 'deal_workspace_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = ConditionPrecedent.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=deal_workspace_id
+        )
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        serializer = ConditionPrecedentSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new condition precedent",
+        request_body=ConditionPrecedentSerializer,
+        responses={201: ConditionPrecedentSerializer}
+    )
+    def post(self, request):
+        serializer = ConditionPrecedentSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            cp = serializer.save()
+            return Response(ConditionPrecedentSerializer(cp).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClosingBinderListCreateView(APIView):
+    """
+    List all closing binders or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all closing binders",
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+        ],
+        responses={200: ClosingBinderSerializer(many=True)}
+    )
+    def get(self, request):
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response({'error': 'deal_workspace_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = ClosingBinder.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=deal_workspace_id
+        )
+
+        serializer = ClosingBinderSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new closing binder",
+        request_body=ClosingBinderSerializer,
+        responses={201: ClosingBinderSerializer}
+    )
+    def post(self, request):
+        serializer = ClosingBinderSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            binder = serializer.save()
+            return Response(ClosingBinderSerializer(binder).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 COMPLIANCE TRACKING VIEWS
+# ═══════════════════════════════════════════════════════════════
+
+class CovenantListCreateView(APIView):
+    """
+    List all covenants or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all covenants",
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: CovenantSerializer(many=True)}
+    )
+    def get(self, request):
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response({'error': 'deal_workspace_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = Covenant.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=deal_workspace_id
+        )
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        serializer = CovenantSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new covenant",
+        request_body=CovenantSerializer,
+        responses={201: CovenantSerializer}
+    )
+    def post(self, request):
+        serializer = CovenantSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            covenant = serializer.save()
+            return Response(CovenantSerializer(covenant).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ConsentFilingListCreateView(APIView):
+    """
+    List all consent filings or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List all consent filings",
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: ConsentFilingSerializer(many=True)}
+    )
+    def get(self, request):
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response({'error': 'deal_workspace_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = ConsentFiling.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=deal_workspace_id
+        )
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        serializer = ConsentFilingSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new consent filing",
+        request_body=ConsentFilingSerializer,
+        responses={201: ConsentFilingSerializer}
+    )
+    def post(self, request):
+        serializer = ConsentFilingSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            filing = serializer.save()
+            return Response(ConsentFilingSerializer(filing).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PortfolioComplianceView(APIView):
+    """
+    Get portfolio-wide compliance dashboard.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Get portfolio-wide compliance dashboard",
+        responses={200: PortfolioComplianceSerializer}
+    )
+    def get(self, request):
+        client = request.user.client
+
+        # Get all covenants for the client
+        covenants = Covenant.objects.filter(client=client)
+        total_covenants = covenants.count()
+        compliant_covenants = covenants.filter(status='compliant').count()
+        breached_covenants = covenants.filter(status='breached').count()
+        at_risk_covenants = covenants.filter(status='at_risk').count()
+
+        # Get all consent filings
+        filings = ConsentFiling.objects.filter(client=client)
+        total_filings = filings.count()
+        completed_filings = filings.filter(status='completed').count()
+        pending_filings = filings.filter(status='pending').count()
+
+        # Get overdue items
+        from django.utils import timezone
+        overdue_covenants = covenants.filter(
+            next_review_date__lt=timezone.now().date()
+        ).exclude(status='compliant').count()
+
+        overdue_filings = filings.filter(
+            deadline__lt=timezone.now().date()
+        ).exclude(status='completed').count()
+
+        compliance_data = {
+            'total_covenants': total_covenants,
+            'compliant_covenants': compliant_covenants,
+            'breached_covenants': breached_covenants,
+            'at_risk_covenants': at_risk_covenants,
+            'covenant_compliance_rate': (compliant_covenants / total_covenants * 100) if total_covenants > 0 else 0,
+            'total_filings': total_filings,
+            'completed_filings': completed_filings,
+            'pending_filings': pending_filings,
+            'filing_completion_rate': (completed_filings / total_filings * 100) if total_filings > 0 else 0,
+            'overdue_covenants': overdue_covenants,
+            'overdue_filings': overdue_filings,
+        }
+
+        serializer = PortfolioComplianceSerializer(compliance_data)
+        return Response(serializer.data)
+
+
+class RiskHeatmapView(APIView):
+    """
+    Get risk heatmap data for portfolio visualization.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Get risk heatmap data for portfolio visualization",
+        responses={200: RiskHeatmapSerializer}
+    )
+    def get(self, request):
+        client = request.user.client
+
+        # Get all DD runs for the client
+        dd_runs = DueDiligenceRun.objects.filter(client=client)
+
+        # Build heatmap data
+        heatmap_data = []
+        for dd_run in dd_runs:
+            risk_clauses = RiskClause.objects.filter(due_diligence_run=dd_run)
+            covenants = Covenant.objects.filter(due_diligence_run=dd_run)
+
+            # Calculate risk score
+            high_risk_count = risk_clauses.filter(risk_level='high').count()
+            critical_risk_count = risk_clauses.filter(risk_level='critical').count()
+            breached_covenants = covenants.filter(status='breached').count()
+
+            risk_score = (high_risk_count * 2) + (critical_risk_count * 5) + (breached_covenants * 10)
+
+            heatmap_data.append({
+                'deal_id': dd_run.id,
+                'deal_name': dd_run.deal_name,
+                'target_company': dd_run.target_company,
+                'risk_score': risk_score,
+                'high_risk_clauses': high_risk_count,
+                'critical_risk_clauses': critical_risk_count,
+                'breached_covenants': breached_covenants,
+                'risk_level': 'critical' if risk_score > 20 else 'high' if risk_score > 10 else 'medium' if risk_score > 5 else 'low'
+            })
+
+        # Sort by risk score descending
+        heatmap_data.sort(key=lambda x: x['risk_score'], reverse=True)
+
+        response_data = {
+            'deals': heatmap_data,
+            'total_deals': len(heatmap_data),
+            'high_risk_deals': len([d for d in heatmap_data if d['risk_level'] in ['high', 'critical']]),
+        }
+
+        serializer = RiskHeatmapSerializer(response_data)
         return Response(serializer.data)

@@ -5,6 +5,7 @@ from .views import (
     DocumentClassificationView,
     RiskClauseExtractionView,
     FindingsReportView,
+    SyncDataRoomView,
     RiskClauseSummaryView,
     DocumentTypeSummaryView,
     ServiceExecutionListCreateView,
@@ -17,6 +18,21 @@ from .views import (
     ClauseLibraryListCreateView,
     DealVelocityAnalyticsView,
     ChecklistProgressView,
+    # Panel Management & RFP Views
+    PanelFirmListCreateView,
+    RFPListCreateView,
+    BidAnalysisView,
+    EngagementLetterListCreateView,
+    # Signature Tracking Views
+    SignatureTrackerListCreateView,
+    # Closing Management Views
+    ConditionPrecedentListCreateView,
+    ClosingBinderListCreateView,
+    # Compliance Tracking Views
+    CovenantListCreateView,
+    ConsentFilingListCreateView,
+    PortfolioComplianceView,
+    RiskHeatmapView,
 )
 
 app_name = 'private_equity'
@@ -37,6 +53,9 @@ urlpatterns = [
 
     # Findings Reports
     path('findings-reports/', FindingsReportView.as_view(), name='findings-reports'),
+
+    # Data Room Sync
+    path('sync-data-room/', SyncDataRoomView.as_view(), name='sync-data-room'),
 
     # Analytics and Summaries
     path('risk-clause-summary/', RiskClauseSummaryView.as_view(), name='risk-clause-summary'),
@@ -66,4 +85,53 @@ urlpatterns = [
 
     # Progress Analytics
     path('checklist-progress/', ChecklistProgressView.as_view(), name='checklist-progress'),
+
+    # ═══════════════════════════════════════════════════════════════
+    # 🏢 PANEL MANAGEMENT & RFP ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════
+
+    # Panel Firms
+    path('panel-firms/', PanelFirmListCreateView.as_view(), name='panel-firms'),
+
+    # RFPs
+    path('rfps/', RFPListCreateView.as_view(), name='rfps'),
+
+    # Bid Analysis
+    path('bid-analysis/', BidAnalysisView.as_view(), name='bid-analysis'),
+
+    # Engagement Letters
+    path('engagement-letters/', EngagementLetterListCreateView.as_view(), name='engagement-letters'),
+
+    # ═══════════════════════════════════════════════════════════════
+    # ✍️ SIGNATURE TRACKING ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════
+
+    # Signature Trackers
+    path('signature-trackers/', SignatureTrackerListCreateView.as_view(), name='signature-trackers'),
+
+    # ═══════════════════════════════════════════════════════════════
+    # 📋 CLOSING MANAGEMENT ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════
+
+    # Conditions Precedent
+    path('conditions-precedent/', ConditionPrecedentListCreateView.as_view(), name='conditions-precedent'),
+
+    # Closing Binders
+    path('closing-binders/', ClosingBinderListCreateView.as_view(), name='closing-binders'),
+
+    # ═══════════════════════════════════════════════════════════════
+    # 📊 COMPLIANCE TRACKING ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════
+
+    # Covenants
+    path('covenants/', CovenantListCreateView.as_view(), name='covenants'),
+
+    # Consent Filings
+    path('consent-filings/', ConsentFilingListCreateView.as_view(), name='consent-filings'),
+
+    # Portfolio Compliance Dashboard
+    path('portfolio-compliance/', PortfolioComplianceView.as_view(), name='portfolio-compliance'),
+
+    # Risk Heatmap
+    path('risk-heatmap/', RiskHeatmapView.as_view(), name='risk-heatmap'),
 ]

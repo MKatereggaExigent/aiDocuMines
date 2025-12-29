@@ -758,3 +758,579 @@ class ClauseLibrary(models.Model):
 
     def __str__(self):
         return f"{self.clause_name} (v{self.version})"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🏢 PANEL MANAGEMENT & RFP MODELS
+# ═══════════════════════════════════════════════════════════════
+
+class PanelFirm(models.Model):
+    """
+    Panel law firm directory - tracks outside counsel with capabilities, rates, and performance.
+    """
+    PRACTICE_AREAS = [
+        ('ma', 'M&A'),
+        ('finance', 'Finance'),
+        ('tax', 'Tax'),
+        ('employment', 'Employment'),
+        ('ip', 'Intellectual Property'),
+        ('real_estate', 'Real Estate'),
+        ('environmental', 'Environmental'),
+        ('regulatory', 'Regulatory'),
+        ('litigation', 'Litigation'),
+        ('antitrust', 'Antitrust'),
+    ]
+
+    REGIONS = [
+        ('us', 'United States'),
+        ('uk', 'United Kingdom'),
+        ('eu', 'Europe'),
+        ('apac', 'Asia Pacific'),
+        ('latam', 'Latin America'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_panel_firms')
+
+    # Firm details
+    name = models.CharField(max_length=255)
+    practice_areas = models.JSONField(default=list, help_text="List of practice areas")
+    regions = models.JSONField(default=list, help_text="List of regions covered")
+
+    # Contact info
+    primary_contact_name = models.CharField(max_length=255, blank=True)
+    primary_contact_email = models.EmailField(blank=True)
+    primary_contact_phone = models.CharField(max_length=50, blank=True)
+
+    # Rates and billing
+    standard_hourly_rate = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discounted_rate = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    billing_arrangements = models.JSONField(default=list, help_text="Accepted billing arrangements")
+
+    # Performance metrics
+    total_deals = models.IntegerField(default=0)
+    avg_deal_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
+    on_time_delivery_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    # Status
+    is_active = models.BooleanField(default=True)
+    is_preferred = models.BooleanField(default=False)
+
+    # Notes
+    notes = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_panel_firm'
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['client', 'is_active']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class RFP(models.Model):
+    """
+    Request for Proposal for outside counsel services.
+    """
+    MATTER_TYPES = [
+        ('acquisition', 'Acquisition'),
+        ('divestiture', 'Divestiture'),
+        ('financing', 'Financing'),
+        ('restructuring', 'Restructuring'),
+        ('general_corporate', 'General Corporate'),
+    ]
+
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('open', 'Open'),
+        ('closed', 'Closed'),
+        ('awarded', 'Awarded'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_rfps')
+
+    # RFP details
+    title = models.CharField(max_length=500)
+    matter_type = models.CharField(max_length=50, choices=MATTER_TYPES)
+    description = models.TextField(blank=True)
+
+    # Link to deal (optional)
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.SET_NULL, null=True, blank=True, related_name='rfps')
+
+    # Scope and requirements
+    scope_of_work = models.TextField(blank=True)
+    estimated_value = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    requirements = models.JSONField(default=list, help_text="List of requirements")
+
+    # Timeline
+    response_deadline = models.DateTimeField()
+    project_start_date = models.DateField(null=True, blank=True)
+    project_end_date = models.DateField(null=True, blank=True)
+
+    # Status
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+
+    # Invited firms
+    invited_firms = models.ManyToManyField(PanelFirm, blank=True, related_name='invited_rfps')
+
+    # Winning bid
+    winning_firm = models.ForeignKey(PanelFirm, on_delete=models.SET_NULL, null=True, blank=True, related_name='won_rfps')
+    winning_bid_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_rfps')
+
+    class Meta:
+        db_table = 'private_equity_rfp'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['client', 'status']),
+            models.Index(fields=['response_deadline']),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class RFPBid(models.Model):
+    """
+    Bid response for an RFP from a panel firm.
+    """
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_rfp_bids')
+
+    rfp = models.ForeignKey(RFP, on_delete=models.CASCADE, related_name='bids')
+    firm = models.ForeignKey(PanelFirm, on_delete=models.CASCADE, related_name='bids')
+
+    # Bid details
+    proposed_fee = models.DecimalField(max_digits=15, decimal_places=2)
+    fee_structure = models.CharField(max_length=50, choices=[
+        ('fixed', 'Fixed Fee'),
+        ('hourly', 'Hourly'),
+        ('capped', 'Capped'),
+        ('success', 'Success Fee'),
+        ('hybrid', 'Hybrid'),
+    ])
+    proposed_timeline = models.TextField(blank=True)
+    team_composition = models.JSONField(default=list, help_text="Proposed team members")
+
+    # Scoring
+    price_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    experience_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    team_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    timeline_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    overall_score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    # Status
+    is_selected = models.BooleanField(default=False)
+    rejection_reason = models.TextField(blank=True)
+
+    # Documents
+    proposal_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_rfp_proposals')
+
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_rfp_bid'
+        ordering = ['-overall_score', 'proposed_fee']
+        unique_together = ['rfp', 'firm']
+
+    def __str__(self):
+        return f"{self.firm.name} bid for {self.rfp.title}"
+
+
+class EngagementLetter(models.Model):
+    """
+    Generated engagement letters with negotiated terms and fee arrangements.
+    """
+    FEE_ARRANGEMENTS = [
+        ('hourly', 'Hourly Rates'),
+        ('fixed', 'Fixed Fee'),
+        ('capped', 'Capped Fee'),
+        ('success', 'Success Fee'),
+        ('hybrid', 'Hybrid'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_engagement_letters')
+
+    # Links
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.SET_NULL, null=True, blank=True, related_name='engagement_letters')
+    firm = models.ForeignKey(PanelFirm, on_delete=models.CASCADE, related_name='engagement_letters')
+    rfp = models.ForeignKey(RFP, on_delete=models.SET_NULL, null=True, blank=True, related_name='engagement_letters')
+
+    # Engagement details
+    scope_description = models.TextField()
+    fee_arrangement = models.CharField(max_length=20, choices=FEE_ARRANGEMENTS)
+    agreed_fee = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    fee_cap = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+
+    # Terms
+    engagement_start_date = models.DateField(null=True, blank=True)
+    estimated_completion_date = models.DateField(null=True, blank=True)
+    billing_frequency = models.CharField(max_length=50, blank=True)
+    payment_terms = models.CharField(max_length=100, blank=True)
+
+    # Status
+    status = models.CharField(max_length=30, choices=[
+        ('draft', 'Draft'),
+        ('sent', 'Sent'),
+        ('under_review', 'Under Review'),
+        ('signed', 'Signed'),
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('terminated', 'Terminated'),
+    ], default='draft')
+
+    # Document
+    generated_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_engagement_letter_docs')
+    signed_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_signed_engagement_letters')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_engagement_letters')
+
+    class Meta:
+        db_table = 'private_equity_engagement_letter'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Engagement with {self.firm.name}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📋 CLOSING AUTOMATION MODELS
+# ═══════════════════════════════════════════════════════════════
+
+class SignatureTracker(models.Model):
+    """
+    Tracks document signatures, approvals, and execution status.
+    """
+    SIGNATURE_STATUS = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent for Signature'),
+        ('viewed', 'Viewed'),
+        ('signed', 'Signed'),
+        ('declined', 'Declined'),
+        ('expired', 'Expired'),
+    ]
+
+    ESIGN_PROVIDERS = [
+        ('docusign', 'DocuSign'),
+        ('adobe_sign', 'Adobe Sign'),
+        ('manual', 'Manual'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_signature_trackers')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='signature_trackers')
+
+    # Document info
+    document_name = models.CharField(max_length=500)
+    document_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_signature_documents')
+
+    # Signature details
+    signatory_name = models.CharField(max_length=255)
+    signatory_email = models.EmailField(blank=True)
+    signatory_role = models.CharField(max_length=100, blank=True)
+
+    # Status
+    status = models.CharField(max_length=20, choices=SIGNATURE_STATUS, default='pending')
+    esign_provider = models.CharField(max_length=20, choices=ESIGN_PROVIDERS, default='manual')
+    esign_envelope_id = models.CharField(max_length=255, blank=True, help_text="External e-sign envelope ID")
+
+    # Dates
+    sent_at = models.DateTimeField(null=True, blank=True)
+    viewed_at = models.DateTimeField(null=True, blank=True)
+    signed_at = models.DateTimeField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+
+    # Signed document
+    signed_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_signed_documents')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_signature_tracker'
+        ordering = ['status', 'due_date']
+        indexes = [
+            models.Index(fields=['client', 'due_diligence_run', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.document_name} - {self.signatory_name}"
+
+
+class ConditionPrecedent(models.Model):
+    """
+    Tracks conditions precedent for deal closing.
+    """
+    CP_STATUS = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('satisfied', 'Satisfied'),
+        ('waived', 'Waived'),
+        ('blocked', 'Blocked'),
+    ]
+
+    CP_CATEGORIES = [
+        ('regulatory', 'Regulatory Approval'),
+        ('consent', 'Third-Party Consent'),
+        ('financing', 'Financing'),
+        ('legal', 'Legal/Corporate'),
+        ('due_diligence', 'Due Diligence'),
+        ('other', 'Other'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_conditions_precedent')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='conditions_precedent')
+
+    # CP details
+    name = models.CharField(max_length=500)
+    description = models.TextField(blank=True)
+    category = models.CharField(max_length=50, choices=CP_CATEGORIES, default='legal')
+
+    # Status
+    status = models.CharField(max_length=20, choices=CP_STATUS, default='pending')
+    responsible_party = models.CharField(max_length=255, blank=True)
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_assigned_cps')
+
+    # Dates
+    target_date = models.DateField(null=True, blank=True)
+    satisfied_date = models.DateField(null=True, blank=True)
+
+    # Blocker info
+    blocker_description = models.TextField(blank=True)
+    blocker_resolution_plan = models.TextField(blank=True)
+
+    # Evidence
+    evidence_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_cp_evidence')
+
+    # Order
+    order = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_condition_precedent'
+        ordering = ['order', 'target_date']
+        indexes = [
+            models.Index(fields=['client', 'due_diligence_run', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.get_status_display()}"
+
+
+class ClosingBinder(models.Model):
+    """
+    Generated closing binder with organized executed documents.
+    """
+    BINDER_FORMAT = [
+        ('pdf', 'PDF'),
+        ('zip', 'ZIP'),
+        ('both', 'Both PDF and ZIP'),
+    ]
+
+    BINDER_STATUS = [
+        ('generating', 'Generating'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_closing_binders')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='closing_binders')
+
+    # Binder details
+    name = models.CharField(max_length=255)
+    format = models.CharField(max_length=10, choices=BINDER_FORMAT, default='pdf')
+    include_toc = models.BooleanField(default=True)
+    include_signature_pages = models.BooleanField(default=True)
+
+    # Status
+    status = models.CharField(max_length=20, choices=BINDER_STATUS, default='generating')
+
+    # Generated files
+    pdf_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_binder_pdfs')
+    zip_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_binder_zips')
+
+    # Contents
+    included_documents = models.ManyToManyField('core.File', blank=True, related_name='pe_included_in_binders')
+    table_of_contents = models.JSONField(default=list, help_text="Table of contents structure")
+
+    # Error handling
+    error_message = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_binders')
+
+    class Meta:
+        db_table = 'private_equity_closing_binder'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} - {self.get_status_display()}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 POST-CLOSE TRACKING MODELS
+# ═══════════════════════════════════════════════════════════════
+
+class Covenant(models.Model):
+    """
+    Financial covenant tracking with reporting schedules and breach alerts.
+    """
+    COVENANT_TYPES = [
+        ('financial', 'Financial Covenant'),
+        ('operational', 'Operational Covenant'),
+        ('reporting', 'Reporting Covenant'),
+        ('negative', 'Negative Covenant'),
+        ('affirmative', 'Affirmative Covenant'),
+    ]
+
+    COVENANT_STATUS = [
+        ('compliant', 'Compliant'),
+        ('at_risk', 'At Risk'),
+        ('breached', 'Breached'),
+        ('waived', 'Waived'),
+    ]
+
+    FREQUENCY = [
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('semi_annual', 'Semi-Annual'),
+        ('annual', 'Annual'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_covenants')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='covenants')
+
+    # Covenant details
+    name = models.CharField(max_length=500)
+    covenant_type = models.CharField(max_length=30, choices=COVENANT_TYPES)
+    description = models.TextField(blank=True)
+
+    # Thresholds
+    metric_name = models.CharField(max_length=255, blank=True, help_text="e.g., Debt/EBITDA")
+    threshold_value = models.DecimalField(max_digits=15, decimal_places=4, null=True, blank=True)
+    threshold_type = models.CharField(max_length=20, choices=[
+        ('max', 'Maximum'),
+        ('min', 'Minimum'),
+        ('range', 'Range'),
+    ], default='max')
+    current_value = models.DecimalField(max_digits=15, decimal_places=4, null=True, blank=True)
+
+    # Status
+    status = models.CharField(max_length=20, choices=COVENANT_STATUS, default='compliant')
+    reporting_frequency = models.CharField(max_length=20, choices=FREQUENCY, default='quarterly')
+
+    # Dates
+    next_reporting_date = models.DateField(null=True, blank=True)
+    last_reported_date = models.DateField(null=True, blank=True)
+
+    # Source
+    source_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_covenant_sources')
+    source_clause = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_covenant'
+        ordering = ['next_reporting_date', 'status']
+        indexes = [
+            models.Index(fields=['client', 'status']),
+            models.Index(fields=['next_reporting_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.get_status_display()}"
+
+
+class ConsentFiling(models.Model):
+    """
+    Tracks required consents, regulatory filings, and notice obligations.
+    """
+    FILING_TYPES = [
+        ('hsr', 'HSR/Antitrust'),
+        ('sec', 'SEC Filing'),
+        ('state', 'State Filing'),
+        ('consent', 'Third-Party Consent'),
+        ('notice', 'Notice Requirement'),
+        ('regulatory', 'Regulatory Approval'),
+    ]
+
+    FILING_STATUS = [
+        ('pending', 'Pending'),
+        ('submitted', 'Submitted'),
+        ('under_review', 'Under Review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('withdrawn', 'Withdrawn'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_consent_filings')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='consent_filings')
+
+    # Filing details
+    name = models.CharField(max_length=500)
+    filing_type = models.CharField(max_length=30, choices=FILING_TYPES)
+    description = models.TextField(blank=True)
+
+    # Parties
+    filing_party = models.CharField(max_length=255, blank=True)
+    receiving_party = models.CharField(max_length=255, blank=True, help_text="e.g., FTC, State AG, etc.")
+
+    # Status
+    status = models.CharField(max_length=20, choices=FILING_STATUS, default='pending')
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_assigned_filings')
+
+    # Dates
+    due_date = models.DateField(null=True, blank=True)
+    submitted_date = models.DateField(null=True, blank=True)
+    approved_date = models.DateField(null=True, blank=True)
+
+    # Documents
+    filing_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_filing_documents')
+    approval_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_approval_documents')
+
+    # Notes
+    notes = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_consent_filing'
+        ordering = ['due_date', 'status']
+        indexes = [
+            models.Index(fields=['client', 'status']),
+            models.Index(fields=['due_date']),
+            models.Index(fields=['filing_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} - {self.get_status_display()}"

@@ -5,7 +5,11 @@ from custom_authentication.models import Client
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause,
     FindingsReport, DataRoomConnector, ClosingChecklist,
-    PostCloseObligation, DealVelocityMetrics, ClauseLibrary
+    PostCloseObligation, DealVelocityMetrics, ClauseLibrary,
+    # New PE models
+    PanelFirm, RFP, RFPBid, EngagementLetter,
+    SignatureTracker, ConditionPrecedent, ClosingBinder,
+    Covenant, ConsentFiling
 )
 
 User = get_user_model()
@@ -437,3 +441,291 @@ class PostCloseObligationSummarySerializer(serializers.Serializer):
     upcoming_due_dates = serializers.ListField(child=serializers.DictField())
     obligations_by_type = serializers.DictField()
     high_risk_obligations = serializers.IntegerField()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🏢 PANEL MANAGEMENT & RFP SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class PanelFirmSerializer(serializers.ModelSerializer):
+    """Serializer for PanelFirm model"""
+
+    class Meta:
+        model = PanelFirm
+        fields = [
+            'id', 'name', 'practice_areas', 'regions',
+            'primary_contact_name', 'primary_contact_email', 'primary_contact_phone',
+            'standard_hourly_rate', 'discounted_rate', 'billing_arrangements',
+            'total_deals', 'avg_deal_value', 'avg_rating', 'on_time_delivery_rate',
+            'is_active', 'is_preferred', 'notes', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+        return PanelFirm.objects.create(client=client, **validated_data)
+
+
+class RFPSerializer(serializers.ModelSerializer):
+    """Serializer for RFP model"""
+
+    matter_type_display = serializers.CharField(source='get_matter_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True, allow_null=True)
+    winning_firm_name = serializers.CharField(source='winning_firm.name', read_only=True, allow_null=True)
+    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+    bids_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RFP
+        fields = [
+            'id', 'title', 'matter_type', 'matter_type_display', 'description',
+            'due_diligence_run', 'deal_name', 'scope_of_work', 'estimated_value',
+            'requirements', 'response_deadline', 'project_start_date', 'project_end_date',
+            'status', 'status_display', 'invited_firms', 'winning_firm', 'winning_firm_name',
+            'winning_bid_amount', 'bids_count', 'created_by_email', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_bids_count(self, obj):
+        return obj.bids.count() if hasattr(obj, 'bids') else 0
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+        invited_firms = validated_data.pop('invited_firms', [])
+        rfp = RFP.objects.create(client=client, created_by=user, **validated_data)
+        if invited_firms:
+            rfp.invited_firms.set(invited_firms)
+        return rfp
+
+
+class RFPBidSerializer(serializers.ModelSerializer):
+    """Serializer for RFPBid model"""
+
+    firm_name = serializers.CharField(source='firm.name', read_only=True)
+    rfp_title = serializers.CharField(source='rfp.title', read_only=True)
+    fee_structure_display = serializers.CharField(source='get_fee_structure_display', read_only=True)
+
+    class Meta:
+        model = RFPBid
+        fields = [
+            'id', 'rfp', 'rfp_title', 'firm', 'firm_name',
+            'proposed_fee', 'fee_structure', 'fee_structure_display',
+            'proposed_timeline', 'team_composition',
+            'price_score', 'experience_score', 'team_score', 'timeline_score', 'overall_score',
+            'is_selected', 'rejection_reason', 'proposal_file',
+            'submitted_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'submitted_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        client = request.user.client
+        return RFPBid.objects.create(client=client, **validated_data)
+
+
+class EngagementLetterSerializer(serializers.ModelSerializer):
+    """Serializer for EngagementLetter model"""
+
+    firm_name = serializers.CharField(source='firm.name', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True, allow_null=True)
+    fee_arrangement_display = serializers.CharField(source='get_fee_arrangement_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+
+    class Meta:
+        model = EngagementLetter
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'firm', 'firm_name', 'rfp',
+            'scope_description', 'fee_arrangement', 'fee_arrangement_display',
+            'agreed_fee', 'fee_cap', 'engagement_start_date', 'estimated_completion_date',
+            'billing_frequency', 'payment_terms', 'status', 'status_display',
+            'generated_document', 'signed_document', 'created_by_email',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+        return EngagementLetter.objects.create(client=client, created_by=user, **validated_data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📋 CLOSING AUTOMATION SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class SignatureTrackerSerializer(serializers.ModelSerializer):
+    """Serializer for SignatureTracker model"""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    esign_provider_display = serializers.CharField(source='get_esign_provider_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+
+    class Meta:
+        model = SignatureTracker
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'document_name', 'document_file',
+            'signatory_name', 'signatory_email', 'signatory_role',
+            'status', 'status_display', 'esign_provider', 'esign_provider_display',
+            'esign_envelope_id', 'sent_at', 'viewed_at', 'signed_at', 'due_date',
+            'signed_document', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        client = request.user.client
+        return SignatureTracker.objects.create(client=client, **validated_data)
+
+
+class ConditionPrecedentSerializer(serializers.ModelSerializer):
+    """Serializer for ConditionPrecedent model"""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True, allow_null=True)
+
+    class Meta:
+        model = ConditionPrecedent
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'name', 'description',
+            'category', 'category_display', 'status', 'status_display',
+            'responsible_party', 'assigned_to', 'assigned_to_email',
+            'target_date', 'satisfied_date', 'blocker_description',
+            'blocker_resolution_plan', 'evidence_file', 'order',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        client = request.user.client
+        return ConditionPrecedent.objects.create(client=client, **validated_data)
+
+
+class ClosingBinderSerializer(serializers.ModelSerializer):
+    """Serializer for ClosingBinder model"""
+
+    format_display = serializers.CharField(source='get_format_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+    documents_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ClosingBinder
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'name', 'format', 'format_display',
+            'include_toc', 'include_signature_pages', 'status', 'status_display',
+            'pdf_file', 'zip_file', 'table_of_contents', 'documents_count',
+            'error_message', 'created_by_email', 'created_at', 'completed_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'completed_at']
+
+    def get_documents_count(self, obj):
+        return obj.included_documents.count() if hasattr(obj, 'included_documents') else 0
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+        return ClosingBinder.objects.create(client=client, created_by=user, **validated_data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 POST-CLOSE TRACKING SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class CovenantSerializer(serializers.ModelSerializer):
+    """Serializer for Covenant model"""
+
+    covenant_type_display = serializers.CharField(source='get_covenant_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    threshold_type_display = serializers.CharField(source='get_threshold_type_display', read_only=True)
+    reporting_frequency_display = serializers.CharField(source='get_reporting_frequency_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+
+    class Meta:
+        model = Covenant
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'name', 'covenant_type',
+            'covenant_type_display', 'description', 'metric_name', 'threshold_value',
+            'threshold_type', 'threshold_type_display', 'current_value',
+            'status', 'status_display', 'reporting_frequency', 'reporting_frequency_display',
+            'next_reporting_date', 'last_reported_date', 'source_document', 'source_clause',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        client = request.user.client
+        return Covenant.objects.create(client=client, **validated_data)
+
+
+class ConsentFilingSerializer(serializers.ModelSerializer):
+    """Serializer for ConsentFiling model"""
+
+    filing_type_display = serializers.CharField(source='get_filing_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True, allow_null=True)
+
+    class Meta:
+        model = ConsentFiling
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'name', 'filing_type',
+            'filing_type_display', 'description', 'filing_party', 'receiving_party',
+            'status', 'status_display', 'assigned_to', 'assigned_to_email',
+            'due_date', 'submitted_date', 'approved_date',
+            'filing_document', 'approval_document', 'notes', 'rejection_reason',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        client = request.user.client
+        return ConsentFiling.objects.create(client=client, **validated_data)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 ADDITIONAL ANALYTICS SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class PortfolioComplianceSerializer(serializers.Serializer):
+    """Serializer for portfolio compliance dashboard"""
+
+    total_deals = serializers.IntegerField()
+    total_obligations = serializers.IntegerField()
+    pending_obligations = serializers.IntegerField()
+    overdue_obligations = serializers.IntegerField()
+    upcoming_deadlines = serializers.ListField(child=serializers.DictField())
+    risk_distribution = serializers.DictField()
+    compliance_by_deal = serializers.ListField(child=serializers.DictField())
+
+
+class RiskHeatmapSerializer(serializers.Serializer):
+    """Serializer for risk heatmap data"""
+
+    heatmap_type = serializers.CharField()
+    categories = serializers.ListField(child=serializers.CharField())
+    data = serializers.ListField(child=serializers.DictField())
+    summary = serializers.DictField()
+
+
+class BidAnalysisSerializer(serializers.Serializer):
+    """Serializer for bid analysis comparison"""
+
+    rfp_id = serializers.IntegerField()
+    rfp_title = serializers.CharField()
+    bids = serializers.ListField(child=serializers.DictField())
+    comparison_matrix = serializers.ListField(child=serializers.DictField())
+    recommendation = serializers.DictField()
