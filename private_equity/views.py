@@ -1315,8 +1315,9 @@ class BidAnalysisView(APIView):
         operation_description="Analyze bids for an RFP",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
+            required=['rfp_id'],
             properties={
-                'rfp_id': openapi.Schema(type=openapi.TYPE_INTEGER, required=True),
+                'rfp_id': openapi.Schema(type=openapi.TYPE_INTEGER),
                 'scoring_criteria': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_STRING)),
             }
         ),
