@@ -22,7 +22,7 @@ from regulatory_compliance.models import ServiceExecution as RCServiceExecution
 
 # Import tool output models from all 5 verticals for data insights
 from private_equity.models import (
-    DueDiligenceRun, DocumentClassification, RiskClause, DueDiligenceReport
+    DueDiligenceRun, DocumentClassification, RiskClause, FindingsReport
 )
 from class_actions.models import (
     MassClaimsRun, IntakeForm, EvidenceDocument, SettlementTracking
