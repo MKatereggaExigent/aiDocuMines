@@ -22,9 +22,12 @@ from .views import (
 app_name = 'private_equity'
 
 urlpatterns = [
-    # Due Diligence Run Management
+    # Due Diligence Run Management (also aliased as deal-workspaces for frontend compatibility)
     path('due-diligence-runs/', DueDiligenceRunListCreateView.as_view(), name='dd-runs-list-create'),
     path('due-diligence-runs/<int:pk>/', DueDiligenceRunDetailView.as_view(), name='dd-run-detail'),
+    # Alias endpoints for frontend compatibility (deal-workspaces = due-diligence-runs)
+    path('deal-workspaces/', DueDiligenceRunListCreateView.as_view(), name='deal-workspaces-list-create'),
+    path('deal-workspaces/<int:pk>/', DueDiligenceRunDetailView.as_view(), name='deal-workspace-detail'),
 
     # Document Classification
     path('classify-documents/', DocumentClassificationView.as_view(), name='classify-documents'),
