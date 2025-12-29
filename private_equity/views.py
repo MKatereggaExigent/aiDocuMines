@@ -317,6 +317,142 @@ class RiskClauseExtractionView(APIView):
         }, status=status.HTTP_202_ACCEPTED)
 
 
+class IssueSpottingView(APIView):
+    """
+    AI-powered issue spotting for deal documents.
+    Scans documents for critical issues, risks, and red flags.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Trigger AI issue spotting for deal documents",
+        tags=["Private Equity - Issue Spotting"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['deal_workspace_id'],
+            properties={
+                'deal_workspace_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Deal workspace ID'),
+                'file_ids': openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Schema(type=openapi.TYPE_INTEGER)),
+                'issue_categories': openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(type=openapi.TYPE_STRING),
+                    description='Issue categories to scan for (e.g., change_of_control, assignment_restrictions, mac_clauses)'
+                ),
+                'severity_threshold': openapi.Schema(type=openapi.TYPE_STRING, enum=['low', 'medium', 'high', 'critical']),
+            }
+        ),
+        responses={202: "Issue spotting started"}
+    )
+    def post(self, request):
+        """Trigger AI issue spotting for deal documents"""
+        deal_workspace_id = request.data.get('deal_workspace_id')
+        file_ids = request.data.get('file_ids', [])
+        issue_categories = request.data.get('issue_categories', [
+            'change_of_control', 'assignment_restrictions', 'mac_clauses',
+            'termination_rights', 'indemnification', 'non_compete',
+            'consent_requirements', 'financial_covenants'
+        ])
+        severity_threshold = request.data.get('severity_threshold', 'low')
+
+        if not deal_workspace_id:
+            return Response(
+                {"error": "deal_workspace_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Ensure user owns the deal workspace
+        dd_run = get_object_or_404(DueDiligenceRun, pk=deal_workspace_id, client=request.user.client)
+
+        # If no specific files, get all files for the DD run
+        if file_ids:
+            files = File.objects.filter(id__in=file_ids, user=request.user)
+        else:
+            # Get files associated with this DD run via DocumentClassification
+            classified_file_ids = DocumentClassification.objects.filter(
+                due_diligence_run=dd_run,
+                user=request.user
+            ).values_list('file_id', flat=True)
+            files = File.objects.filter(id__in=classified_file_ids)
+
+        if not files.exists():
+            return Response(
+                {"error": "No files found for issue spotting. Please classify documents first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Trigger risk extraction tasks for issue spotting
+        task_ids = []
+        for file_obj in files:
+            task = extract_risk_clauses_task.delay(file_obj.id, dd_run.id, request.user.id)
+            task_ids.append(task.id)
+
+        return Response({
+            "message": "AI issue spotting started",
+            "task_ids": task_ids,
+            "files_count": files.count(),
+            "deal_workspace_id": deal_workspace_id,
+            "issue_categories": issue_categories,
+            "severity_threshold": severity_threshold,
+            "status": "processing"
+        }, status=status.HTTP_202_ACCEPTED)
+
+    @swagger_auto_schema(
+        operation_description="Get issue spotting results for a deal workspace",
+        tags=["Private Equity - Issue Spotting"],
+        manual_parameters=[
+            openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('severity', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('category', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: RiskClauseSerializer(many=True)}
+    )
+    def get(self, request):
+        """Get issue spotting results (risk clauses) for a deal workspace"""
+        deal_workspace_id = request.query_params.get('deal_workspace_id')
+        if not deal_workspace_id:
+            return Response(
+                {"error": "deal_workspace_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Ensure user owns the deal workspace
+        dd_run = get_object_or_404(DueDiligenceRun, pk=deal_workspace_id, client=request.user.client)
+
+        # Get risk clauses (issues) for this workspace
+        issues = RiskClause.objects.filter(
+            due_diligence_run=dd_run,
+            user=request.user
+        )
+
+        # Apply filters
+        severity = request.query_params.get('severity')
+        if severity:
+            issues = issues.filter(risk_level=severity)
+
+        category = request.query_params.get('category')
+        if category:
+            issues = issues.filter(clause_type=category)
+
+        # Build response with summary
+        issues_data = RiskClauseSerializer(issues, many=True).data
+
+        summary = {
+            'total_issues': issues.count(),
+            'critical_count': issues.filter(risk_level='critical').count(),
+            'high_count': issues.filter(risk_level='high').count(),
+            'medium_count': issues.filter(risk_level='medium').count(),
+            'low_count': issues.filter(risk_level='low').count(),
+        }
+
+        return Response({
+            'deal_workspace_id': deal_workspace_id,
+            'deal_name': dd_run.deal_name,
+            'summary': summary,
+            'issues': issues_data
+        })
+
+
 class FindingsReportView(APIView):
     """
     Generate and manage findings reports for due diligence runs.

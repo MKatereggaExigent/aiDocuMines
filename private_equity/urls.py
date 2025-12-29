@@ -4,6 +4,7 @@ from .views import (
     DueDiligenceRunDetailView,
     DocumentClassificationView,
     RiskClauseExtractionView,
+    IssueSpottingView,
     FindingsReportView,
     SyncDataRoomView,
     RiskClauseSummaryView,
@@ -50,6 +51,9 @@ urlpatterns = [
 
     # Risk Clause Extraction
     path('extract-risk-clauses/', RiskClauseExtractionView.as_view(), name='extract-risk-clauses'),
+
+    # AI Issue Spotting
+    path('issue-spotting/', IssueSpottingView.as_view(), name='issue-spotting'),
 
     # Findings Reports
     path('findings-reports/', FindingsReportView.as_view(), name='findings-reports'),
