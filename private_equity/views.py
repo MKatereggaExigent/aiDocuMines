@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404
-from django.db.models import Count, Q, Avg
+from django.db.models import Count, Q, Avg, F
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -14,13 +14,18 @@ from core.vertical_permissions import IsClientMember, IsClientAdmin, IsOwnerOrCl
 from core.models import File
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause,
-    FindingsReport, DataRoomConnector, ServiceExecution, ServiceOutput
+    FindingsReport, DataRoomConnector, ServiceExecution, ServiceOutput,
+    ClosingChecklist, PostCloseObligation, DealVelocityMetrics, ClauseLibrary
 )
 from .serializers import (
     DueDiligenceRunSerializer, DueDiligenceRunCreateSerializer,
     DocumentClassificationSerializer, RiskClauseSerializer,
     FindingsReportSerializer, DataRoomConnectorSerializer,
-    RiskClauseSummarySerializer, DocumentTypeSummarySerializer
+    RiskClauseSummarySerializer, DocumentTypeSummarySerializer,
+    ClosingChecklistSerializer, ClosingChecklistCreateSerializer,
+    PostCloseObligationSerializer, PostCloseObligationCreateSerializer,
+    DealVelocityMetricsSerializer, ClauseLibrarySerializer, ClauseLibraryCreateSerializer,
+    DealVelocitySummarySerializer, ChecklistProgressSerializer, PostCloseObligationSummarySerializer
 )
 from .tasks import (
     classify_document_task, extract_risk_clauses_task,
@@ -714,3 +719,383 @@ class ServiceOutputListCreateView(APIView):
                 {'error': f'Failed to create service output: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 💼 PE VALUE METRICS VIEWS - Checklists, Obligations, Velocity
+# ═══════════════════════════════════════════════════════════════
+
+class ClosingChecklistListCreateView(APIView):
+    """
+    List all closing checklist items for a deal or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List closing checklist items for a due diligence run",
+        manual_parameters=[
+            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('category', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: ClosingChecklistSerializer(many=True)}
+    )
+    def get(self, request):
+        dd_run_id = request.query_params.get('dd_run_id')
+        if not dd_run_id:
+            return Response({'error': 'dd_run_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = ClosingChecklist.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=dd_run_id
+        )
+
+        # Apply filters
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        category = request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(category=category)
+
+        serializer = ClosingChecklistSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new closing checklist item",
+        request_body=ClosingChecklistCreateSerializer,
+        responses={201: ClosingChecklistSerializer}
+    )
+    def post(self, request):
+        serializer = ClosingChecklistCreateSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            checklist_item = serializer.save()
+            return Response(
+                ClosingChecklistSerializer(checklist_item).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClosingChecklistDetailView(APIView):
+    """
+    Retrieve, update or delete a closing checklist item.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def get_object(self, pk, user):
+        return get_object_or_404(ClosingChecklist, pk=pk, client=user.client)
+
+    @swagger_auto_schema(
+        operation_description="Retrieve a closing checklist item",
+        responses={200: ClosingChecklistSerializer}
+    )
+    def get(self, request, pk):
+        item = self.get_object(pk, request.user)
+        serializer = ClosingChecklistSerializer(item)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Update a closing checklist item",
+        request_body=ClosingChecklistCreateSerializer,
+        responses={200: ClosingChecklistSerializer}
+    )
+    def patch(self, request, pk):
+        item = self.get_object(pk, request.user)
+        serializer = ClosingChecklistCreateSerializer(item, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(ClosingChecklistSerializer(item).data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_description="Delete a closing checklist item",
+        responses={204: 'No content'}
+    )
+    def delete(self, request, pk):
+        item = self.get_object(pk, request.user)
+        item.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PostCloseObligationListCreateView(APIView):
+    """
+    List all post-close obligations for a deal or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List post-close obligations for a due diligence run",
+        manual_parameters=[
+            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('obligation_type', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: PostCloseObligationSerializer(many=True)}
+    )
+    def get(self, request):
+        dd_run_id = request.query_params.get('dd_run_id')
+        if not dd_run_id:
+            return Response({'error': 'dd_run_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = PostCloseObligation.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=dd_run_id
+        )
+
+        # Apply filters
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        obligation_type = request.query_params.get('obligation_type')
+        if obligation_type:
+            queryset = queryset.filter(obligation_type=obligation_type)
+
+        serializer = PostCloseObligationSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new post-close obligation",
+        request_body=PostCloseObligationCreateSerializer,
+        responses={201: PostCloseObligationSerializer}
+    )
+    def post(self, request):
+        serializer = PostCloseObligationCreateSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            obligation = serializer.save()
+            return Response(
+                PostCloseObligationSerializer(obligation).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DealVelocityMetricsListView(APIView):
+    """
+    List deal velocity metrics for a due diligence run.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List deal velocity metrics for a due diligence run",
+        manual_parameters=[
+            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+        ],
+        responses={200: DealVelocityMetricsSerializer(many=True)}
+    )
+    def get(self, request):
+        dd_run_id = request.query_params.get('dd_run_id')
+        if not dd_run_id:
+            return Response({'error': 'dd_run_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = DealVelocityMetrics.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=dd_run_id
+        )
+
+        serializer = DealVelocityMetricsSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create or update deal velocity metrics for a phase",
+        request_body=DealVelocityMetricsSerializer,
+        responses={201: DealVelocityMetricsSerializer}
+    )
+    def post(self, request):
+        dd_run_id = request.data.get('due_diligence_run')
+        phase = request.data.get('phase')
+
+        # Check if metrics already exist for this phase
+        existing = DealVelocityMetrics.objects.filter(
+            client=request.user.client,
+            due_diligence_run_id=dd_run_id,
+            phase=phase
+        ).first()
+
+        if existing:
+            serializer = DealVelocityMetricsSerializer(existing, data=request.data, partial=True)
+        else:
+            serializer = DealVelocityMetricsSerializer(data=request.data)
+
+        if serializer.is_valid():
+            if not existing:
+                serializer.save(client=request.user.client)
+            else:
+                serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ClauseLibraryListCreateView(APIView):
+    """
+    List all clauses in the library or create a new one.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="List clauses in the library",
+        manual_parameters=[
+            openapi.Parameter('category', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('risk_position', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('search', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+        ],
+        responses={200: ClauseLibrarySerializer(many=True)}
+    )
+    def get(self, request):
+        queryset = ClauseLibrary.objects.filter(
+            client=request.user.client,
+            is_active=True
+        )
+
+        # Apply filters
+        category = request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(clause_category=category)
+
+        risk_position = request.query_params.get('risk_position')
+        if risk_position:
+            queryset = queryset.filter(risk_position=risk_position)
+
+        search = request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(clause_name__icontains=search) |
+                Q(clause_text__icontains=search) |
+                Q(tags__contains=[search])
+            )
+
+        serializer = ClauseLibrarySerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_description="Create a new clause in the library",
+        request_body=ClauseLibraryCreateSerializer,
+        responses={201: ClauseLibrarySerializer}
+    )
+    def post(self, request):
+        serializer = ClauseLibraryCreateSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            clause = serializer.save()
+            return Response(
+                ClauseLibrarySerializer(clause).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DealVelocityAnalyticsView(APIView):
+    """
+    Get deal velocity analytics and bottleneck analysis.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Get deal velocity analytics summary",
+        responses={200: DealVelocitySummarySerializer}
+    )
+    def get(self, request):
+        client = request.user.client
+
+        # Get all velocity metrics for the client
+        metrics = DealVelocityMetrics.objects.filter(client=client)
+
+        # Calculate summary statistics
+        total_deals = metrics.values('due_diligence_run').distinct().count()
+
+        # Calculate average phase durations
+        phase_durations = metrics.values('phase').annotate(
+            avg_duration=Avg('actual_duration_days')
+        )
+        avg_phase_duration = {
+            item['phase']: item['avg_duration'] or 0
+            for item in phase_durations
+        }
+
+        # Count bottlenecks
+        total_bottlenecks = metrics.filter(is_bottleneck=True).count()
+        resolved_bottlenecks = metrics.filter(is_bottleneck=True, bottleneck_resolved=True).count()
+
+        # Count delayed deals
+        delayed_phases = metrics.filter(
+            actual_duration_days__gt=F('planned_duration_days')
+        ).values('due_diligence_run').distinct().count()
+
+        summary = {
+            'total_deals': total_deals,
+            'avg_deal_duration_days': sum(avg_phase_duration.values()),
+            'deals_on_track': total_deals - delayed_phases,
+            'deals_delayed': delayed_phases,
+            'total_bottlenecks': total_bottlenecks,
+            'resolved_bottlenecks': resolved_bottlenecks,
+            'avg_phase_duration': avg_phase_duration
+        }
+
+        serializer = DealVelocitySummarySerializer(summary)
+        return Response(serializer.data)
+
+
+class ChecklistProgressView(APIView):
+    """
+    Get closing checklist progress for a deal.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Get closing checklist progress for a deal",
+        manual_parameters=[
+            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+        ],
+        responses={200: ChecklistProgressSerializer}
+    )
+    def get(self, request):
+        dd_run_id = request.query_params.get('dd_run_id')
+        if not dd_run_id:
+            return Response({'error': 'dd_run_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, client=request.user.client)
+        items = ClosingChecklist.objects.filter(due_diligence_run=dd_run)
+
+        total_items = items.count()
+        completed_items = items.filter(status='completed').count()
+        in_progress_items = items.filter(status='in_progress').count()
+        blocked_items = items.filter(status='blocked').count()
+
+        # Count overdue items
+        from django.utils import timezone
+        overdue_items = items.filter(
+            due_date__lt=timezone.now().date()
+        ).exclude(status__in=['completed', 'not_applicable']).count()
+
+        # Group by category
+        items_by_category = dict(
+            items.values('category').annotate(count=Count('id')).values_list('category', 'count')
+        )
+
+        # Group by priority
+        items_by_priority = dict(
+            items.values('priority').annotate(count=Count('id')).values_list('priority', 'count')
+        )
+
+        progress = {
+            'deal_name': dd_run.deal_name,
+            'total_items': total_items,
+            'completed_items': completed_items,
+            'in_progress_items': in_progress_items,
+            'blocked_items': blocked_items,
+            'overdue_items': overdue_items,
+            'completion_percentage': (completed_items / total_items * 100) if total_items > 0 else 0,
+            'items_by_category': items_by_category,
+            'items_by_priority': items_by_priority
+        }
+
+        serializer = ChecklistProgressSerializer(progress)
+        return Response(serializer.data)

@@ -415,3 +415,346 @@ class ServiceOutput(models.Model):
                 return f"{self.file_size:.1f} {unit}"
             self.file_size /= 1024.0
         return f"{self.file_size:.1f} TB"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 💼 PE VALUE METRICS MODELS - Deal Velocity, Checklists, Obligations
+# ═══════════════════════════════════════════════════════════════
+
+class ClosingChecklist(models.Model):
+    """
+    Closing checklist for deal execution - tracks items needed before close.
+    Supports checklist automation and signature/status tracking.
+    """
+    CHECKLIST_CATEGORIES = [
+        ('legal', 'Legal/Corporate'),
+        ('financial', 'Financial'),
+        ('regulatory', 'Regulatory'),
+        ('operational', 'Operational'),
+        ('hr', 'Human Resources'),
+        ('ip', 'Intellectual Property'),
+        ('tax', 'Tax'),
+        ('insurance', 'Insurance'),
+        ('real_estate', 'Real Estate'),
+        ('it', 'IT/Technology'),
+        ('environmental', 'Environmental'),
+        ('other', 'Other'),
+    ]
+
+    ITEM_STATUS = [
+        ('not_started', 'Not Started'),
+        ('in_progress', 'In Progress'),
+        ('pending_review', 'Pending Review'),
+        ('pending_signature', 'Pending Signature'),
+        ('completed', 'Completed'),
+        ('blocked', 'Blocked'),
+        ('not_applicable', 'Not Applicable'),
+    ]
+
+    PRIORITY_LEVELS = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_closing_checklists')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='closing_checklists')
+
+    # Item details
+    item_name = models.CharField(max_length=500, help_text="Checklist item description")
+    category = models.CharField(max_length=50, choices=CHECKLIST_CATEGORIES, default='legal')
+    priority = models.CharField(max_length=20, choices=PRIORITY_LEVELS, default='medium')
+
+    # Status tracking
+    status = models.CharField(max_length=30, choices=ITEM_STATUS, default='not_started')
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_assigned_checklist_items')
+
+    # Dates
+    due_date = models.DateField(null=True, blank=True)
+    completed_date = models.DateField(null=True, blank=True)
+
+    # Dependencies and blocking
+    depends_on = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='dependents')
+    blocker_notes = models.TextField(blank=True, help_text="Notes if item is blocked")
+
+    # Documents and signatures
+    related_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_checklist_items')
+    requires_signature = models.BooleanField(default=False)
+    signature_obtained = models.BooleanField(default=False)
+    signatory_name = models.CharField(max_length=255, blank=True)
+
+    # Notes
+    notes = models.TextField(blank=True)
+
+    # Ordering within checklist
+    order = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_checklist_items')
+
+    class Meta:
+        db_table = 'private_equity_closing_checklist'
+        ordering = ['order', 'priority', 'due_date']
+        indexes = [
+            models.Index(fields=['client', 'due_diligence_run', 'status']),
+            models.Index(fields=['due_date']),
+            models.Index(fields=['category', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.item_name} - {self.get_status_display()}"
+
+    @property
+    def is_overdue(self):
+        """Check if item is overdue"""
+        from django.utils import timezone
+        if self.due_date and self.status not in ['completed', 'not_applicable']:
+            return self.due_date < timezone.now().date()
+        return False
+
+
+class PostCloseObligation(models.Model):
+    """
+    Post-close obligations tracker - tracks consents, filings, covenants after deal closure.
+    """
+    OBLIGATION_TYPES = [
+        ('consent', 'Consent Required'),
+        ('filing', 'Regulatory Filing'),
+        ('covenant', 'Covenant Compliance'),
+        ('notification', 'Notification'),
+        ('integration', 'Integration Task'),
+        ('payment', 'Payment/Earnout'),
+        ('reporting', 'Reporting Requirement'),
+        ('other', 'Other'),
+    ]
+
+    OBLIGATION_STATUS = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('submitted', 'Submitted'),
+        ('approved', 'Approved'),
+        ('completed', 'Completed'),
+        ('overdue', 'Overdue'),
+        ('waived', 'Waived'),
+    ]
+
+    FREQUENCY = [
+        ('one_time', 'One-Time'),
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('annually', 'Annually'),
+        ('ongoing', 'Ongoing'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_post_close_obligations')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='post_close_obligations')
+
+    # Obligation details
+    obligation_name = models.CharField(max_length=500)
+    obligation_type = models.CharField(max_length=50, choices=OBLIGATION_TYPES)
+    description = models.TextField(blank=True)
+
+    # Source document/clause
+    source_document = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_source_obligations')
+    source_clause = models.TextField(blank=True, help_text="Relevant clause text")
+
+    # Status and tracking
+    status = models.CharField(max_length=30, choices=OBLIGATION_STATUS, default='pending')
+    frequency = models.CharField(max_length=20, choices=FREQUENCY, default='one_time')
+
+    # Dates
+    effective_date = models.DateField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    completion_date = models.DateField(null=True, blank=True)
+    next_due_date = models.DateField(null=True, blank=True, help_text="For recurring obligations")
+
+    # Responsibility
+    responsible_party = models.CharField(max_length=255, blank=True)
+    assigned_to = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_assigned_obligations')
+
+    # Risk and impact
+    risk_level = models.CharField(max_length=20, choices=[
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ], default='medium')
+    non_compliance_impact = models.TextField(blank=True, help_text="Impact if obligation is not met")
+
+    # Notes and evidence
+    notes = models.TextField(blank=True)
+    evidence_file = models.ForeignKey('core.File', on_delete=models.SET_NULL, null=True, blank=True, related_name='pe_obligation_evidence')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_obligations')
+
+    class Meta:
+        db_table = 'private_equity_post_close_obligation'
+        ordering = ['due_date', 'risk_level']
+        indexes = [
+            models.Index(fields=['client', 'due_diligence_run', 'status']),
+            models.Index(fields=['due_date']),
+            models.Index(fields=['obligation_type', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.obligation_name} - {self.get_status_display()}"
+
+
+class DealVelocityMetrics(models.Model):
+    """
+    Tracks deal velocity metrics - time spent in each phase, bottlenecks, and performance.
+    Used for identifying bottlenecks and improving deal process repeatability.
+    """
+    DEAL_PHASES = [
+        ('initial_review', 'Initial Review'),
+        ('nda_execution', 'NDA Execution'),
+        ('preliminary_dd', 'Preliminary Due Diligence'),
+        ('loi_negotiation', 'LOI Negotiation'),
+        ('full_dd', 'Full Due Diligence'),
+        ('definitive_docs', 'Definitive Documentation'),
+        ('regulatory_approval', 'Regulatory Approval'),
+        ('closing', 'Closing'),
+        ('post_close', 'Post-Close Integration'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_deal_velocity_metrics')
+
+    due_diligence_run = models.ForeignKey(DueDiligenceRun, on_delete=models.CASCADE, related_name='velocity_metrics')
+
+    # Phase tracking
+    phase = models.CharField(max_length=50, choices=DEAL_PHASES)
+    phase_start_date = models.DateTimeField()
+    phase_end_date = models.DateTimeField(null=True, blank=True)
+
+    # Time metrics
+    planned_duration_days = models.IntegerField(null=True, blank=True)
+    actual_duration_days = models.IntegerField(null=True, blank=True)
+
+    # Bottleneck tracking
+    is_bottleneck = models.BooleanField(default=False)
+    bottleneck_reason = models.TextField(blank=True)
+    bottleneck_resolved = models.BooleanField(default=False)
+    bottleneck_resolution = models.TextField(blank=True)
+
+    # Resource tracking
+    team_members_involved = models.IntegerField(default=1)
+    external_parties_involved = models.IntegerField(default=0)
+
+    # Quality metrics
+    issues_identified = models.IntegerField(default=0)
+    issues_resolved = models.IntegerField(default=0)
+    documents_reviewed = models.IntegerField(default=0)
+
+    # Notes
+    notes = models.TextField(blank=True)
+    key_milestones = models.JSONField(default=list, help_text="Key milestones achieved in this phase")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'private_equity_deal_velocity_metrics'
+        ordering = ['due_diligence_run', 'phase_start_date']
+        unique_together = ['due_diligence_run', 'phase']
+        indexes = [
+            models.Index(fields=['client', 'due_diligence_run']),
+            models.Index(fields=['phase', 'is_bottleneck']),
+        ]
+
+    def __str__(self):
+        return f"{self.due_diligence_run.deal_name} - {self.get_phase_display()}"
+
+    @property
+    def variance_days(self):
+        """Calculate variance between planned and actual duration"""
+        if self.planned_duration_days and self.actual_duration_days:
+            return self.actual_duration_days - self.planned_duration_days
+        return None
+
+    @property
+    def is_delayed(self):
+        """Check if phase took longer than planned"""
+        variance = self.variance_days
+        return variance is not None and variance > 0
+
+
+class ClauseLibrary(models.Model):
+    """
+    Library of standard clauses for repeatable deal processes.
+    Supports clause libraries and playbooks for consistent deal execution.
+    """
+    CLAUSE_CATEGORIES = [
+        ('rep_warranty', 'Representations & Warranties'),
+        ('indemnification', 'Indemnification'),
+        ('covenants', 'Covenants'),
+        ('conditions', 'Conditions Precedent'),
+        ('termination', 'Termination'),
+        ('confidentiality', 'Confidentiality'),
+        ('non_compete', 'Non-Compete'),
+        ('ip', 'Intellectual Property'),
+        ('employment', 'Employment'),
+        ('tax', 'Tax'),
+        ('regulatory', 'Regulatory'),
+        ('dispute', 'Dispute Resolution'),
+        ('other', 'Other'),
+    ]
+
+    RISK_LEVELS = [
+        ('standard', 'Standard/Neutral'),
+        ('buyer_favorable', 'Buyer Favorable'),
+        ('seller_favorable', 'Seller Favorable'),
+        ('aggressive', 'Aggressive'),
+        ('conservative', 'Conservative'),
+    ]
+
+    # Multi-tenancy
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, related_name='pe_clause_libraries')
+
+    # Clause details
+    clause_name = models.CharField(max_length=255)
+    clause_category = models.CharField(max_length=50, choices=CLAUSE_CATEGORIES)
+    clause_text = models.TextField()
+
+    # Classification
+    risk_position = models.CharField(max_length=30, choices=RISK_LEVELS, default='standard')
+    deal_types = models.JSONField(default=list, help_text="Applicable deal types: ['acquisition', 'merger', etc.]")
+
+    # Usage tracking
+    usage_count = models.IntegerField(default=0)
+    last_used_date = models.DateField(null=True, blank=True)
+
+    # Versioning
+    version = models.IntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+    parent_clause = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='versions')
+
+    # Notes and guidance
+    usage_notes = models.TextField(blank=True, help_text="When to use this clause")
+    negotiation_tips = models.TextField(blank=True, help_text="Tips for negotiating this clause")
+
+    # Tags for searchability
+    tags = models.JSONField(default=list)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='pe_created_clauses')
+
+    class Meta:
+        db_table = 'private_equity_clause_library'
+        ordering = ['clause_category', 'clause_name']
+        indexes = [
+            models.Index(fields=['client', 'clause_category']),
+            models.Index(fields=['is_active', 'usage_count']),
+        ]
+
+    def __str__(self):
+        return f"{self.clause_name} (v{self.version})"

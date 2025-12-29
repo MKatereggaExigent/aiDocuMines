@@ -4,7 +4,8 @@ from core.models import File, Run
 from custom_authentication.models import Client
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause,
-    FindingsReport, DataRoomConnector
+    FindingsReport, DataRoomConnector, ClosingChecklist,
+    PostCloseObligation, DealVelocityMetrics, ClauseLibrary
 )
 
 User = get_user_model()
@@ -227,9 +228,212 @@ class RiskClauseSummarySerializer(serializers.Serializer):
 
 class DocumentTypeSummarySerializer(serializers.Serializer):
     """Serializer for document type summary statistics"""
-    
+
     document_type = serializers.CharField()
     document_type_display = serializers.CharField()
     total_count = serializers.IntegerField()
     verified_count = serializers.IntegerField()
     avg_confidence_score = serializers.FloatField()
+
+
+# ═══════════════════════════════════════════════════════════════
+# 💼 PE VALUE METRICS SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class ClosingChecklistSerializer(serializers.ModelSerializer):
+    """Serializer for ClosingChecklist model"""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True)
+    is_overdue = serializers.BooleanField(read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+
+    class Meta:
+        model = ClosingChecklist
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'item_name', 'category', 'category_display',
+            'priority', 'priority_display', 'status', 'status_display', 'assigned_to',
+            'assigned_to_email', 'due_date', 'completed_date', 'depends_on',
+            'blocker_notes', 'related_document', 'requires_signature',
+            'signature_obtained', 'signatory_name', 'notes', 'order',
+            'is_overdue', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ClosingChecklistCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating ClosingChecklist items"""
+
+    class Meta:
+        model = ClosingChecklist
+        fields = [
+            'due_diligence_run', 'item_name', 'category', 'priority', 'status',
+            'assigned_to', 'due_date', 'depends_on', 'blocker_notes',
+            'related_document', 'requires_signature', 'signatory_name', 'notes', 'order'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+
+        return ClosingChecklist.objects.create(
+            client=client,
+            created_by=user,
+            **validated_data
+        )
+
+
+class PostCloseObligationSerializer(serializers.ModelSerializer):
+    """Serializer for PostCloseObligation model"""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    obligation_type_display = serializers.CharField(source='get_obligation_type_display', read_only=True)
+    frequency_display = serializers.CharField(source='get_frequency_display', read_only=True)
+    risk_level_display = serializers.CharField(source='get_risk_level_display', read_only=True)
+    assigned_to_email = serializers.EmailField(source='assigned_to.email', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+
+    class Meta:
+        model = PostCloseObligation
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'obligation_name', 'obligation_type',
+            'obligation_type_display', 'description', 'source_document', 'source_clause',
+            'status', 'status_display', 'frequency', 'frequency_display',
+            'effective_date', 'due_date', 'completion_date', 'next_due_date',
+            'responsible_party', 'assigned_to', 'assigned_to_email',
+            'risk_level', 'risk_level_display', 'non_compliance_impact',
+            'notes', 'evidence_file', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class PostCloseObligationCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating PostCloseObligation items"""
+
+    class Meta:
+        model = PostCloseObligation
+        fields = [
+            'due_diligence_run', 'obligation_name', 'obligation_type', 'description',
+            'source_document', 'source_clause', 'status', 'frequency',
+            'effective_date', 'due_date', 'next_due_date', 'responsible_party',
+            'assigned_to', 'risk_level', 'non_compliance_impact', 'notes'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+
+        return PostCloseObligation.objects.create(
+            client=client,
+            created_by=user,
+            **validated_data
+        )
+
+
+class DealVelocityMetricsSerializer(serializers.ModelSerializer):
+    """Serializer for DealVelocityMetrics model"""
+
+    phase_display = serializers.CharField(source='get_phase_display', read_only=True)
+    deal_name = serializers.CharField(source='due_diligence_run.deal_name', read_only=True)
+    variance_days = serializers.IntegerField(read_only=True)
+    is_delayed = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = DealVelocityMetrics
+        fields = [
+            'id', 'due_diligence_run', 'deal_name', 'phase', 'phase_display',
+            'phase_start_date', 'phase_end_date', 'planned_duration_days',
+            'actual_duration_days', 'variance_days', 'is_delayed',
+            'is_bottleneck', 'bottleneck_reason', 'bottleneck_resolved',
+            'bottleneck_resolution', 'team_members_involved', 'external_parties_involved',
+            'issues_identified', 'issues_resolved', 'documents_reviewed',
+            'notes', 'key_milestones', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ClauseLibrarySerializer(serializers.ModelSerializer):
+    """Serializer for ClauseLibrary model"""
+
+    clause_category_display = serializers.CharField(source='get_clause_category_display', read_only=True)
+    risk_position_display = serializers.CharField(source='get_risk_position_display', read_only=True)
+    created_by_email = serializers.EmailField(source='created_by.email', read_only=True)
+
+    class Meta:
+        model = ClauseLibrary
+        fields = [
+            'id', 'clause_name', 'clause_category', 'clause_category_display',
+            'clause_text', 'risk_position', 'risk_position_display', 'deal_types',
+            'usage_count', 'last_used_date', 'version', 'is_active', 'parent_clause',
+            'usage_notes', 'negotiation_tips', 'tags', 'created_by_email',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'usage_count', 'last_used_date', 'created_at', 'updated_at']
+
+
+class ClauseLibraryCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating ClauseLibrary items"""
+
+    class Meta:
+        model = ClauseLibrary
+        fields = [
+            'clause_name', 'clause_category', 'clause_text', 'risk_position',
+            'deal_types', 'usage_notes', 'negotiation_tips', 'tags'
+        ]
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        user = request.user
+        client = user.client
+
+        return ClauseLibrary.objects.create(
+            client=client,
+            created_by=user,
+            **validated_data
+        )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 PE VALUE ANALYTICS SERIALIZERS
+# ═══════════════════════════════════════════════════════════════
+
+class DealVelocitySummarySerializer(serializers.Serializer):
+    """Serializer for deal velocity summary analytics"""
+
+    total_deals = serializers.IntegerField()
+    avg_deal_duration_days = serializers.FloatField()
+    deals_on_track = serializers.IntegerField()
+    deals_delayed = serializers.IntegerField()
+    total_bottlenecks = serializers.IntegerField()
+    resolved_bottlenecks = serializers.IntegerField()
+    avg_phase_duration = serializers.DictField()  # Phase name -> avg days
+
+
+class ChecklistProgressSerializer(serializers.Serializer):
+    """Serializer for closing checklist progress analytics"""
+
+    deal_name = serializers.CharField()
+    total_items = serializers.IntegerField()
+    completed_items = serializers.IntegerField()
+    in_progress_items = serializers.IntegerField()
+    blocked_items = serializers.IntegerField()
+    overdue_items = serializers.IntegerField()
+    completion_percentage = serializers.FloatField()
+    items_by_category = serializers.DictField()
+    items_by_priority = serializers.DictField()
+
+
+class PostCloseObligationSummarySerializer(serializers.Serializer):
+    """Serializer for post-close obligation summary analytics"""
+
+    total_obligations = serializers.IntegerField()
+    pending_obligations = serializers.IntegerField()
+    completed_obligations = serializers.IntegerField()
+    overdue_obligations = serializers.IntegerField()
+    upcoming_due_dates = serializers.ListField(child=serializers.DictField())
+    obligations_by_type = serializers.DictField()
+    high_risk_obligations = serializers.IntegerField()
