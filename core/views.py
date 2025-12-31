@@ -724,6 +724,7 @@ class AssociateTopicToFileView(APIView):
 class FileInsightView(APIView):
     """
     Returns full insight for a given file_id including run, project, and metadata links.
+    Supports optional report generation via POST.
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
@@ -756,7 +757,7 @@ class FileInsightView(APIView):
             "run": {
                 "run_id": str(run.run_id),
                 "status": run.status,
-                "created_at": run.created_at,
+                "created_at": str(run.created_at),
                 "cost": float(run.cost),
             },
             "metadata": {
@@ -766,6 +767,91 @@ class FileInsightView(APIView):
                 "keywords": metadata.keywords if metadata else None,
             }
         })
+
+    @swagger_auto_schema(
+        operation_description="Generate and register a file insight report.",
+        tags=["Client Intelligence"],
+        manual_parameters=[
+            client_id_param,
+            file_id_param,
+            openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter("service_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+        ],
+        responses={200: "Success", 404: "File Not Found"},
+    )
+    def post(self, request):
+        """Generate a file insight report and register it in the file tree."""
+        import time
+        from core.utils import generate_and_register_service_report
+
+        start_time = time.time()
+        file_id = request.query_params.get("file_id")
+        project_id = request.query_params.get("project_id")
+        service_id = request.query_params.get("service_id")
+
+        if not file_id:
+            return Response({"error": "Missing file_id"}, status=400)
+        if not project_id or not service_id:
+            return Response({"error": "Missing project_id or service_id"}, status=400)
+
+        file = get_object_or_404(File, id=file_id)
+        metadata = file.metadata.first()
+        run = file.run
+
+        response_data = {
+            "file": {
+                "file_id": file.id,
+                "filename": file.filename,
+                "file_type": file.file_type,
+                "file_size": file.file_size,
+                "status": file.status,
+                "project_id": file.project_id,
+                "service_id": file.service_id,
+            },
+            "run": {
+                "run_id": str(run.run_id),
+                "status": run.status,
+                "created_at": str(run.created_at),
+                "cost": float(run.cost),
+            },
+            "metadata": {
+                "title": metadata.title if metadata else None,
+                "page_count": metadata.page_count if metadata else None,
+                "author": metadata.author if metadata else None,
+                "keywords": metadata.keywords if metadata else None,
+                "format": metadata.format if metadata else None,
+                "creator": metadata.creator if metadata else None,
+                "producer": metadata.producer if metadata else None,
+            }
+        }
+
+        execution_time = time.time() - start_time
+
+        try:
+            report_info = generate_and_register_service_report(
+                service_name="File Insight Analysis",
+                service_id="ai-file-insight",
+                vertical="AI Services",
+                response_data=response_data,
+                user=request.user,
+                run=run,
+                project_id=project_id,
+                service_id_folder=service_id,
+                folder_name="file-insight-results",
+                execution_time_seconds=execution_time,
+                input_files=[{"filename": file.filename, "file_id": file.id}],
+                additional_metadata={
+                    "file_type": file.file_type,
+                    "page_count": metadata.page_count if metadata else 0
+                }
+            )
+            response_data["report_file"] = report_info
+            logger.info(f"✅ Generated file insight report: {report_info.get('filename')}")
+        except Exception as report_error:
+            logger.warning(f"Failed to generate report: {report_error}")
+            response_data["report_error"] = str(report_error)
+
+        return Response(response_data)
 
 
 

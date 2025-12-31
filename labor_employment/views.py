@@ -1,3 +1,6 @@
+import time
+import logging
+
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q, Avg, Sum
 from rest_framework.views import APIView
@@ -7,7 +10,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-import logging
+
+from core.utils import generate_and_register_service_report
 
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
 from core.models import File
@@ -551,12 +555,16 @@ class MessageAnalysisSummaryView(APIView):
         operation_description="Get message analysis summary statistics",
         tags=["Labor Employment - Analytics"],
         manual_parameters=[
-            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: MessageAnalysisSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get message analysis summary statistics"""
+        start_time = time.time()
         comm_run_id = request.query_params.get('comm_run_id')
         if not comm_run_id:
             return Response({"error": "comm_run_id parameter is required"},
@@ -591,7 +599,34 @@ class MessageAnalysisSummaryView(APIView):
             })
 
         serializer = MessageAnalysisSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'comm_run_id': comm_run_id, 'case_name': comm_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Labor Employment Message Analysis",
+                    service_id="le-message-analysis",
+                    vertical="Labor Employment",
+                    response_data=response_data,
+                    user=request.user,
+                    run=comm_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="message-analysis-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": comm_run.case_name, "message_types_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate message analysis report: {e}")
+
+        return Response(response_data)
 
 
 class ComplianceAlertSummaryView(APIView):
@@ -605,12 +640,16 @@ class ComplianceAlertSummaryView(APIView):
         operation_description="Get compliance alert summary statistics",
         tags=["Labor Employment - Analytics"],
         manual_parameters=[
-            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: ComplianceAlertSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get compliance alert summary statistics"""
+        start_time = time.time()
         comm_run_id = request.query_params.get('comm_run_id')
         if not comm_run_id:
             return Response({"error": "comm_run_id parameter is required"},
@@ -643,7 +682,34 @@ class ComplianceAlertSummaryView(APIView):
             })
 
         serializer = ComplianceAlertSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'comm_run_id': comm_run_id, 'case_name': comm_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Labor Employment Compliance Alerts",
+                    service_id="le-compliance-alerts",
+                    vertical="Labor Employment",
+                    response_data=response_data,
+                    user=request.user,
+                    run=comm_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="compliance-alerts-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": comm_run.case_name, "alert_types_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate compliance alerts report: {e}")
+
+        return Response(response_data)
 
 
 class WageHourSummaryView(APIView):
@@ -657,12 +723,16 @@ class WageHourSummaryView(APIView):
         operation_description="Get wage hour analysis summary statistics",
         tags=["Labor Employment - Analytics"],
         manual_parameters=[
-            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('comm_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: WageHourSummarySerializer}
     )
     def get(self, request):
         """Get wage hour analysis summary statistics"""
+        start_time = time.time()
         comm_run_id = request.query_params.get('comm_run_id')
         if not comm_run_id:
             return Response({"error": "comm_run_id parameter is required"},
@@ -690,7 +760,34 @@ class WageHourSummaryView(APIView):
         }
 
         serializer = WageHourSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'comm_run_id': comm_run_id, 'case_name': comm_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Labor Employment Wage Hour Analysis",
+                    service_id="le-wage-hour",
+                    vertical="Labor Employment",
+                    response_data=response_data,
+                    user=request.user,
+                    run=comm_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="wage-hour-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": comm_run.case_name, "employees_analyzed": summary_data['total_employees_analyzed']}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate wage hour report: {e}")
+
+        return Response(response_data)
 
 
 class ServiceExecutionListCreateView(APIView):

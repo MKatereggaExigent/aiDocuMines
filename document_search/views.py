@@ -60,7 +60,15 @@ class SemanticFileSearchView(APIView):
     """
     Search using semantic embeddings (vector search in Milvus).
     POST /api/v1/document-search/semantic-search/
-    body: {"query": "data science", "top_k": 5, "file_id": optional, "filters": optional}
+    body: {
+        "query": "data science",
+        "top_k": 5,
+        "file_id": optional,
+        "filters": optional,
+        "project_id": optional (for report registration),
+        "service_id": optional (for report registration),
+        "generate_report": optional (default: false)
+    }
     """
     authentication_classes = [OAuth2Authentication]
     permission_classes = [IsAuthenticated]
@@ -71,6 +79,11 @@ class SemanticFileSearchView(APIView):
         top_k = int(request.data.get("top_k", 5))
         file_id = request.data.get("file_id")
         filters = request.data.get("filters", {})
+
+        # New parameters for report generation
+        project_id = request.data.get("project_id")
+        service_id = request.data.get("service_id")
+        generate_report = request.data.get("generate_report", False)
 
         if not query:
             return Response({"error": "Query is required"}, status=400)
@@ -89,6 +102,9 @@ class SemanticFileSearchView(APIView):
             "top_k": top_k,
             "file_id": file_id,
             "filters": filters,
+            "project_id": project_id,
+            "service_id": service_id,
+            "generate_report": generate_report,
         })
 
         # ⬇️ add this line

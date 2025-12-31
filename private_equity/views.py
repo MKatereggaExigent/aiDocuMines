@@ -1,3 +1,6 @@
+import time
+import logging
+
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q, Avg, F
 from rest_framework.views import APIView
@@ -7,7 +10,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-import logging
+
+from core.utils import generate_and_register_service_report
 
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
 from core.vertical_permissions import IsClientMember, IsClientAdmin, IsOwnerOrClientAdmin
@@ -404,11 +408,15 @@ class IssueSpottingView(APIView):
             openapi.Parameter('deal_workspace_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
             openapi.Parameter('severity', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
             openapi.Parameter('category', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: RiskClauseSerializer(many=True)}
     )
     def get(self, request):
         """Get issue spotting results (risk clauses) for a deal workspace"""
+        start_time = time.time()
         deal_workspace_id = request.query_params.get('deal_workspace_id')
         if not deal_workspace_id:
             return Response(
@@ -445,12 +453,43 @@ class IssueSpottingView(APIView):
             'low_count': issues.filter(risk_level='low').count(),
         }
 
-        return Response({
+        response_data = {
             'deal_workspace_id': deal_workspace_id,
             'deal_name': dd_run.deal_name,
             'summary': summary,
             'issues': issues_data
-        })
+        }
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="PE Issue Spotting Analysis",
+                    service_id="pe-issue-spotting",
+                    vertical="Private Equity",
+                    response_data=response_data,
+                    user=request.user,
+                    run=dd_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="issue-spotting-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={
+                        "deal_name": dd_run.deal_name,
+                        "total_issues": summary['total_issues'],
+                        "critical_count": summary['critical_count']
+                    }
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate issue spotting report: {e}")
+
+        return Response(response_data)
 
 
 class FindingsReportView(APIView):
@@ -638,12 +677,16 @@ class RiskClauseSummaryView(APIView):
         operation_description="Get risk clause summary statistics",
         tags=["Private Equity - Analytics"],
         manual_parameters=[
-            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('dd_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: RiskClauseSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get risk clause summary statistics for a due diligence run"""
+        start_time = time.time()
         dd_run_id = request.query_params.get('dd_run_id')
         if not dd_run_id:
             return Response({"error": "dd_run_id parameter is required"},
@@ -677,7 +720,34 @@ class RiskClauseSummaryView(APIView):
             })
 
         serializer = RiskClauseSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'dd_run_id': dd_run_id, 'deal_name': dd_run.deal_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="PE Risk Clause Summary",
+                    service_id="pe-risk-summary",
+                    vertical="Private Equity",
+                    response_data=response_data,
+                    user=request.user,
+                    run=dd_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="risk-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"deal_name": dd_run.deal_name, "clause_types_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate risk summary report: {e}")
+
+        return Response(response_data)
 
 
 class DocumentTypeSummaryView(APIView):
@@ -1249,9 +1319,15 @@ class DealVelocityAnalyticsView(APIView):
 
     @swagger_auto_schema(
         operation_description="Get deal velocity analytics summary",
+        manual_parameters=[
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
+        ],
         responses={200: DealVelocitySummarySerializer}
     )
     def get(self, request):
+        start_time = time.time()
         client = request.user.client
 
         # Get all velocity metrics for the client
@@ -1289,7 +1365,36 @@ class DealVelocityAnalyticsView(APIView):
         }
 
         serializer = DealVelocitySummarySerializer(summary)
-        return Response(serializer.data)
+        response_data = serializer.data
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                from core.models import Run
+                run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                report_info = generate_and_register_service_report(
+                    service_name="PE Deal Velocity Analytics",
+                    service_id="pe-deal-velocity",
+                    vertical="Private Equity",
+                    response_data=response_data,
+                    user=request.user,
+                    run=run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="deal-velocity-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"total_deals": total_deals, "deals_delayed": delayed_phases}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate deal velocity report: {e}")
+
+        return Response(response_data)
 
 
 class ChecklistProgressView(APIView):
@@ -1779,9 +1884,15 @@ class PortfolioComplianceView(APIView):
 
     @swagger_auto_schema(
         operation_description="Get portfolio-wide compliance dashboard",
+        manual_parameters=[
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
+        ],
         responses={200: PortfolioComplianceSerializer}
     )
     def get(self, request):
+        start_time = time.time()
         client = request.user.client
 
         # Get all covenants for the client
@@ -1822,7 +1933,36 @@ class PortfolioComplianceView(APIView):
         }
 
         serializer = PortfolioComplianceSerializer(compliance_data)
-        return Response(serializer.data)
+        response_data = serializer.data
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                from core.models import Run
+                run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                report_info = generate_and_register_service_report(
+                    service_name="PE Portfolio Compliance Dashboard",
+                    service_id="pe-portfolio-compliance",
+                    vertical="Private Equity",
+                    response_data=response_data,
+                    user=request.user,
+                    run=run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="compliance-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"total_covenants": total_covenants, "breached_covenants": breached_covenants}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate compliance report: {e}")
+
+        return Response(response_data)
 
 
 class RiskHeatmapView(APIView):
@@ -1834,9 +1974,15 @@ class RiskHeatmapView(APIView):
 
     @swagger_auto_schema(
         operation_description="Get risk heatmap data for portfolio visualization",
+        manual_parameters=[
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
+        ],
         responses={200: RiskHeatmapSerializer}
     )
     def get(self, request):
+        start_time = time.time()
         client = request.user.client
 
         # Get all DD runs for the client
@@ -1851,9 +1997,9 @@ class RiskHeatmapView(APIView):
             # Calculate risk score
             high_risk_count = risk_clauses.filter(risk_level='high').count()
             critical_risk_count = risk_clauses.filter(risk_level='critical').count()
-            breached_covenants = covenants.filter(status='breached').count()
+            breached_covenants_count = covenants.filter(status='breached').count()
 
-            risk_score = (high_risk_count * 2) + (critical_risk_count * 5) + (breached_covenants * 10)
+            risk_score = (high_risk_count * 2) + (critical_risk_count * 5) + (breached_covenants_count * 10)
 
             heatmap_data.append({
                 'deal_id': dd_run.id,
@@ -1862,7 +2008,7 @@ class RiskHeatmapView(APIView):
                 'risk_score': risk_score,
                 'high_risk_clauses': high_risk_count,
                 'critical_risk_clauses': critical_risk_count,
-                'breached_covenants': breached_covenants,
+                'breached_covenants': breached_covenants_count,
                 'risk_level': 'critical' if risk_score > 20 else 'high' if risk_score > 10 else 'medium' if risk_score > 5 else 'low'
             })
 
@@ -1876,4 +2022,33 @@ class RiskHeatmapView(APIView):
         }
 
         serializer = RiskHeatmapSerializer(response_data)
-        return Response(serializer.data)
+        final_response = serializer.data
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                from core.models import Run
+                run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                report_info = generate_and_register_service_report(
+                    service_name="PE Risk Heatmap Analysis",
+                    service_id="pe-risk-heatmap",
+                    vertical="Private Equity",
+                    response_data=response_data,
+                    user=request.user,
+                    run=run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="risk-heatmap-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"total_deals": len(heatmap_data), "high_risk_deals": response_data['high_risk_deals']}
+                )
+                final_response['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate risk heatmap report: {e}")
+
+        return Response(final_response)

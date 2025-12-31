@@ -1,3 +1,6 @@
+import time
+import logging
+
 from django.shortcuts import get_object_or_404
 from django.db.models import Count, Q, Avg
 from rest_framework.views import APIView
@@ -7,7 +10,8 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-import logging
+
+from core.utils import generate_and_register_service_report
 
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
 from core.models import File
@@ -507,12 +511,16 @@ class EvidenceSummaryView(APIView):
         operation_description="Get evidence document summary statistics",
         tags=["Class Actions - Analytics"],
         manual_parameters=[
-            openapi.Parameter('mc_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('mc_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: EvidenceSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get evidence document summary statistics"""
+        start_time = time.time()
         mc_run_id = request.query_params.get('mc_run_id')
         if not mc_run_id:
             return Response({"error": "mc_run_id parameter is required"},
@@ -546,7 +554,34 @@ class EvidenceSummaryView(APIView):
             })
 
         serializer = EvidenceSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'mc_run_id': mc_run_id, 'case_name': mc_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Class Actions Evidence Summary",
+                    service_id="ca-evidence-summary",
+                    vertical="Class Actions",
+                    response_data=response_data,
+                    user=request.user,
+                    run=mc_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="evidence-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": mc_run.case_name, "evidence_types_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate evidence summary report: {e}")
+
+        return Response(response_data)
 
 
 class IntakeFormSummaryView(APIView):
@@ -560,12 +595,16 @@ class IntakeFormSummaryView(APIView):
         operation_description="Get intake form summary statistics",
         tags=["Class Actions - Analytics"],
         manual_parameters=[
-            openapi.Parameter('mc_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('mc_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: IntakeFormSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get intake form summary statistics"""
+        start_time = time.time()
         mc_run_id = request.query_params.get('mc_run_id')
         if not mc_run_id:
             return Response({"error": "mc_run_id parameter is required"},
@@ -597,7 +636,34 @@ class IntakeFormSummaryView(APIView):
             })
 
         serializer = IntakeFormSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'mc_run_id': mc_run_id, 'case_name': mc_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Class Actions Intake Form Summary",
+                    service_id="ca-intake-summary",
+                    vertical="Class Actions",
+                    response_data=response_data,
+                    user=request.user,
+                    run=mc_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="intake-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": mc_run.case_name, "status_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate intake summary report: {e}")
+
+        return Response(response_data)
 
 
 class ServiceExecutionListCreateView(APIView):

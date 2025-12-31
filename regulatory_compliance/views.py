@@ -1,3 +1,6 @@
+import time
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -7,7 +10,8 @@ from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
-import logging
+
+from core.utils import generate_and_register_service_report
 
 logger = logging.getLogger(__name__)
 
@@ -557,12 +561,16 @@ class ComplianceSummaryView(APIView):
         operation_description="Get compliance summary statistics",
         tags=["Regulatory Compliance - Analytics"],
         manual_parameters=[
-            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: ComplianceSummarySerializer}
     )
     def get(self, request):
         """Get compliance summary statistics"""
+        start_time = time.time()
         compliance_run_id = request.query_params.get('compliance_run_id')
         if not compliance_run_id:
             return Response({"error": "compliance_run_id parameter is required"},
@@ -618,7 +626,34 @@ class ComplianceSummaryView(APIView):
         }
 
         serializer = ComplianceSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'compliance_run_id': compliance_run_id, 'framework': compliance_run.framework}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Regulatory Compliance Summary",
+                    service_id="rc-compliance-summary",
+                    vertical="Regulatory Compliance",
+                    response_data=response_data,
+                    user=request.user,
+                    run=compliance_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="compliance-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"framework": compliance_run.framework, "compliance_rate": compliance_rate}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate compliance summary report: {e}")
+
+        return Response(response_data)
 
 
 class DSARSummaryView(APIView):
@@ -632,12 +667,16 @@ class DSARSummaryView(APIView):
         operation_description="Get DSAR summary statistics",
         tags=["Regulatory Compliance - Analytics"],
         manual_parameters=[
-            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: DSARSummarySerializer}
     )
     def get(self, request):
         """Get DSAR summary statistics"""
+        start_time = time.time()
         compliance_run_id = request.query_params.get('compliance_run_id')
         if not compliance_run_id:
             return Response({"error": "compliance_run_id parameter is required"},
@@ -703,7 +742,34 @@ class DSARSummaryView(APIView):
         }
 
         serializer = DSARSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'compliance_run_id': compliance_run_id, 'framework': compliance_run.framework}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="DSAR Request Summary",
+                    service_id="rc-dsar-summary",
+                    vertical="Regulatory Compliance",
+                    response_data=response_data,
+                    user=request.user,
+                    run=compliance_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="dsar-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"framework": compliance_run.framework, "total_requests": total_requests}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate DSAR summary report: {e}")
+
+        return Response(response_data)
 
 
 class RedactionSummaryView(APIView):
@@ -717,12 +783,16 @@ class RedactionSummaryView(APIView):
         operation_description="Get redaction task summary statistics",
         tags=["Regulatory Compliance - Analytics"],
         manual_parameters=[
-            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: RedactionSummarySerializer}
     )
     def get(self, request):
         """Get redaction task summary statistics"""
+        start_time = time.time()
         compliance_run_id = request.query_params.get('compliance_run_id')
         if not compliance_run_id:
             return Response({"error": "compliance_run_id parameter is required"},
@@ -769,7 +839,34 @@ class RedactionSummaryView(APIView):
         }
 
         serializer = RedactionSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'compliance_run_id': compliance_run_id, 'framework': compliance_run.framework}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Redaction Task Summary",
+                    service_id="rc-redaction-summary",
+                    vertical="Regulatory Compliance",
+                    response_data=response_data,
+                    user=request.user,
+                    run=compliance_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="redaction-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"framework": compliance_run.framework, "total_redactions": total_redactions}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate redaction summary report: {e}")
+
+        return Response(response_data)
 
 
 class AlertSummaryView(APIView):
@@ -783,12 +880,16 @@ class AlertSummaryView(APIView):
         operation_description="Get compliance alert summary statistics",
         tags=["Regulatory Compliance - Analytics"],
         manual_parameters=[
-            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('compliance_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: AlertSummarySerializer}
     )
     def get(self, request):
         """Get compliance alert summary statistics"""
+        start_time = time.time()
         compliance_run_id = request.query_params.get('compliance_run_id')
         if not compliance_run_id:
             return Response({"error": "compliance_run_id parameter is required"},
@@ -844,7 +945,34 @@ class AlertSummaryView(APIView):
         }
 
         serializer = AlertSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'compliance_run_id': compliance_run_id, 'framework': compliance_run.framework}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="Compliance Alert Summary",
+                    service_id="rc-alert-summary",
+                    vertical="Regulatory Compliance",
+                    response_data=response_data,
+                    user=request.user,
+                    run=compliance_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="alert-summary-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"framework": compliance_run.framework, "total_alerts": total_alerts}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate alert summary report: {e}")
+
+        return Response(response_data)
 
 
 class ComplianceReportView(APIView):

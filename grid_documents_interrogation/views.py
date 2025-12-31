@@ -1,4 +1,12 @@
 # grid_documents_interrogation/views.py
+import csv
+import logging
+import os
+import time
+from io import StringIO
+
+import pandas as pd
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -6,18 +14,14 @@ from rest_framework.response import Response
 
 from .models import Topic, Query, DatabaseConnection
 from .serializers import TopicSerializer, QuerySerializer, DatabaseConnectionSerializer
-from core.models import File
+from core.models import File, Run
+from core.utils import generate_and_register_service_report
 
-from django.shortcuts import get_object_or_404
 from .tasks import process_file_query, process_db_query
-
-import csv
-from io import StringIO
-import os
-import pandas as pd
-
 from .db_query_tools import fetch_column_names, generate_sql_query, execute_sql_query, test_connection
 from .file_readers import read_pdf_file
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -171,13 +175,22 @@ class QueryViewSet(viewsets.ModelViewSet):
           "file_id": <int>,                # when data_source="file"
           "connection_string": "...",      # optional; if omitted, uses Topic.db_connection
           "table": "users",                # for DB
-          "llm_config": { "provider": "openai", "model": "gpt-4o-mini", ... }
+          "llm_config": { "provider": "openai", "model": "gpt-4o-mini", ... },
+          "project_id": optional (for report registration),
+          "service_id": optional (for report registration),
+          "generate_report": optional (default: false)
         }
         """
+        start_time = time.time()
         topic_id = request.data.get("topic_id")
         query_text = request.data.get("query_text")
         data_source = (request.data.get("data_source") or "file").lower()
         file_id = request.data.get("file_id")
+
+        # New parameters for report generation
+        project_id = request.data.get("project_id")
+        service_id = request.data.get("service_id")
+        generate_report = request.data.get("generate_report", False)
 
         llm_config = request.data.get("llm_config") or {
             "provider": "openai",
@@ -245,6 +258,7 @@ class QueryViewSet(viewsets.ModelViewSet):
 
             # Synchronously wait for Celery result (kept same as your existing flow)
             result = task.get(timeout=60)
+            execution_time = time.time() - start_time
 
             query = Query.objects.create(
                 topic=topic,
@@ -254,7 +268,46 @@ class QueryViewSet(viewsets.ModelViewSet):
                 response_text=result
             )
 
-            return Response(QuerySerializer(query).data, status=201)
+            response_data = QuerySerializer(query).data
+            response_data["execution_time_seconds"] = round(execution_time, 2)
+
+            # Generate and register report if requested
+            if generate_report and project_id and service_id:
+                try:
+                    run = Run.objects.create(
+                        user=request.user,
+                        project_id=project_id,
+                        service_id=service_id,
+                        status="completed",
+                        result_json=response_data
+                    )
+
+                    report_info = generate_and_register_service_report(
+                        service_name="Document Interrogation",
+                        service_id="ai-document-interrogation",
+                        vertical="AI Services",
+                        response_data=response_data,
+                        user=request.user,
+                        run=run,
+                        project_id=project_id,
+                        service_id_folder=service_id,
+                        folder_name="document-interrogation-results",
+                        query=query_text,
+                        execution_time_seconds=execution_time,
+                        input_files=[{"filename": file.filename, "file_id": file.id}] if file else None,
+                        additional_metadata={
+                            "data_source": data_source,
+                            "topic_id": topic_id,
+                            "llm_model": llm_config.get("model", "unknown")
+                        }
+                    )
+                    response_data["report_file"] = report_info
+                    logger.info(f"✅ Generated interrogation report: {report_info.get('filename')}")
+                except Exception as report_error:
+                    logger.warning(f"Failed to generate report: {report_error}")
+                    response_data["report_error"] = str(report_error)
+
+            return Response(response_data, status=201)
 
         except Exception as e:
             return Response({"error": f"Query processing failed: {str(e)}"}, status=500)

@@ -21,6 +21,7 @@ Adjust MILVUS_* or PARTITION_PREFIX in `config.py` if needed.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Iterable, List, Tuple
 
 from celery import shared_task
@@ -30,7 +31,7 @@ from django.db.models import Q
 from django.contrib.auth import get_user_model
 from datetime import datetime
 
-from core.models import File
+from core.models import File, Run
 from document_search.models import VectorChunk, SearchQueryLog
 from document_search.utils import (
     compute_chunks,
@@ -41,6 +42,9 @@ from document_search.utils import (
 
 # Use the same access helper the views rely on
 from document_operations.utils import get_user_accessible_file_ids
+
+# Import report generation utility
+from core.utils import generate_and_register_service_report
 
 # ───────────────────────────── Config & constants ───────────────────────────
 try:
@@ -623,20 +627,46 @@ def semantic_search_task(
 '''
 
 @shared_task(name="document_search.semantic_search_task")
-def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | None, filters: dict | None) -> list[dict]:
+def semantic_search_task(
+    user_id: int,
+    query: str,
+    top_k: int,
+    file_id: int | None,
+    filters: dict | None,
+    project_id: str | None = None,
+    service_id: str | None = None,
+    generate_report: bool = False
+) -> dict:
+    """
+    Perform semantic search asynchronously.
+
+    Args:
+        user_id: The user performing the search
+        query: The search query
+        top_k: Number of results to return
+        file_id: Optional file ID to restrict search
+        filters: Optional filters (created_from, created_to, author, project_id, service_id)
+        project_id: Project ID for report registration (optional)
+        service_id: Service ID for report registration (optional)
+        generate_report: Whether to generate and register an HTML report
+
+    Returns:
+        Dict with results and optional report_file info
+    """
+    start_time = time.time()
     try:
         filters = filters or {}
         User = get_user_model()
         user = User.objects.filter(pk=user_id).first()
         if not user:
-            return []
+            return {"results": [], "count": 0}
 
         # 1) Access scope
         accessible_ids = set(get_user_accessible_file_ids(user))
         if file_id:
             accessible_ids &= {int(file_id)}
         if not accessible_ids:
-            return []
+            return {"results": [], "count": 0}
 
         # 2) Owner partitions to load
         owner_rows = (
@@ -671,7 +701,7 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
         vector_file_ids = {int(hit.entity.get("file_id")) for hit in results[0]}
         allowed_ids = vector_file_ids & accessible_ids
         if not allowed_ids:
-            return []
+            return {"results": [], "count": 0}
 
         # 5) Apply optional metadata filters in Django
         q = Q(id__in=allowed_ids)
@@ -709,17 +739,64 @@ def semantic_search_task(user_id: int, query: str, top_k: int, file_id: int | No
                 "file_size": f.file_size,
                 "file_type": f.file_type,
                 "document_type": getattr(f, "document_type", None),
-                "created_at": f.created_at,
+                "created_at": str(f.created_at) if f.created_at else None,
                 "author": getattr(md, "author", None) if md else None,
                 "keywords": getattr(md, "keywords", None) if md else None,
                 "chunk_text": chunk_text,
                 "score": score,
             })
-        return out
+
+        execution_time = time.time() - start_time
+
+        response = {
+            "results": out,
+            "count": len(out),
+            "query": query,
+            "execution_time_seconds": round(execution_time, 2)
+        }
+
+        # Generate and register report if requested
+        if generate_report and project_id and service_id:
+            try:
+                # Create a Run instance for the report
+                from django.contrib.contenttypes.models import ContentType
+                run = Run.objects.create(
+                    user=user,
+                    project_id=project_id,
+                    service_id=service_id,
+                    status="completed",
+                    result_json=response
+                )
+
+                report_info = generate_and_register_service_report(
+                    service_name="Semantic Search",
+                    service_id="ai-semantic-search",
+                    vertical="AI Services",
+                    response_data=response,
+                    user=user,
+                    run=run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="semantic-search-results",
+                    query=query,
+                    execution_time_seconds=execution_time,
+                    additional_metadata={
+                        "top_k": top_k,
+                        "file_id_filter": file_id,
+                        "filters_applied": bool(filters)
+                    }
+                )
+                response["report_file"] = report_info
+                LOGGER.info(f"✅ Generated semantic search report: {report_info.get('filename')}")
+            except Exception as report_error:
+                LOGGER.warning(f"Failed to generate report: {report_error}")
+                response["report_error"] = str(report_error)
+
+        return response
 
     except Exception as e:
         LOGGER.error("Error in semantic search task: %s", str(e))
-        return {"error": str(e)}
+        return {"error": str(e), "results": [], "count": 0}
 
 
 # ───────────── Optional alias for semantic clarity ─────────────

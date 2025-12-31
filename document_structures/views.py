@@ -54,6 +54,9 @@ class SubmitDocumentPartitionAPIView(APIView):
             client_secret_param,
             file_id_param,
             partition_strategy_param,
+            openapi.Parameter("project_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="Project ID for report registration"),
+            openapi.Parameter("service_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False, description="Service ID for report registration"),
+            openapi.Parameter("generate_report", openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False, description="Generate HTML report on completion"),
         ],
         operation_description="Starts document partitioning using the Unstructured library for PDF, DOCX or text files."
     )
@@ -62,6 +65,11 @@ class SubmitDocumentPartitionAPIView(APIView):
         client_secret = request.headers.get("X-Client-Secret")
         file_id = request.query_params.get("file_id")
         partition_strategy = request.query_params.get("partition_strategy", "partition_auto")
+
+        # New parameters for report generation
+        project_id = request.query_params.get("project_id")
+        service_id = request.query_params.get("service_id")
+        generate_report = request.query_params.get("generate_report", "false").lower() == "true"
 
         if not all([client_id, client_secret, file_id]):
             return Response({"error": "Missing required parameters"}, status=status.HTTP_400_BAD_REQUEST)
@@ -74,24 +82,6 @@ class SubmitDocumentPartitionAPIView(APIView):
 
         if str(file_instance.user.id) != str(user.id):
             return Response({"error": "You are not authorized to process this file."}, status=status.HTTP_403_FORBIDDEN)
-
-        # Check if a completed structure run already exists for this file + strategy
-        '''
-        existing = models.DocumentStructureRun.objects.filter(
-            file=file_instance,
-            user=user,
-            partition_strategy=partition_strategy,
-            status="Completed"
-        ).first()
-
-        if existing:
-            return Response({
-                "message": "This file has already been processed.",
-                "document_structure_run_id": str(existing.id),
-                "status": existing.status
-            }, status=status.HTTP_200_OK)
-        '''
-
 
         force = request.query_params.get("force", "false").lower() == "true"
 
@@ -114,10 +104,6 @@ class SubmitDocumentPartitionAPIView(APIView):
             logger.warning(f"⚠️ Force rerun requested. Deleting previous run {existing.id}")
             existing.delete()
 
-
-
-
-
         # Create new structure run
         ds_run = models.DocumentStructureRun.objects.create(
             id=str(uuid.uuid4()),
@@ -128,7 +114,14 @@ class SubmitDocumentPartitionAPIView(APIView):
             status="Pending",
         )
 
-        tasks.run_document_partition_task.delay(str(ds_run.id))
+        # Pass report generation parameters to the task
+        tasks.run_document_partition_task.delay(
+            str(ds_run.id),
+            store_embeddings=True,
+            project_id=project_id,
+            service_id=service_id,
+            generate_report=generate_report
+        )
 
         return Response({
             "document_structure_run_id": str(ds_run.id),

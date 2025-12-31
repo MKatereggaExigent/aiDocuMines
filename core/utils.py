@@ -583,3 +583,516 @@ def extract_document_text(path, mime_type=None) -> str:
     except Exception as e:
         return f"Error extracting text: {e}"
 
+
+# =============================================================================
+# SERVICE REPORT GENERATION UTILITIES
+# =============================================================================
+
+import json
+import uuid
+from typing import Any, Dict, List, Optional, Union
+
+
+def generate_service_report_html(
+    service_name: str,
+    service_id: str,
+    vertical: str,
+    response_data: Any,
+    input_files: Optional[List[Dict]] = None,
+    query: Optional[str] = None,
+    execution_time_seconds: Optional[float] = None,
+    additional_metadata: Optional[Dict] = None
+) -> str:
+    """
+    Generate a professional HTML report for any service response.
+
+    Args:
+        service_name: Human-readable service name (e.g., "Deal Document Search")
+        service_id: Service ID (e.g., "pe-semantic-search")
+        vertical: Vertical name (e.g., "Private Equity", "Class Actions")
+        response_data: The service response data (dict, list, or any serializable)
+        input_files: Optional list of input files with {filename, file_id, path}
+        query: Optional query string if this was a search/interrogation service
+        execution_time_seconds: Optional execution time
+        additional_metadata: Optional extra metadata to include
+
+    Returns:
+        HTML string of the report
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Format response data for display
+    if isinstance(response_data, (dict, list)):
+        formatted_response = json.dumps(response_data, indent=2, default=str)
+    else:
+        formatted_response = str(response_data)
+
+    # Build input files section
+    input_files_html = ""
+    if input_files:
+        input_files_html = """
+        <div class="section">
+            <h2>📁 Input Files</h2>
+            <ul class="files-list">
+        """
+        for f in input_files:
+            filename = f.get('filename') or f.get('name') or 'Unknown'
+            file_id = f.get('file_id') or f.get('id') or ''
+            input_files_html += f'<li><strong>{filename}</strong> (ID: {file_id})</li>'
+        input_files_html += "</ul></div>"
+
+    # Build query section
+    query_html = ""
+    if query:
+        query_html = f"""
+        <div class="section">
+            <h2>🔍 Query</h2>
+            <div class="query-box">{query}</div>
+        </div>
+        """
+
+    # Build metadata section
+    metadata_html = ""
+    if additional_metadata:
+        metadata_html = """
+        <div class="section">
+            <h2>📊 Additional Metadata</h2>
+            <div class="metadata">
+        """
+        for key, value in additional_metadata.items():
+            metadata_html += f"""
+            <div class="metadata-item">
+                <div class="metadata-label">{key.replace('_', ' ').title()}</div>
+                <div class="metadata-value">{value}</div>
+            </div>
+            """
+        metadata_html += "</div></div>"
+
+    # Calculate result summary
+    result_count = 0
+    if isinstance(response_data, list):
+        result_count = len(response_data)
+    elif isinstance(response_data, dict):
+        if 'results' in response_data:
+            result_count = len(response_data.get('results', []))
+        elif 'data' in response_data:
+            data = response_data.get('data')
+            result_count = len(data) if isinstance(data, list) else 1
+        else:
+            result_count = len(response_data)
+
+    html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{service_name} - Service Report</title>
+    <style>
+        :root {{
+            --primary-color: #667eea;
+            --secondary-color: #764ba2;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-color: #2d3748;
+            --text-muted: #718096;
+            --border-color: #e2e8f0;
+            --success-color: #48bb78;
+            --warning-color: #ed8936;
+            --danger-color: #f56565;
+        }}
+
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Roboto', 'Helvetica Neue', sans-serif;
+            background: var(--bg-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            padding: 20px;
+        }}
+
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+        }}
+
+        .header {{
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 40px;
+            border-radius: 16px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 40px rgba(102, 126, 234, 0.3);
+        }}
+
+        .header h1 {{
+            font-size: 2rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }}
+
+        .header .subtitle {{
+            opacity: 0.9;
+            font-size: 1rem;
+        }}
+
+        .header .meta {{
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }}
+
+        .header .meta-item {{
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+        }}
+
+        .section {{
+            background: var(--card-bg);
+            padding: 25px;
+            margin-bottom: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            border: 1px solid var(--border-color);
+        }}
+
+        .section h2 {{
+            color: var(--text-color);
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--border-color);
+        }}
+
+        .metadata {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }}
+
+        .metadata-item {{
+            padding: 15px;
+            background: var(--bg-color);
+            border-radius: 8px;
+            border-left: 4px solid var(--primary-color);
+        }}
+
+        .metadata-label {{
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }}
+
+        .metadata-value {{
+            color: var(--text-color);
+            font-size: 1rem;
+        }}
+
+        .files-list {{
+            list-style: none;
+            padding: 0;
+        }}
+
+        .files-list li {{
+            padding: 12px 16px;
+            background: var(--bg-color);
+            margin: 8px 0;
+            border-radius: 8px;
+            border-left: 4px solid var(--success-color);
+        }}
+
+        .query-box {{
+            background: var(--bg-color);
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-style: italic;
+            color: var(--text-muted);
+        }}
+
+        .results-data {{
+            background: #1a202c;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            max-height: 600px;
+            overflow-y: auto;
+        }}
+
+        .results-data pre {{
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }}
+
+        .summary-stats {{
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }}
+
+        .stat-card {{
+            flex: 1;
+            min-width: 150px;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border-radius: 12px;
+            text-align: center;
+        }}
+
+        .stat-card .stat-value {{
+            font-size: 2rem;
+            font-weight: 700;
+        }}
+
+        .stat-card .stat-label {{
+            font-size: 0.85rem;
+            opacity: 0.9;
+        }}
+
+        .footer {{
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }}
+
+        @media print {{
+            body {{
+                background: white;
+                padding: 0;
+            }}
+            .header {{
+                box-shadow: none;
+            }}
+            .section {{
+                box-shadow: none;
+                break-inside: avoid;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📋 {service_name}</h1>
+            <div class="subtitle">Service Report - {vertical}</div>
+            <div class="meta">
+                <span class="meta-item">📅 {timestamp}</span>
+                <span class="meta-item">🔧 {service_id}</span>
+                {f'<span class="meta-item">⏱️ {execution_time_seconds:.2f}s</span>' if execution_time_seconds else ''}
+                <span class="meta-item">📊 {result_count} results</span>
+            </div>
+        </div>
+
+        <div class="summary-stats">
+            <div class="stat-card">
+                <div class="stat-value">{result_count}</div>
+                <div class="stat-label">Total Results</div>
+            </div>
+            {f'''<div class="stat-card">
+                <div class="stat-value">{len(input_files) if input_files else 0}</div>
+                <div class="stat-label">Input Files</div>
+            </div>''' if input_files else ''}
+            {f'''<div class="stat-card">
+                <div class="stat-value">{execution_time_seconds:.1f}s</div>
+                <div class="stat-label">Execution Time</div>
+            </div>''' if execution_time_seconds else ''}
+        </div>
+
+        {query_html}
+
+        {input_files_html}
+
+        {metadata_html}
+
+        <div class="section">
+            <h2>📄 Results Data</h2>
+            <div class="results-data">
+                <pre>{formatted_response}</pre>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Generated by aiDocuMines &bull; {vertical} &bull; {timestamp}</p>
+        </div>
+    </div>
+</body>
+</html>
+    """
+
+    return html
+
+
+def generate_and_register_service_report(
+    service_name: str,
+    service_id: str,
+    vertical: str,
+    response_data: Any,
+    user,
+    run,
+    project_id: str,
+    service_id_folder: str,
+    folder_name: Optional[str] = None,
+    input_files: Optional[List[Dict]] = None,
+    query: Optional[str] = None,
+    execution_time_seconds: Optional[float] = None,
+    additional_metadata: Optional[Dict] = None,
+    file_format: str = "html"
+) -> Dict:
+    """
+    Generate a service report and register it in the file tree.
+
+    Args:
+        service_name: Human-readable service name
+        service_id: Service ID
+        vertical: Vertical name
+        response_data: The service response data
+        user: The user who executed the service
+        run: The run instance (for GenericForeignKey)
+        project_id: Project ID for folder organization
+        service_id_folder: Service ID for folder organization
+        folder_name: Custom folder name (default: derived from service_name)
+        input_files: Optional list of input files
+        query: Optional query string
+        execution_time_seconds: Optional execution time
+        additional_metadata: Optional extra metadata
+        file_format: "html" or "json" (default: "html")
+
+    Returns:
+        Dict with registered file info: {file_id, filename, filepath, folder_name}
+    """
+    from django.conf import settings
+
+    # Generate folder name from service name if not provided
+    if not folder_name:
+        folder_name = service_name.lower().replace(' ', '-').replace('_', '-')
+
+    # Generate unique filename
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+
+    if file_format == "json":
+        filename = f"{folder_name}_report_{timestamp_str}_{unique_id}.json"
+        content = json.dumps(response_data, indent=2, default=str)
+        content_type = "application/json"
+    else:
+        filename = f"{folder_name}_report_{timestamp_str}_{unique_id}.html"
+        content = generate_service_report_html(
+            service_name=service_name,
+            service_id=service_id,
+            vertical=vertical,
+            response_data=response_data,
+            input_files=input_files,
+            query=query,
+            execution_time_seconds=execution_time_seconds,
+            additional_metadata=additional_metadata
+        )
+        content_type = "text/html"
+
+    # Determine file path
+    base_path = os.path.join(
+        settings.MEDIA_ROOT,
+        "uploads",
+        str(user.id),
+        user.client_id if hasattr(user, 'client_id') and user.client_id else "default",
+        project_id,
+        service_id_folder,
+        folder_name
+    )
+    os.makedirs(base_path, exist_ok=True)
+    file_path = os.path.join(base_path, filename)
+
+    # Write the file
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # Register the file using existing utility
+    registered_file = register_generated_file(
+        file_path=file_path,
+        user=user,
+        run=run,
+        project_id=project_id,
+        service_id=service_id_folder,
+        folder_name=folder_name
+    )
+
+    logger.info(f"✅ Generated and registered service report: {filename} in folder '{folder_name}'")
+
+    return {
+        "file_id": registered_file.id,
+        "filename": registered_file.filename,
+        "filepath": registered_file.filepath,
+        "folder_name": folder_name,
+        "download_url": f"/api/v1/documents/download/{registered_file.id}/",
+        "content_type": content_type
+    }
+
+
+def generate_search_results_report(
+    query: str,
+    results: List[Dict],
+    user,
+    run,
+    project_id: str,
+    service_id: str,
+    search_type: str = "semantic",
+    vertical: str = "AI Services",
+    execution_time_seconds: Optional[float] = None
+) -> Dict:
+    """
+    Convenience function specifically for search service results.
+
+    Args:
+        query: The search query
+        results: List of search results
+        user: The user who executed the search
+        run: The run instance
+        project_id: Project ID
+        service_id: Service ID
+        search_type: "semantic" or "elasticsearch"
+        vertical: Vertical name
+        execution_time_seconds: Optional execution time
+
+    Returns:
+        Dict with registered file info
+    """
+    service_name = f"{search_type.title()} Search"
+    folder_name = f"{search_type}-search-results"
+
+    return generate_and_register_service_report(
+        service_name=service_name,
+        service_id=f"ai-{search_type}-search",
+        vertical=vertical,
+        response_data={"query": query, "results": results, "total": len(results)},
+        user=user,
+        run=run,
+        project_id=project_id,
+        service_id_folder=service_id,
+        folder_name=folder_name,
+        query=query,
+        execution_time_seconds=execution_time_seconds,
+        additional_metadata={
+            "search_type": search_type,
+            "result_count": len(results)
+        }
+    )
+

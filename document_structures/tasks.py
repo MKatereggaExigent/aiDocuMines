@@ -1,8 +1,11 @@
+import time
+import traceback
+import logging
+
 from celery import shared_task
 from document_structures import utils, models
 from core.models import File, Run, User
-import traceback
-import logging
+from core.utils import generate_and_register_service_report
 
 logger = logging.getLogger("document_structures.tasks")
 
@@ -11,11 +14,15 @@ logger = logging.getLogger("document_structures.tasks")
 def run_document_partition_task(
     self,
     document_structure_run_id: str,
-    store_embeddings: bool = True
+    store_embeddings: bool = True,
+    project_id: str = None,
+    service_id: str = None,
+    generate_report: bool = False
 ):
     """
     Background task that performs partitioning and extraction on a single document.
     """
+    start_time = time.time()
     try:
         ds_run = models.DocumentStructureRun.objects.get(id=document_structure_run_id)
         ds_run.status = "Processing"
@@ -37,6 +44,46 @@ def run_document_partition_task(
         ds_run.status = "Completed"
         ds_run.error_message = None
         ds_run.save()
+
+        execution_time = time.time() - start_time
+
+        # Generate report if requested
+        if generate_report and project_id and service_id:
+            try:
+                # Get element count for the report
+                element_count = models.DocumentElement.objects.filter(document_structure_run=ds_run).count()
+
+                response_data = {
+                    "document_structure_run_id": str(ds_run.id),
+                    "file_id": file.id,
+                    "filename": file.filename,
+                    "partition_strategy": ds_run.partition_strategy,
+                    "status": "Completed",
+                    "element_count": element_count,
+                    "execution_time_seconds": round(execution_time, 2)
+                }
+
+                report_info = generate_and_register_service_report(
+                    service_name="Document Structure Analysis",
+                    service_id="ai-document-structure",
+                    vertical="AI Services",
+                    response_data=response_data,
+                    user=user,
+                    run=run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="document-structure-results",
+                    execution_time_seconds=execution_time,
+                    input_files=[{"filename": file.filename, "file_id": file.id}],
+                    additional_metadata={
+                        "partition_strategy": ds_run.partition_strategy,
+                        "element_count": element_count,
+                        "store_embeddings": store_embeddings
+                    }
+                )
+                logger.info(f"✅ Generated document structure report: {report_info.get('filename')}")
+            except Exception as report_error:
+                logger.warning(f"Failed to generate report: {report_error}")
 
     except Exception as e:
         logger.error(f"🔥 Error running partition task: {e}", exc_info=True)

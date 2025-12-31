@@ -1,3 +1,6 @@
+import time
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -6,7 +9,8 @@ from django.db.models import Avg, Count, Q
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
-import logging
+
+from core.utils import generate_and_register_service_report
 
 logger = logging.getLogger(__name__)
 
@@ -518,12 +522,16 @@ class PatentAnalysisSummaryView(APIView):
         operation_description="Get patent analysis summary statistics",
         tags=["IP Litigation - Analytics"],
         manual_parameters=[
-            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: PatentAnalysisSummarySerializer}
     )
     def get(self, request):
         """Get patent analysis summary statistics"""
+        start_time = time.time()
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
             return Response({"error": "analysis_run_id parameter is required"},
@@ -571,7 +579,34 @@ class PatentAnalysisSummaryView(APIView):
         }
 
         serializer = PatentAnalysisSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'analysis_run_id': analysis_run_id, 'case_name': analysis_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="IP Litigation Patent Analysis",
+                    service_id="ip-patent-analysis",
+                    vertical="IP Litigation",
+                    response_data=response_data,
+                    user=request.user,
+                    run=analysis_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="patent-analysis-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": analysis_run.case_name, "total_patents": summary_data['total_patents']}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate patent analysis report: {e}")
+
+        return Response(response_data)
 
 
 class ClaimChartSummaryView(APIView):
@@ -585,12 +620,16 @@ class ClaimChartSummaryView(APIView):
         operation_description="Get claim chart summary statistics",
         tags=["IP Litigation - Analytics"],
         manual_parameters=[
-            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: ClaimChartSummarySerializer(many=True)}
     )
     def get(self, request):
         """Get claim chart summary statistics"""
+        start_time = time.time()
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
             return Response({"error": "analysis_run_id parameter is required"},
@@ -624,7 +663,34 @@ class ClaimChartSummaryView(APIView):
             })
 
         serializer = ClaimChartSummarySerializer(summary_data, many=True)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'analysis_run_id': analysis_run_id, 'case_name': analysis_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="IP Litigation Claim Chart Summary",
+                    service_id="ip-claim-chart",
+                    vertical="IP Litigation",
+                    response_data=response_data,
+                    user=request.user,
+                    run=analysis_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="claim-chart-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": analysis_run.case_name, "chart_types_count": len(summary_data)}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate claim chart report: {e}")
+
+        return Response(response_data)
 
 
 class InfringementSummaryView(APIView):
@@ -638,12 +704,16 @@ class InfringementSummaryView(APIView):
         operation_description="Get infringement analysis summary statistics",
         tags=["IP Litigation - Analytics"],
         manual_parameters=[
-            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: InfringementSummarySerializer}
     )
     def get(self, request):
         """Get infringement analysis summary statistics"""
+        start_time = time.time()
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
             return Response({"error": "analysis_run_id parameter is required"},
@@ -692,7 +762,34 @@ class InfringementSummaryView(APIView):
             }
 
         serializer = InfringementSummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'analysis_run_id': analysis_run_id, 'case_name': analysis_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="IP Litigation Infringement Analysis",
+                    service_id="ip-infringement",
+                    vertical="IP Litigation",
+                    response_data=response_data,
+                    user=request.user,
+                    run=analysis_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="infringement-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": analysis_run.case_name, "total_analyses": total_analyses}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate infringement report: {e}")
+
+        return Response(response_data)
 
 
 class ValiditySummaryView(APIView):
@@ -706,12 +803,16 @@ class ValiditySummaryView(APIView):
         operation_description="Get validity challenge summary statistics",
         tags=["IP Litigation - Analytics"],
         manual_parameters=[
-            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True)
+            openapi.Parameter('analysis_run_id', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, required=True),
+            openapi.Parameter('project_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('service_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('generate_report', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN, required=False),
         ],
         responses={200: ValiditySummarySerializer}
     )
     def get(self, request):
         """Get validity challenge summary statistics"""
+        start_time = time.time()
         analysis_run_id = request.query_params.get('analysis_run_id')
         if not analysis_run_id:
             return Response({"error": "analysis_run_id parameter is required"},
@@ -765,7 +866,34 @@ class ValiditySummaryView(APIView):
         }
 
         serializer = ValiditySummarySerializer(summary_data)
-        return Response(serializer.data)
+        response_data = {'summary': serializer.data, 'analysis_run_id': analysis_run_id, 'case_name': analysis_run.case_name}
+
+        # Generate report if requested
+        project_id = request.query_params.get('project_id')
+        service_id = request.query_params.get('service_id')
+        generate_report = request.query_params.get('generate_report', 'false').lower() == 'true'
+
+        if generate_report and project_id and service_id:
+            execution_time = time.time() - start_time
+            try:
+                report_info = generate_and_register_service_report(
+                    service_name="IP Litigation Validity Summary",
+                    service_id="ip-validity",
+                    vertical="IP Litigation",
+                    response_data=response_data,
+                    user=request.user,
+                    run=analysis_run.run,
+                    project_id=project_id,
+                    service_id_folder=service_id,
+                    folder_name="validity-results",
+                    execution_time_seconds=execution_time,
+                    additional_metadata={"case_name": analysis_run.case_name, "total_challenges": total_challenges}
+                )
+                response_data['report_file'] = report_info
+            except Exception as e:
+                logger.warning(f"Failed to generate validity report: {e}")
+
+        return Response(response_data)
 
 
 class ServiceExecutionListCreateView(APIView):
