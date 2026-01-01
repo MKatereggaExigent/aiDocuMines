@@ -1,6 +1,8 @@
 from django.core.management.base import BaseCommand
 from document_translation.models import TranslationLanguage
 
+# Complete Azure Translator API language list
+# Source: https://learn.microsoft.com/en-us/azure/ai-services/translator/language-support
 LANGUAGES = [
     {"name": "Afrikaans", "code": "af"},
     {"name": "Albanian", "code": "sq"},
@@ -12,18 +14,23 @@ LANGUAGES = [
     {"name": "Bangla", "code": "bn"},
     {"name": "Bashkir", "code": "ba"},
     {"name": "Basque", "code": "eu"},
+    {"name": "Bhojpuri", "code": "bho"},
+    {"name": "Bodo", "code": "brx"},
     {"name": "Bosnian (Latin)", "code": "bs"},
     {"name": "Bulgarian", "code": "bg"},
     {"name": "Cantonese (Traditional)", "code": "yue"},
     {"name": "Catalan", "code": "ca"},
+    {"name": "Chhattisgarhi", "code": "hne"},
     {"name": "Chinese (Literary)", "code": "lzh"},
     {"name": "Chinese Simplified", "code": "zh-Hans"},
     {"name": "Chinese Traditional", "code": "zh-Hant"},
+    {"name": "chiShona", "code": "sn"},
     {"name": "Croatian", "code": "hr"},
     {"name": "Czech", "code": "cs"},
     {"name": "Danish", "code": "da"},
     {"name": "Dari", "code": "prs"},
     {"name": "Divehi", "code": "dv"},
+    {"name": "Dogri", "code": "doi"},
     {"name": "Dutch", "code": "nl"},
     {"name": "English", "code": "en"},
     {"name": "Estonian", "code": "et"},
@@ -39,11 +46,13 @@ LANGUAGES = [
     {"name": "Greek", "code": "el"},
     {"name": "Gujarati", "code": "gu"},
     {"name": "Haitian Creole", "code": "ht"},
+    {"name": "Hausa", "code": "ha"},
     {"name": "Hebrew", "code": "he"},
     {"name": "Hindi", "code": "hi"},
     {"name": "Hmong Daw (Latin)", "code": "mww"},
     {"name": "Hungarian", "code": "hu"},
     {"name": "Icelandic", "code": "is"},
+    {"name": "Igbo", "code": "ig"},
     {"name": "Indonesian", "code": "id"},
     {"name": "Inuinnaqtun", "code": "ikt"},
     {"name": "Inuktitut", "code": "iu"},
@@ -52,29 +61,38 @@ LANGUAGES = [
     {"name": "Italian", "code": "it"},
     {"name": "Japanese", "code": "ja"},
     {"name": "Kannada", "code": "kn"},
+    {"name": "Kashmiri", "code": "ks"},
     {"name": "Kazakh", "code": "kk"},
     {"name": "Khmer", "code": "km"},
+    {"name": "Kinyarwanda", "code": "rw"},
     {"name": "Klingon", "code": "tlh-Latn"},
     {"name": "Klingon (plqaD)", "code": "tlh-Piqd"},
+    {"name": "Konkani", "code": "gom"},
     {"name": "Korean", "code": "ko"},
     {"name": "Kurdish (Central)", "code": "ku"},
     {"name": "Kurdish (Northern)", "code": "kmr"},
     {"name": "Kyrgyz (Cyrillic)", "code": "ky"},
     {"name": "Lao", "code": "lo"},
     {"name": "Latvian", "code": "lv"},
+    {"name": "Lingala", "code": "ln"},
     {"name": "Lithuanian", "code": "lt"},
+    {"name": "Lower Sorbian", "code": "dsb"},
+    {"name": "Luganda", "code": "lug"},
     {"name": "Macedonian", "code": "mk"},
+    {"name": "Maithili", "code": "mai"},
     {"name": "Malagasy", "code": "mg"},
     {"name": "Malay (Latin)", "code": "ms"},
     {"name": "Malayalam", "code": "ml"},
     {"name": "Maltese", "code": "mt"},
+    {"name": "Manipuri", "code": "mni"},
     {"name": "Maori", "code": "mi"},
     {"name": "Marathi", "code": "mr"},
     {"name": "Mongolian (Cyrillic)", "code": "mn-Cyrl"},
     {"name": "Mongolian (Traditional)", "code": "mn-Mong"},
     {"name": "Myanmar", "code": "my"},
     {"name": "Nepali", "code": "ne"},
-    {"name": "Norwegian", "code": "nb"},
+    {"name": "Norwegian Bokmål", "code": "nb"},
+    {"name": "Nyanja", "code": "nya"},
     {"name": "Odia", "code": "or"},
     {"name": "Pashto", "code": "ps"},
     {"name": "Persian", "code": "fa"},
@@ -84,10 +102,16 @@ LANGUAGES = [
     {"name": "Punjabi", "code": "pa"},
     {"name": "Queretaro Otomi", "code": "otq"},
     {"name": "Romanian", "code": "ro"},
+    {"name": "Rundi", "code": "run"},
     {"name": "Russian", "code": "ru"},
     {"name": "Samoan (Latin)", "code": "sm"},
     {"name": "Serbian (Cyrillic)", "code": "sr-Cyrl"},
     {"name": "Serbian (Latin)", "code": "sr-Latn"},
+    {"name": "Sesotho", "code": "st"},
+    {"name": "Sesotho sa Leboa", "code": "nso"},
+    {"name": "Setswana", "code": "tn"},
+    {"name": "Sindhi", "code": "sd"},
+    {"name": "Sinhala", "code": "si"},
     {"name": "Slovak", "code": "sk"},
     {"name": "Slovenian", "code": "sl"},
     {"name": "Somali (Arabic)", "code": "so"},
@@ -111,14 +135,28 @@ LANGUAGES = [
     {"name": "Uzbek (Latin)", "code": "uz"},
     {"name": "Vietnamese", "code": "vi"},
     {"name": "Welsh", "code": "cy"},
+    {"name": "Xhosa", "code": "xh"},
+    {"name": "Yoruba", "code": "yo"},
     {"name": "Yucatec Maya", "code": "yua"},
     {"name": "Zulu", "code": "zu"},
 ]
 
+
 class Command(BaseCommand):
-    help = "Populate the Language table"
+    help = "Populate the TranslationLanguage table with Azure Translator supported languages"
 
     def handle(self, *args, **kwargs):
+        created_count = 0
+        updated_count = 0
         for lang in LANGUAGES:
-            TranslationLanguage.objects.update_or_create(name=lang["name"], code=lang["code"])
-        self.stdout.write(self.style.SUCCESS("✅ Languages table populated!"))
+            obj, created = TranslationLanguage.objects.update_or_create(
+                code=lang["code"],
+                defaults={"name": lang["name"]}
+            )
+            if created:
+                created_count += 1
+            else:
+                updated_count += 1
+        self.stdout.write(self.style.SUCCESS(
+            f"✅ Languages table populated! Created: {created_count}, Updated: {updated_count}, Total: {len(LANGUAGES)}"
+        ))
