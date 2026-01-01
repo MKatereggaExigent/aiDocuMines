@@ -513,7 +513,9 @@ def register_file_folder_link(file_obj):
     """
     from document_operations.utils import get_or_create_folder_tree, link_file_to_folder
 
-    if hasattr(file_obj, "folder_link"):
+    # Check if file already has a folder link using the correct related_name
+    # The FileFolderLink model uses related_name="folder_links" (plural)
+    if file_obj.folder_links.exists():
         return  # already linked
 
     project_id, service_id = file_obj.project_id, file_obj.service_id

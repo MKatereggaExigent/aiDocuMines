@@ -607,16 +607,10 @@ def register_generated_file(file_path, user, run, project_id, service_id, folder
         service_id=service_id,
     )
 
-    # Create folder link
+    # Create folder link based on file path structure
+    # This creates the proper nested folder hierarchy (e.g., 20250101/translations/Spanish)
+    # and links the file to the leaf folder
     register_file_folder_link(file_instance)
-    folder, _ = Folder.objects.get_or_create(
-        name=folder_name,
-        user=user,
-        project_id=project_id,
-        service_id=service_id,
-        defaults={"created_at": timezone.now()},
-    )
-    FileFolderLink.objects.get_or_create(file=file_instance, folder=folder)
 
     return file_instance
 

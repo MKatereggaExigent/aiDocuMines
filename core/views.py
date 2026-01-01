@@ -657,6 +657,8 @@ class BulkFolderUploadView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                 )
+                # Create folder link based on file path structure
+                # This creates the proper nested folder hierarchy and links the file
                 register_file_folder_link(file_instance)
 
                 uploaded_files_data.append({
@@ -666,19 +668,6 @@ class BulkFolderUploadView(APIView):
                     "file_size": file_details["file_size"],
                     "mime_type": file_details["file_type"],
                 })
-
-                # 🔹 Create/get folder for project-service-user
-                folder, _ = Folder.objects.get_or_create(
-                    name=project_id,
-                    user=user,
-                    project_id=project_id,
-                    service_id=service_id,
-                    defaults={"created_at": timezone.now()}
-                    )
-
-                # 🔹 Link file to folder if not already linked
-                if not FileFolderLink.objects.filter(file=file_instance).exists():
-                    FileFolderLink.objects.create(file=file_instance, folder=folder)
 
 
             except IntegrityError as e:

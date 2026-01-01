@@ -21,14 +21,24 @@ class FileFolderLinkSerializer(serializers.ModelSerializer):
     created_at = serializers.DateTimeField(source='file.created_at', read_only=True)
     updated_at = serializers.DateTimeField(source='file.updated_at', read_only=True)
     shared_with = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
 
     class Meta:
         model = FileFolderLink
         fields = [
             'id', 'file_id', 'file_name', 'file_size', 'file_type',
             'folder', 'is_trashed', 'is_shared', 'password_protected',
-            'password_hint', 'shared_with', 'created_at', 'updated_at'
+            'password_hint', 'shared_with', 'created_at', 'updated_at',
+            'download_url'
         ]
+
+    def get_download_url(self, obj):
+        """Generate download URL for the file"""
+        if obj.file and obj.file.filepath:
+            # Return the filepath as the download URL
+            # The frontend will use this to construct the full download URL
+            return obj.file.filepath
+        return None
 
     def get_shared_with(self, obj):
         access_entries = obj.access_entries.select_related('user').all()
