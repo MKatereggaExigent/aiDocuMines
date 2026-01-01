@@ -487,6 +487,83 @@ def extract_metadata(file_instance):
     return base
 
 
+def extract_datetime_folder_from_path(filepath: str, project_id: str = None, service_id: str = None) -> str:
+    """
+    Extract the datetime folder (YYYYMMDD format) from a file path.
+
+    The expected path structure is:
+    .../uploads/{client_id}/{user_id}/{project_id}/{service_id}/{YYYYMMDD}/...
+
+    Args:
+        filepath: The full file path
+        project_id: Optional project_id to help locate the datetime folder
+        service_id: Optional service_id to help locate the datetime folder
+
+    Returns:
+        The datetime folder string (YYYYMMDD) or today's date if not found
+    """
+    if not filepath:
+        return datetime.now().strftime("%Y%m%d")
+
+    try:
+        parts = filepath.replace('\\', '/').split('/')
+
+        # Strategy 1: Find service_id in path and look for datetime folder after it
+        if service_id:
+            for i, part in enumerate(parts):
+                if part == service_id and i + 1 < len(parts):
+                    potential_date = parts[i + 1]
+                    if len(potential_date) == 8 and potential_date.isdigit():
+                        return potential_date
+
+        # Strategy 2: Look for any 8-digit folder that looks like a date
+        for part in parts:
+            if len(part) == 8 and part.isdigit():
+                # Validate it's a reasonable date (year between 2020 and 2030)
+                year = int(part[:4])
+                if 2020 <= year <= 2030:
+                    return part
+
+    except Exception as e:
+        logger.debug(f"Could not extract datetime folder from path '{filepath}': {e}")
+
+    return datetime.now().strftime("%Y%m%d")
+
+
+def get_datetime_folder_from_dd_run(dd_run) -> str:
+    """
+    Extract the datetime folder from a DueDiligenceRun by looking at its associated files.
+
+    Args:
+        dd_run: A DueDiligenceRun instance
+
+    Returns:
+        The datetime folder string (YYYYMMDD) or today's date if not found
+    """
+    try:
+        # Try to get files from document classifications
+        if hasattr(dd_run, 'document_classifications'):
+            classifications = dd_run.document_classifications.select_related('file').first()
+            if classifications and classifications.file:
+                return extract_datetime_folder_from_path(
+                    classifications.file.filepath,
+                    service_id=classifications.file.service_id
+                )
+
+        # Try to get files from the run
+        if hasattr(dd_run, 'run') and hasattr(dd_run.run, 'files'):
+            first_file = dd_run.run.files.first()
+            if first_file:
+                return extract_datetime_folder_from_path(
+                    first_file.filepath,
+                    service_id=first_file.service_id
+                )
+    except Exception as e:
+        logger.debug(f"Could not extract datetime folder from DD run: {e}")
+
+    return datetime.now().strftime("%Y%m%d")
+
+
 def register_generated_file(file_path, user, run, project_id, service_id, folder_name="generated"):
     """
     Registers any generated file (e.g., translated, anonymized) in the File table
@@ -956,10 +1033,14 @@ def generate_and_register_service_report(
     query: Optional[str] = None,
     execution_time_seconds: Optional[float] = None,
     additional_metadata: Optional[Dict] = None,
-    file_format: str = "html"
+    file_format: str = "html",
+    datetime_folder: Optional[str] = None
 ) -> Dict:
     """
     Generate a service report and register it in the file tree.
+
+    The folder structure follows the pattern:
+    {MEDIA_ROOT}/uploads/{client_id}/{user_id}/{project_id}/{service_id}/{datetime}/{output_folder}/
 
     Args:
         service_name: Human-readable service name
@@ -971,11 +1052,12 @@ def generate_and_register_service_report(
         project_id: Project ID for folder organization
         service_id_folder: Service ID for folder organization
         folder_name: Custom folder name (default: derived from service_name)
-        input_files: Optional list of input files
+        input_files: Optional list of input files (used to extract datetime_folder if not provided)
         query: Optional query string
         execution_time_seconds: Optional execution time
         additional_metadata: Optional extra metadata
         file_format: "html" or "json" (default: "html")
+        datetime_folder: The datetime folder (YYYYMMDD format) - if not provided, extracted from input_files or uses today
 
     Returns:
         Dict with registered file info: {file_id, filename, filepath, folder_name}
@@ -985,6 +1067,35 @@ def generate_and_register_service_report(
     # Generate folder name from service name if not provided
     if not folder_name:
         folder_name = service_name.lower().replace(' ', '-').replace('_', '-')
+
+    # Determine datetime_folder from input files if not provided
+    if not datetime_folder and input_files:
+        for input_file in input_files:
+            filepath = input_file.get('filepath') or input_file.get('file_path') or ''
+            # Try to extract datetime folder from filepath pattern: .../{project_id}/{service_id}/{YYYYMMDD}/...
+            if project_id and service_id_folder and filepath:
+                try:
+                    # Find the datetime folder in the path
+                    parts = filepath.split(os.sep)
+                    for i, part in enumerate(parts):
+                        if part == service_id_folder and i + 1 < len(parts):
+                            potential_date = parts[i + 1]
+                            # Check if it looks like a date folder (YYYYMMDD format)
+                            if len(potential_date) == 8 and potential_date.isdigit():
+                                datetime_folder = potential_date
+                                logger.debug(f"Extracted datetime_folder from input file: {datetime_folder}")
+                                break
+                except Exception as e:
+                    logger.debug(f"Could not extract datetime from input file path: {e}")
+            if datetime_folder:
+                break
+
+    # Default to today's date if still not determined
+    if not datetime_folder:
+        datetime_folder = datetime.now().strftime("%Y%m%d")
+
+    # Get client_id
+    client_id = getattr(user, 'client_id', None) or 'default'
 
     # Generate unique filename
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1008,14 +1119,16 @@ def generate_and_register_service_report(
         )
         content_type = "text/html"
 
-    # Determine file path
+    # Determine file path with correct structure:
+    # {MEDIA_ROOT}/uploads/{client_id}/{user_id}/{project_id}/{service_id}/{datetime}/{output_folder}/
     base_path = os.path.join(
         settings.MEDIA_ROOT,
         "uploads",
+        str(client_id),
         str(user.id),
-        user.client_id if hasattr(user, 'client_id') and user.client_id else "default",
         project_id,
         service_id_folder,
+        datetime_folder,
         folder_name
     )
     os.makedirs(base_path, exist_ok=True)
@@ -1035,13 +1148,14 @@ def generate_and_register_service_report(
         folder_name=folder_name
     )
 
-    logger.info(f"✅ Generated and registered service report: {filename} in folder '{folder_name}'")
+    logger.info(f"✅ Generated and registered service report: {filename} in {project_id}/{service_id_folder}/{datetime_folder}/{folder_name}")
 
     return {
         "file_id": registered_file.id,
         "filename": registered_file.filename,
         "filepath": registered_file.filepath,
         "folder_name": folder_name,
+        "datetime_folder": datetime_folder,
         "download_url": f"/api/v1/documents/download/{registered_file.id}/",
         "content_type": content_type
     }

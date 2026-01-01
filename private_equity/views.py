@@ -11,7 +11,7 @@ from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHa
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from core.utils import generate_and_register_service_report
+from core.utils import generate_and_register_service_report, get_datetime_folder_from_dd_run
 
 from custom_authentication.permissions import IsClientOrAdmin, IsClientOrAdminOrSuperUser
 from core.vertical_permissions import IsClientMember, IsClientAdmin, IsOwnerOrClientAdmin
@@ -468,6 +468,8 @@ class IssueSpottingView(APIView):
         if generate_report and project_id and service_id:
             execution_time = time.time() - start_time
             try:
+                # Extract datetime_folder from DD run's files to maintain folder structure
+                datetime_folder = request.query_params.get('datetime_folder') or get_datetime_folder_from_dd_run(dd_run)
                 report_info = generate_and_register_service_report(
                     service_name="PE Issue Spotting Analysis",
                     service_id="pe-issue-spotting",
@@ -483,7 +485,8 @@ class IssueSpottingView(APIView):
                         "deal_name": dd_run.deal_name,
                         "total_issues": summary['total_issues'],
                         "critical_count": summary['critical_count']
-                    }
+                    },
+                    datetime_folder=datetime_folder
                 )
                 response_data['report_file'] = report_info
             except Exception as e:
@@ -730,6 +733,7 @@ class RiskClauseSummaryView(APIView):
         if generate_report and project_id and service_id:
             execution_time = time.time() - start_time
             try:
+                datetime_folder = request.query_params.get('datetime_folder') or get_datetime_folder_from_dd_run(dd_run)
                 report_info = generate_and_register_service_report(
                     service_name="PE Risk Clause Summary",
                     service_id="pe-risk-summary",
@@ -741,7 +745,8 @@ class RiskClauseSummaryView(APIView):
                     service_id_folder=service_id,
                     folder_name="risk-summary-results",
                     execution_time_seconds=execution_time,
-                    additional_metadata={"deal_name": dd_run.deal_name, "clause_types_count": len(summary_data)}
+                    additional_metadata={"deal_name": dd_run.deal_name, "clause_types_count": len(summary_data)},
+                    datetime_folder=datetime_folder
                 )
                 response_data['report_file'] = report_info
             except Exception as e:
@@ -1377,6 +1382,7 @@ class DealVelocityAnalyticsView(APIView):
             try:
                 from core.models import Run
                 run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                datetime_folder = request.query_params.get('datetime_folder')  # Use today if not provided
                 report_info = generate_and_register_service_report(
                     service_name="PE Deal Velocity Analytics",
                     service_id="pe-deal-velocity",
@@ -1388,7 +1394,8 @@ class DealVelocityAnalyticsView(APIView):
                     service_id_folder=service_id,
                     folder_name="deal-velocity-results",
                     execution_time_seconds=execution_time,
-                    additional_metadata={"total_deals": total_deals, "deals_delayed": delayed_phases}
+                    additional_metadata={"total_deals": total_deals, "deals_delayed": delayed_phases},
+                    datetime_folder=datetime_folder
                 )
                 response_data['report_file'] = report_info
             except Exception as e:
@@ -1945,6 +1952,7 @@ class PortfolioComplianceView(APIView):
             try:
                 from core.models import Run
                 run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                datetime_folder = request.query_params.get('datetime_folder')
                 report_info = generate_and_register_service_report(
                     service_name="PE Portfolio Compliance Dashboard",
                     service_id="pe-portfolio-compliance",
@@ -1956,7 +1964,8 @@ class PortfolioComplianceView(APIView):
                     service_id_folder=service_id,
                     folder_name="compliance-results",
                     execution_time_seconds=execution_time,
-                    additional_metadata={"total_covenants": total_covenants, "breached_covenants": breached_covenants}
+                    additional_metadata={"total_covenants": total_covenants, "breached_covenants": breached_covenants},
+                    datetime_folder=datetime_folder
                 )
                 response_data['report_file'] = report_info
             except Exception as e:
@@ -2034,6 +2043,7 @@ class RiskHeatmapView(APIView):
             try:
                 from core.models import Run
                 run = Run.objects.filter(user=request.user).order_by('-created_at').first()
+                datetime_folder = request.query_params.get('datetime_folder')
                 report_info = generate_and_register_service_report(
                     service_name="PE Risk Heatmap Analysis",
                     service_id="pe-risk-heatmap",
@@ -2045,7 +2055,8 @@ class RiskHeatmapView(APIView):
                     service_id_folder=service_id,
                     folder_name="risk-heatmap-results",
                     execution_time_seconds=execution_time,
-                    additional_metadata={"total_deals": len(heatmap_data), "high_risk_deals": response_data['high_risk_deals']}
+                    additional_metadata={"total_deals": len(heatmap_data), "high_risk_deals": response_data['high_risk_deals']},
+                    datetime_folder=datetime_folder
                 )
                 final_response['report_file'] = report_info
             except Exception as e:
