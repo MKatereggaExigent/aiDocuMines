@@ -107,7 +107,8 @@ class SubmitTranslationAPIView(APIView):
             return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # ✅ Validate source and target languages
-        if not TranslationLanguage.objects.filter(code=from_lang).exists():
+        # "auto" is a special code for auto-detection (supported by Azure Translator)
+        if from_lang != "auto" and not TranslationLanguage.objects.filter(code=from_lang).exists():
             return Response({"error": f"Invalid source language: {from_lang}"}, status=status.HTTP_400_BAD_REQUEST)
         if not TranslationLanguage.objects.filter(code=to_lang).exists():
             return Response({"error": f"Invalid target language: {to_lang}"}, status=status.HTTP_400_BAD_REQUEST)

@@ -177,7 +177,14 @@ class TranslationService:
         )
 
     def translate_file(self, file_id, run_id, source_language, target_language):
-        """Translates a document using Azure Document Translation API."""
+        """Translates a document using Azure Document Translation API.
+
+        Args:
+            file_id: The ID of the file to translate
+            run_id: The translation run ID
+            source_language: Source language code, or "auto" for auto-detection
+            target_language: Target language code
+        """
         original_file = File.objects.get(id=file_id)
         translation_run = TranslationRun.objects.get(id=run_id)
 
@@ -195,10 +202,22 @@ class TranslationService:
         source_sas_url = self.azure_service.generate_sas_url(source_container)
         target_sas_url = self.azure_service.generate_sas_url(target_container)
 
-        translation_input = DocumentTranslationInput(
-            source_url=source_sas_url,
-            targets=[TranslationTarget(target_url=target_sas_url, language=target_language)]
-        )
+        # Build translation input - only specify source_language if not "auto"
+        # Azure auto-detects source language when not specified
+        if source_language and source_language.lower() != "auto":
+            translation_input = DocumentTranslationInput(
+                source_url=source_sas_url,
+                source_language=source_language,
+                targets=[TranslationTarget(target_url=target_sas_url, language=target_language)]
+            )
+            logger.info(f"📖 Translating from {source_language} to {target_language}")
+        else:
+            translation_input = DocumentTranslationInput(
+                source_url=source_sas_url,
+                targets=[TranslationTarget(target_url=target_sas_url, language=target_language)]
+            )
+            logger.info(f"📖 Translating with auto-detection to {target_language}")
+
         self.client.begin_translation(inputs=[translation_input]).wait()
 
         # Store the translated file using the original filename
