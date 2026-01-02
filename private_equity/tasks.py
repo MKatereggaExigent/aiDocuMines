@@ -291,6 +291,9 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
         effective_service_id = service_id or file_obj.service_id
 
         logger.info(f"Starting document classification for file {file_obj.filename}")
+        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}")
+        logger.info(f"  📋 File's project_id={file_obj.project_id}, service_id={file_obj.service_id}")
+        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}")
 
         # Placeholder classification logic
         # In a real implementation, this would:
@@ -434,6 +437,9 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
         effective_service_id = service_id or file_obj.service_id
 
         logger.info(f"Starting risk clause extraction for file {file_obj.filename}")
+        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}")
+        logger.info(f"  📋 File's project_id={file_obj.project_id}, service_id={file_obj.service_id}")
+        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}")
 
         # ✅ Get client from user for multi-tenancy
         client = getattr(user, 'client', None)
@@ -705,16 +711,28 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
                 }
             }
 
-            # Create output directory
+            # Create output directory - MUST use project_id/service_id structure for proper sidebar placement
+            # Path format: {MEDIA_ROOT}/uploads/{client_id}/{user_id}/{project_id}/{service_id}/{datetime}/findings_reports/
             datetime_folder = timezone.now().strftime("%Y%m%d")
+
+            # Use effective_project_id or fallback to "ai_services"
+            final_project_id = effective_project_id or "ai_services"
+            final_service_id = effective_service_id or "pe-findings-report"
+
             output_dir = os.path.join(
                 settings.MEDIA_ROOT,
-                "pe_reports",
+                "uploads",
+                str(client.client_id) if hasattr(client, 'client_id') else "default",
                 str(user.id),
+                final_project_id,
+                final_service_id,
                 datetime_folder,
                 "findings_reports"
             )
             os.makedirs(output_dir, exist_ok=True)
+
+            logger.info(f"📁 Creating findings report at: {output_dir}")
+            logger.info(f"   project_id={final_project_id}, service_id={final_service_id}")
 
             # Write report file
             report_filename = f"findings_report_{report.id}_{dd_run.deal_name.replace(' ', '_')}.json"
@@ -735,8 +753,8 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
                     file_path=report_filepath,
                     user=user,
                     run=upload_run,
-                    project_id=effective_project_id,
-                    service_id=effective_service_id,
+                    project_id=final_project_id,
+                    service_id=final_service_id,
                     folder_name=os.path.join("findings_reports", datetime_folder)
                 )
 

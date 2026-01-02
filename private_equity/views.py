@@ -592,6 +592,10 @@ class FindingsReportView(APIView):
         service_id = request.data.get('service_id')
         file_id = request.data.get('file_id')
 
+        logger.info(f"📋 FindingsReportView.post - Received request:")
+        logger.info(f"   dd_run_id={dd_run_id}, project_id={project_id}, service_id={service_id}, file_id={file_id}")
+        logger.info(f"   Full request.data: {request.data}")
+
         if not dd_run_id:
             return Response(
                 {"error": "dd_run_id is required"},
@@ -602,6 +606,7 @@ class FindingsReportView(APIView):
         dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, run__user=request.user)
 
         # Trigger report generation task with project context
+        logger.info(f"📋 Triggering generate_findings_report_task with project_id={project_id}, service_id={service_id}")
         task = generate_findings_report_task.delay(
             dd_run.id,
             request.user.id,
