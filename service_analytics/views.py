@@ -652,6 +652,22 @@ class CreateServiceExecutionView(APIView):
                     'error': 'Missing required fields: vertical, run_id, service_type, service_name'
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+            # Check if run_id is a temporary ID (non-numeric string like 'temp_run_...')
+            # If so, skip execution tracking - return success without creating a record
+            is_temp_run = isinstance(run_id, str) and (run_id.startswith('temp_') or not run_id.isdigit())
+            if is_temp_run:
+                return Response({
+                    'success': True,
+                    'data': {
+                        'id': None,
+                        'vertical': vertical,
+                        'service_type': service_type,
+                        'service_name': service_name,
+                        'status': exec_status,
+                        'note': 'Skipped execution tracking - temporary run ID'
+                    }
+                }, status=status.HTTP_200_OK)
+
             # Route to appropriate vertical
             execution = None
 
@@ -916,7 +932,7 @@ class ToolDataInsightsAPIView(APIView):
             'id': doc.id,
             'document_type': doc.document_type,
             'confidence_score': doc.confidence_score,
-            'is_duplicate': doc.is_duplicate,
+            'is_verified': doc.is_verified,  # Fixed: was incorrectly 'is_duplicate'
             'created_at': doc.created_at.isoformat()
         } for doc in doc_classifications]
 
