@@ -277,13 +277,74 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
         action = "Created" if created else "Updated"
         logger.info(f"{action} classification for {file_obj.filename}: {doc_type} (confidence: {confidence})")
 
+        # ✅ Generate classification report file and register it
+        registered_outputs = []
+        try:
+            # Create classification report data
+            classification_data = {
+                "classification_id": str(classification.id),
+                "file_id": str(file_id),
+                "filename": file_obj.filename,
+                "document_type": doc_type,
+                "confidence_score": confidence,
+                "classification_method": "AI-powered document classification",
+                "processed_at": timezone.now().isoformat(),
+                "metadata": classification.classification_metadata
+            }
+
+            # Create output directory
+            datetime_folder = timezone.now().strftime("%Y%m%d")
+            output_dir = os.path.join(
+                settings.MEDIA_ROOT,
+                "uploads",
+                str(file_obj.user.client.client_id) if hasattr(file_obj.user, 'client') else "default",
+                str(file_obj.user.id),
+                file_obj.project_id or "default_project",
+                file_obj.service_id or "pe_classification",
+                datetime_folder,
+                "classifications"
+            )
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Write classification report file
+            report_filename = f"classification_{classification.id}_{file_obj.filename.rsplit('.', 1)[0]}.json"
+            report_filepath = os.path.join(output_dir, report_filename)
+
+            with open(report_filepath, 'w', encoding='utf-8') as f:
+                json.dump(classification_data, f, indent=2, ensure_ascii=False)
+
+            # Register the generated file
+            if os.path.exists(report_filepath):
+                upload_run = file_obj.run
+
+                registered = register_generated_file(
+                    file_path=report_filepath,
+                    user=file_obj.user,
+                    run=upload_run,
+                    project_id=file_obj.project_id or "default_project",
+                    service_id=file_obj.service_id or "pe_classification",
+                    folder_name=os.path.join("classifications", datetime_folder)
+                )
+
+                registered_outputs.append({
+                    "filename": registered.filename,
+                    "file_id": registered.id,
+                    "path": registered.filepath
+                })
+
+                logger.info(f"✅ Registered classification report file: {registered.filename} (file_id={registered.id})")
+
+        except Exception as e:
+            logger.error(f"Failed to generate classification report file: {str(e)}")
+            # Continue even if file generation fails
+
         return {
             "status": "completed",
             "file_id": file_id,
             "document_type": doc_type,
             "confidence_score": confidence,
             "action": action.lower(),
-            "registered_outputs": []  # Classification doesn't generate new files
+            "registered_outputs": registered_outputs
         }
 
     except File.DoesNotExist:
@@ -343,12 +404,86 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
         
         logger.info(f"Created {len(created_clauses)} risk clauses for {file_obj.filename}")
 
+        # ✅ Generate risk clauses report file and register it
+        registered_outputs = []
+        try:
+            # Create risk clauses report data
+            risk_clauses_data = {
+                "file_id": str(file_id),
+                "filename": file_obj.filename,
+                "dd_run_id": str(dd_run_id),
+                "total_clauses_found": len(created_clauses),
+                "processed_at": timezone.now().isoformat(),
+                "risk_clauses": []
+            }
+
+            # Add detailed clause information
+            for clause_id in created_clauses:
+                try:
+                    clause = RiskClause.objects.get(id=clause_id)
+                    risk_clauses_data["risk_clauses"].append({
+                        "clause_id": str(clause.id),
+                        "clause_type": clause.clause_type,
+                        "risk_level": clause.risk_level,
+                        "clause_text": clause.clause_text[:500] if clause.clause_text else "",  # Truncate for file size
+                        "risk_explanation": clause.risk_explanation,
+                        "mitigation_suggestions": clause.mitigation_suggestions
+                    })
+                except RiskClause.DoesNotExist:
+                    continue
+
+            # Create output directory
+            datetime_folder = timezone.now().strftime("%Y%m%d")
+            output_dir = os.path.join(
+                settings.MEDIA_ROOT,
+                "uploads",
+                str(file_obj.user.client.client_id) if hasattr(file_obj.user, 'client') else "default",
+                str(file_obj.user.id),
+                file_obj.project_id or "default_project",
+                file_obj.service_id or "pe_risk_extraction",
+                datetime_folder,
+                "risk_clauses"
+            )
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Write risk clauses report file
+            report_filename = f"risk_clauses_{file_obj.filename.rsplit('.', 1)[0]}_{timezone.now().strftime('%Y%m%d_%H%M%S')}.json"
+            report_filepath = os.path.join(output_dir, report_filename)
+
+            with open(report_filepath, 'w', encoding='utf-8') as f:
+                json.dump(risk_clauses_data, f, indent=2, ensure_ascii=False)
+
+            # Register the generated file
+            if os.path.exists(report_filepath):
+                upload_run = file_obj.run
+
+                registered = register_generated_file(
+                    file_path=report_filepath,
+                    user=file_obj.user,
+                    run=upload_run,
+                    project_id=file_obj.project_id or "default_project",
+                    service_id=file_obj.service_id or "pe_risk_extraction",
+                    folder_name=os.path.join("risk_clauses", datetime_folder)
+                )
+
+                registered_outputs.append({
+                    "filename": registered.filename,
+                    "file_id": registered.id,
+                    "path": registered.filepath
+                })
+
+                logger.info(f"✅ Registered risk clauses report file: {registered.filename} (file_id={registered.id})")
+
+        except Exception as e:
+            logger.error(f"Failed to generate risk clauses report file: {str(e)}")
+            # Continue even if file generation fails
+
         return {
             "status": "completed",
             "file_id": file_id,
             "clauses_created": len(created_clauses),
             "clause_ids": created_clauses,
-            "registered_outputs": []  # Risk extraction doesn't generate new files
+            "registered_outputs": registered_outputs
         }
 
     except File.DoesNotExist:
