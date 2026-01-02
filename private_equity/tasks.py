@@ -281,23 +281,30 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
         file_obj = File.objects.get(id=file_id)
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
-        
+
         logger.info(f"Starting document classification for file {file_obj.filename}")
-        
+
         # Placeholder classification logic
         # In a real implementation, this would:
         # 1. Extract text from the document
         # 2. Use ML models to classify document type
         # 3. Calculate confidence scores
-        
+
         # Use AI services for document classification
         doc_type, confidence = call_ai_document_classification(file_obj, user)
-        
+
+        # ✅ Get client from user for multi-tenancy
+        client = getattr(user, 'client', None)
+        if not client:
+            logger.error(f"User {user.id} has no client - cannot create classification")
+            return {"status": "failed", "error": "User has no client", "registered_outputs": []}
+
         # Create or update classification
         classification, created = DocumentClassification.objects.update_or_create(
             file=file_obj,
             user=user,
             defaults={
+                'client': client,  # ✅ Required field for multi-tenancy
                 'due_diligence_run': dd_run,
                 'document_type': doc_type,
                 'confidence_score': confidence,
@@ -409,15 +416,21 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
         file_obj = File.objects.get(id=file_id)
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
-        
+
         logger.info(f"Starting risk clause extraction for file {file_obj.filename}")
-        
+
+        # ✅ Get client from user for multi-tenancy
+        client = getattr(user, 'client', None)
+        if not client:
+            logger.error(f"User {user.id} has no client - cannot create risk clauses")
+            return {"status": "failed", "error": "User has no client", "registered_outputs": []}
+
         # Placeholder risk extraction logic
         # In a real implementation, this would:
         # 1. Extract text from the document
         # 2. Use NLP models to identify risk clauses
         # 3. Classify risk levels and types
-        
+
         # Use AI services for risk clause extraction
         classification = DocumentClassification.objects.filter(
             file=file_obj, user=user
@@ -430,6 +443,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
         created_clauses = []
         for clause_data in extracted_clauses:
             risk_clause = RiskClause.objects.create(
+                client=client,  # ✅ Required field for multi-tenancy
                 file=file_obj,
                 user=user,
                 due_diligence_run=dd_run,
@@ -557,6 +571,12 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
 
+        # ✅ Get client from user for multi-tenancy
+        client = getattr(user, 'client', None)
+        if not client:
+            logger.error(f"User {user.id} has no client - cannot create findings report")
+            return {"status": "failed", "error": "User has no client", "registered_outputs": []}
+
         logger.info(f"Generating findings report for DD run: {dd_run.deal_name}")
 
         # Get project_id and service_id from the first classified file if not provided
@@ -635,6 +655,7 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
 
             # Create the findings report database record
             report = FindingsReport.objects.create(
+                client=client,  # ✅ Required field for multi-tenancy
                 due_diligence_run=dd_run,
                 user=user,
                 report_name=report_name,
