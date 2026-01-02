@@ -272,7 +272,7 @@ def _calculate_risk_level(sentence, patterns):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None):
+def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None, datetime_folder=None):
     """
     Celery task to classify a document using AI/ML models.
     This is a placeholder implementation - replace with actual ML classification logic.
@@ -280,6 +280,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
     Args:
         project_id: Override project_id for output files (uses file's project_id if not provided)
         service_id: Override service_id for output files (uses file's service_id if not provided)
+        datetime_folder: Optional datetime folder from frontend to place output in same folder as input
     """
     try:
         file_obj = File.objects.get(id=file_id)
@@ -289,11 +290,13 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
         # ✅ Use provided project_id/service_id or fall back to file's values
         effective_project_id = project_id or file_obj.project_id
         effective_service_id = service_id or file_obj.service_id
+        # ✅ Use provided datetime_folder or generate new one
+        effective_datetime_folder = datetime_folder or timezone.now().strftime("%Y%m%d")
 
         logger.info(f"Starting document classification for file {file_obj.filename}")
-        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}")
+        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
         logger.info(f"  📋 File's project_id={file_obj.project_id}, service_id={file_obj.service_id}")
-        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}")
+        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}, datetime_folder={effective_datetime_folder}")
 
         # Placeholder classification logic
         # In a real implementation, this would:
@@ -345,8 +348,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
                 "metadata": classification.classification_metadata
             }
 
-            # Create output directory - use effective_project_id/service_id from frontend
-            datetime_folder = timezone.now().strftime("%Y%m%d")
+            # Create output directory - use effective_project_id/service_id/datetime_folder from frontend
             output_dir = os.path.join(
                 settings.MEDIA_ROOT,
                 "uploads",
@@ -354,7 +356,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
                 str(file_obj.user.id),
                 effective_project_id or "default_project",
                 effective_service_id or "pe_classification",
-                datetime_folder,
+                effective_datetime_folder,
                 "classifications"
             )
             os.makedirs(output_dir, exist_ok=True)
@@ -376,7 +378,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
                     run=upload_run,
                     project_id=effective_project_id or "default_project",
                     service_id=effective_service_id or "pe_classification",
-                    folder_name=os.path.join("classifications", datetime_folder)
+                    folder_name=os.path.join("classifications", effective_datetime_folder)
                 )
 
                 registered_outputs.append({
@@ -418,7 +420,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, s
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None):
+def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None, datetime_folder=None):
     """
     Celery task to extract risk clauses from a document using NLP.
     This is a placeholder implementation - replace with actual NLP extraction logic.
@@ -426,6 +428,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
     Args:
         project_id: Override project_id for output files (uses file's project_id if not provided)
         service_id: Override service_id for output files (uses file's service_id if not provided)
+        datetime_folder: Optional datetime folder from frontend to place output in same folder as input
     """
     try:
         file_obj = File.objects.get(id=file_id)
@@ -435,11 +438,13 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
         # ✅ Use provided project_id/service_id or fall back to file's values
         effective_project_id = project_id or file_obj.project_id
         effective_service_id = service_id or file_obj.service_id
+        # ✅ Use provided datetime_folder or generate new one
+        effective_datetime_folder = datetime_folder or timezone.now().strftime("%Y%m%d")
 
         logger.info(f"Starting risk clause extraction for file {file_obj.filename}")
-        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}")
+        logger.info(f"  📋 Received project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
         logger.info(f"  📋 File's project_id={file_obj.project_id}, service_id={file_obj.service_id}")
-        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}")
+        logger.info(f"  ✅ Using effective_project_id={effective_project_id}, effective_service_id={effective_service_id}, datetime_folder={effective_datetime_folder}")
 
         # ✅ Get client from user for multi-tenancy
         client = getattr(user, 'client', None)
@@ -503,8 +508,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
                 except RiskClause.DoesNotExist:
                     continue
 
-            # Create output directory - use effective_project_id/service_id from frontend
-            datetime_folder = timezone.now().strftime("%Y%m%d")
+            # Create output directory - use effective_project_id/service_id/datetime_folder from frontend
             output_dir = os.path.join(
                 settings.MEDIA_ROOT,
                 "uploads",
@@ -512,7 +516,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
                 str(file_obj.user.id),
                 effective_project_id or "default_project",
                 effective_service_id or "pe_risk_extraction",
-                datetime_folder,
+                effective_datetime_folder,
                 "risk_clauses"
             )
             os.makedirs(output_dir, exist_ok=True)
@@ -534,7 +538,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
                     run=upload_run,
                     project_id=effective_project_id or "default_project",
                     service_id=effective_service_id or "pe_risk_extraction",
-                    folder_name=os.path.join("risk_clauses", datetime_folder)
+                    folder_name=os.path.join("risk_clauses", effective_datetime_folder)
                 )
 
                 registered_outputs.append({
@@ -575,7 +579,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=120)
-def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report", project_id=None, service_id=None, file_id=None):
+def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report", project_id=None, service_id=None, file_id=None, datetime_folder=None):
     """
     Celery task to generate a comprehensive findings report for a due diligence run.
     Generates a JSON report file and registers it using register_generated_file.
@@ -588,6 +592,7 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
         project_id: Project ID for file registration (will derive from files if not provided)
         service_id: Service ID for file registration (defaults to 'pe-findings-report')
         file_id: Optional file ID to derive project_id/service_id from
+        datetime_folder: Optional datetime folder from frontend (e.g., "20260102") to place output in same folder as input
     """
     try:
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
@@ -713,10 +718,11 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
 
             # Create output directory - MUST use project_id/service_id structure for proper sidebar placement
             # Path format: {MEDIA_ROOT}/uploads/{client_id}/{user_id}/{project_id}/{service_id}/{datetime}/findings_reports/
-            datetime_folder = timezone.now().strftime("%Y%m%d")
+            # ✅ Use datetime_folder from frontend if provided, otherwise generate new one
+            effective_datetime_folder = datetime_folder or timezone.now().strftime("%Y%m%d")
 
-            # Use effective_project_id or fallback to "ai_services"
-            final_project_id = effective_project_id or "ai_services"
+            # Use effective_project_id or fallback to vertical name (not "ai_services")
+            final_project_id = effective_project_id or "private_equity"
             final_service_id = effective_service_id or "pe-findings-report"
 
             output_dir = os.path.join(
@@ -726,13 +732,13 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
                 str(user.id),
                 final_project_id,
                 final_service_id,
-                datetime_folder,
+                effective_datetime_folder,
                 "findings_reports"
             )
             os.makedirs(output_dir, exist_ok=True)
 
             logger.info(f"📁 Creating findings report at: {output_dir}")
-            logger.info(f"   project_id={final_project_id}, service_id={final_service_id}")
+            logger.info(f"   project_id={final_project_id}, service_id={final_service_id}, datetime_folder={effective_datetime_folder}")
 
             # Write report file
             report_filename = f"findings_report_{report.id}_{dd_run.deal_name.replace(' ', '_')}.json"
@@ -755,7 +761,7 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
                     run=upload_run,
                     project_id=final_project_id,
                     service_id=final_service_id,
-                    folder_name=os.path.join("findings_reports", datetime_folder)
+                    folder_name=os.path.join("findings_reports", effective_datetime_folder)
                 )
 
                 registered_outputs.append({

@@ -198,9 +198,12 @@ class DocumentClassificationView(APIView):
         """Trigger document classification for uploaded files"""
         dd_run_id = request.data.get('dd_run_id')
         file_ids = request.data.get('file_ids', [])
-        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        # ✅ Accept project_id, service_id, and datetime_folder from frontend to preserve tree location
         project_id = request.data.get('project_id')
         service_id = request.data.get('service_id')
+        datetime_folder = request.data.get('datetime_folder')
+
+        logger.info(f"📋 DocumentClassificationView.post - project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
 
         if not dd_run_id or not file_ids:
             return Response(
@@ -219,18 +222,29 @@ class DocumentClassificationView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # ✅ If project_id/service_id not provided, derive from first file
-        if not project_id and files.exists():
+        # ✅ If project_id/service_id/datetime_folder not provided, derive from first file
+        if files.exists():
             first_file = files.first()
-            project_id = first_file.project_id
-            service_id = service_id or first_file.service_id
+            if not project_id:
+                project_id = first_file.project_id
+            if not service_id:
+                service_id = first_file.service_id
+            # ✅ Extract datetime_folder from file path if not provided
+            if not datetime_folder and first_file.filepath:
+                # Path structure: uploads/client/user/PROJECT_ID/SERVICE_ID/DATETIME/...
+                path_parts = first_file.filepath.split('/')
+                if 'uploads' in path_parts:
+                    uploads_idx = path_parts.index('uploads')
+                    if len(path_parts) > uploads_idx + 5:
+                        datetime_folder = path_parts[uploads_idx + 5]
+                        logger.info(f"📋 Derived datetime_folder from file path: {datetime_folder}")
 
         # Trigger classification tasks with project context
         task_ids = []
         for file_obj in files:
             task = classify_document_task.delay(
                 file_obj.id, dd_run.id, request.user.id,
-                project_id=project_id, service_id=service_id
+                project_id=project_id, service_id=service_id, datetime_folder=datetime_folder
             )
             task_ids.append(task.id)
 
@@ -302,9 +316,12 @@ class RiskClauseExtractionView(APIView):
         """Trigger risk clause extraction for documents"""
         dd_run_id = request.data.get('dd_run_id')
         file_ids = request.data.get('file_ids', [])
-        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        # ✅ Accept project_id, service_id, and datetime_folder from frontend to preserve tree location
         project_id = request.data.get('project_id')
         service_id = request.data.get('service_id')
+        datetime_folder = request.data.get('datetime_folder')
+
+        logger.info(f"📋 RiskClauseExtractionView.post - project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
 
         if not dd_run_id or not file_ids:
             return Response(
@@ -323,18 +340,28 @@ class RiskClauseExtractionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # ✅ If project_id/service_id not provided, derive from first file
-        if not project_id and files.exists():
+        # ✅ If project_id/service_id/datetime_folder not provided, derive from first file
+        if files.exists():
             first_file = files.first()
-            project_id = first_file.project_id
-            service_id = service_id or first_file.service_id
+            if not project_id:
+                project_id = first_file.project_id
+            if not service_id:
+                service_id = first_file.service_id
+            # ✅ Extract datetime_folder from file path if not provided
+            if not datetime_folder and first_file.filepath:
+                path_parts = first_file.filepath.split('/')
+                if 'uploads' in path_parts:
+                    uploads_idx = path_parts.index('uploads')
+                    if len(path_parts) > uploads_idx + 5:
+                        datetime_folder = path_parts[uploads_idx + 5]
+                        logger.info(f"📋 Derived datetime_folder from file path: {datetime_folder}")
 
         # Trigger risk extraction tasks with project context
         task_ids = []
         for file_obj in files:
             task = extract_risk_clauses_task.delay(
                 file_obj.id, dd_run.id, request.user.id,
-                project_id=project_id, service_id=service_id
+                project_id=project_id, service_id=service_id, datetime_folder=datetime_folder
             )
             task_ids.append(task.id)
 
@@ -376,15 +403,18 @@ class IssueSpottingView(APIView):
         """Trigger AI issue spotting for deal documents"""
         deal_workspace_id = request.data.get('deal_workspace_id')
         file_ids = request.data.get('file_ids', [])
-        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        # ✅ Accept project_id, service_id, and datetime_folder from frontend to preserve tree location
         project_id = request.data.get('project_id')
         service_id = request.data.get('service_id')
+        datetime_folder = request.data.get('datetime_folder')
         issue_categories = request.data.get('issue_categories', [
             'change_of_control', 'assignment_restrictions', 'mac_clauses',
             'termination_rights', 'indemnification', 'non_compete',
             'consent_requirements', 'financial_covenants'
         ])
         severity_threshold = request.data.get('severity_threshold', 'low')
+
+        logger.info(f"📋 IssueSpottingView.post - project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
 
         if not deal_workspace_id:
             return Response(
@@ -412,18 +442,28 @@ class IssueSpottingView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # ✅ If project_id/service_id not provided, derive from first file
-        if not project_id and files.exists():
+        # ✅ If project_id/service_id/datetime_folder not provided, derive from first file
+        if files.exists():
             first_file = files.first()
-            project_id = first_file.project_id
-            service_id = service_id or first_file.service_id
+            if not project_id:
+                project_id = first_file.project_id
+            if not service_id:
+                service_id = first_file.service_id
+            # ✅ Extract datetime_folder from file path if not provided
+            if not datetime_folder and first_file.filepath:
+                path_parts = first_file.filepath.split('/')
+                if 'uploads' in path_parts:
+                    uploads_idx = path_parts.index('uploads')
+                    if len(path_parts) > uploads_idx + 5:
+                        datetime_folder = path_parts[uploads_idx + 5]
+                        logger.info(f"📋 Derived datetime_folder from file path: {datetime_folder}")
 
         # Trigger risk extraction tasks for issue spotting with project context
         task_ids = []
         for file_obj in files:
             task = extract_risk_clauses_task.delay(
                 file_obj.id, dd_run.id, request.user.id,
-                project_id=project_id, service_id=service_id
+                project_id=project_id, service_id=service_id, datetime_folder=datetime_folder
             )
             task_ids.append(task.id)
 
@@ -591,9 +631,10 @@ class FindingsReportView(APIView):
         project_id = request.data.get('project_id')
         service_id = request.data.get('service_id')
         file_id = request.data.get('file_id')
+        datetime_folder = request.data.get('datetime_folder')  # ✅ Extract datetime_folder from frontend
 
         logger.info(f"📋 FindingsReportView.post - Received request:")
-        logger.info(f"   dd_run_id={dd_run_id}, project_id={project_id}, service_id={service_id}, file_id={file_id}")
+        logger.info(f"   dd_run_id={dd_run_id}, project_id={project_id}, service_id={service_id}, file_id={file_id}, datetime_folder={datetime_folder}")
         logger.info(f"   Full request.data: {request.data}")
 
         if not dd_run_id:
@@ -606,14 +647,15 @@ class FindingsReportView(APIView):
         dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, run__user=request.user)
 
         # Trigger report generation task with project context
-        logger.info(f"📋 Triggering generate_findings_report_task with project_id={project_id}, service_id={service_id}")
+        logger.info(f"📋 Triggering generate_findings_report_task with project_id={project_id}, service_id={service_id}, datetime_folder={datetime_folder}")
         task = generate_findings_report_task.delay(
             dd_run.id,
             request.user.id,
             report_name,
             project_id=project_id,
             service_id=service_id,
-            file_id=file_id
+            file_id=file_id,
+            datetime_folder=datetime_folder  # ✅ Pass datetime_folder to task
         )
 
         return Response({
