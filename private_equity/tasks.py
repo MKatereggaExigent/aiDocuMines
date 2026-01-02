@@ -1,15 +1,17 @@
 from celery import shared_task
 import logging
+import os
+import json
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db import transaction
+from django.conf import settings
 from core.models import File
+from core.utils import register_generated_file
 from .models import (
     DueDiligenceRun, DocumentClassification, RiskClause, FindingsReport
 )
 import requests
-from django.conf import settings
-import json
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -274,30 +276,31 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
         
         action = "Created" if created else "Updated"
         logger.info(f"{action} classification for {file_obj.filename}: {doc_type} (confidence: {confidence})")
-        
+
         return {
             "status": "completed",
             "file_id": file_id,
             "document_type": doc_type,
             "confidence_score": confidence,
-            "action": action.lower()
+            "action": action.lower(),
+            "registered_outputs": []  # Classification doesn't generate new files
         }
-        
+
     except File.DoesNotExist:
         logger.error(f"File with id {file_id} not found")
-        return {"status": "failed", "error": "File not found"}
+        return {"status": "failed", "error": "File not found", "registered_outputs": []}
     except DueDiligenceRun.DoesNotExist:
         logger.error(f"DueDiligenceRun with id {dd_run_id} not found")
-        return {"status": "failed", "error": "Due diligence run not found"}
+        return {"status": "failed", "error": "Due diligence run not found", "registered_outputs": []}
     except User.DoesNotExist:
         logger.error(f"User with id {user_id} not found")
-        return {"status": "failed", "error": "User not found"}
+        return {"status": "failed", "error": "User not found", "registered_outputs": []}
     except Exception as e:
         logger.error(f"Document classification failed for file {file_id}: {str(e)}")
         # Retry the task if it hasn't exceeded max retries
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=60, exc=e)
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": str(e), "registered_outputs": []}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
@@ -339,94 +342,97 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
             created_clauses.append(risk_clause.id)
         
         logger.info(f"Created {len(created_clauses)} risk clauses for {file_obj.filename}")
-        
+
         return {
             "status": "completed",
             "file_id": file_id,
             "clauses_created": len(created_clauses),
-            "clause_ids": created_clauses
+            "clause_ids": created_clauses,
+            "registered_outputs": []  # Risk extraction doesn't generate new files
         }
-        
+
     except File.DoesNotExist:
         logger.error(f"File with id {file_id} not found")
-        return {"status": "failed", "error": "File not found"}
+        return {"status": "failed", "error": "File not found", "registered_outputs": []}
     except DueDiligenceRun.DoesNotExist:
         logger.error(f"DueDiligenceRun with id {dd_run_id} not found")
-        return {"status": "failed", "error": "Due diligence run not found"}
+        return {"status": "failed", "error": "Due diligence run not found", "registered_outputs": []}
     except User.DoesNotExist:
         logger.error(f"User with id {user_id} not found")
-        return {"status": "failed", "error": "User not found"}
+        return {"status": "failed", "error": "User not found", "registered_outputs": []}
     except Exception as e:
         logger.error(f"Risk clause extraction failed for file {file_id}: {str(e)}")
         # Retry the task if it hasn't exceeded max retries
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=60, exc=e)
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": str(e), "registered_outputs": []}
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=120)
-def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report"):
+def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report", project_id=None, service_id=None):
     """
     Celery task to generate a comprehensive findings report for a due diligence run.
+    Generates a JSON report file and registers it using register_generated_file.
+    Returns registered_outputs with file_id for consistency with translation pattern.
     """
     try:
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
-        
+
         logger.info(f"Generating findings report for DD run: {dd_run.deal_name}")
-        
+
         with transaction.atomic():
             # Gather statistics
             total_documents = DocumentClassification.objects.filter(
                 due_diligence_run=dd_run, user=user
             ).count()
-            
+
             total_risk_clauses = RiskClause.objects.filter(
                 due_diligence_run=dd_run, user=user
             ).count()
-            
+
             high_risk_items = RiskClause.objects.filter(
                 due_diligence_run=dd_run, user=user, risk_level__in=['high', 'critical']
             ).count()
-            
+
             # Document summary by type
             doc_summary = {}
             doc_classifications = DocumentClassification.objects.filter(
                 due_diligence_run=dd_run, user=user
             ).values('document_type').annotate(count=Count('id'))
-            
+
             for item in doc_classifications:
                 doc_summary[item['document_type']] = item['count']
-            
+
             # Risk summary by type and level
             risk_summary = {}
             risk_clauses = RiskClause.objects.filter(
                 due_diligence_run=dd_run, user=user
             ).values('clause_type', 'risk_level').annotate(count=Count('id'))
-            
+
             for item in risk_clauses:
                 clause_type = item['clause_type']
                 if clause_type not in risk_summary:
                     risk_summary[clause_type] = {}
                 risk_summary[clause_type][item['risk_level']] = item['count']
-            
+
             # Generate key findings
             key_findings = []
             if high_risk_items > 0:
                 key_findings.append(f"Identified {high_risk_items} high-risk clauses requiring attention")
-            
+
             if 'change_of_control' in [clause['clause_type'] for clause in risk_clauses]:
                 key_findings.append("Change of control provisions found in multiple contracts")
-            
+
             # Generate recommendations
             recommendations = []
             if high_risk_items > 5:
                 recommendations.append("Prioritize review of high-risk clauses before deal closing")
-            
+
             if doc_summary.get('nda', 0) > 10:
                 recommendations.append("Consider NDA consolidation to reduce administrative burden")
-            
-            # Create the findings report
+
+            # Create the findings report database record
             report = FindingsReport.objects.create(
                 due_diligence_run=dd_run,
                 user=user,
@@ -441,30 +447,92 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
                 high_risk_items_count=high_risk_items,
                 status='draft'
             )
-        
+
+            # Generate JSON report file
+            report_data = {
+                "report_id": report.id,
+                "report_name": report_name,
+                "deal_name": dd_run.deal_name,
+                "target_company": dd_run.target_company,
+                "generated_at": timezone.now().isoformat(),
+                "executive_summary": report.executive_summary,
+                "document_summary": doc_summary,
+                "risk_summary": risk_summary,
+                "key_findings": key_findings,
+                "recommendations": recommendations,
+                "statistics": {
+                    "total_documents_reviewed": total_documents,
+                    "total_risk_clauses_found": total_risk_clauses,
+                    "high_risk_items_count": high_risk_items
+                }
+            }
+
+            # Create output directory
+            datetime_folder = timezone.now().strftime("%Y%m%d")
+            output_dir = os.path.join(
+                settings.MEDIA_ROOT,
+                "pe_reports",
+                str(user.id),
+                datetime_folder,
+                "findings_reports"
+            )
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Write report file
+            report_filename = f"findings_report_{report.id}_{dd_run.deal_name.replace(' ', '_')}.json"
+            report_filepath = os.path.join(output_dir, report_filename)
+
+            with open(report_filepath, 'w', encoding='utf-8') as f:
+                json.dump(report_data, f, indent=2, ensure_ascii=False)
+
+            # Register the generated file
+            registered_outputs = []
+            if os.path.exists(report_filepath):
+                # Get project_id and service_id from dd_run if not provided
+                effective_project_id = project_id or getattr(dd_run.run, 'project_id', None)
+                effective_service_id = service_id or "pe-findings-report"
+
+                registered = register_generated_file(
+                    file_path=report_filepath,
+                    user=user,
+                    run=dd_run.run,
+                    project_id=effective_project_id,
+                    service_id=effective_service_id,
+                    folder_name=os.path.join("findings_reports", datetime_folder)
+                )
+
+                registered_outputs.append({
+                    "filename": registered.filename,
+                    "file_id": registered.id,
+                    "path": registered.filepath
+                })
+
+                logger.info(f"✅ Registered findings report file: {registered.filename} (file_id={registered.id})")
+
         logger.info(f"Generated findings report {report.id} for DD run {dd_run.deal_name}")
-        
+
         return {
             "status": "completed",
             "report_id": report.id,
             "dd_run_id": dd_run_id,
             "total_documents": total_documents,
             "total_risk_clauses": total_risk_clauses,
-            "high_risk_items": high_risk_items
+            "high_risk_items": high_risk_items,
+            "registered_outputs": registered_outputs
         }
-        
+
     except DueDiligenceRun.DoesNotExist:
         logger.error(f"DueDiligenceRun with id {dd_run_id} not found")
-        return {"status": "failed", "error": "Due diligence run not found"}
+        return {"status": "failed", "error": "Due diligence run not found", "registered_outputs": []}
     except User.DoesNotExist:
         logger.error(f"User with id {user_id} not found")
-        return {"status": "failed", "error": "User not found"}
+        return {"status": "failed", "error": "User not found", "registered_outputs": []}
     except Exception as e:
         logger.error(f"Findings report generation failed for DD run {dd_run_id}: {str(e)}")
         # Retry the task if it hasn't exceeded max retries
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=120, exc=e)
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": str(e), "registered_outputs": []}
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=300)
@@ -507,23 +575,24 @@ def sync_data_room_task(self, connector_id, user_id):
         # 5. Triggers document processing pipeline
         
         logger.info(f"Completed data room sync for connector: {connector.connector_name}")
-        
+
         return {
             "status": "completed",
             "connector_id": connector_id,
             "connector_name": connector.connector_name,
-            "synced_files": 0  # Placeholder
+            "synced_files": 0,  # Placeholder
+            "registered_outputs": []  # Will contain synced files when implemented
         }
-        
+
     except DataRoomConnector.DoesNotExist:
         logger.error(f"DataRoomConnector with id {connector_id} not found")
-        return {"status": "failed", "error": "Data room connector not found"}
+        return {"status": "failed", "error": "Data room connector not found", "registered_outputs": []}
     except User.DoesNotExist:
         logger.error(f"User with id {user_id} not found")
-        return {"status": "failed", "error": "User not found"}
+        return {"status": "failed", "error": "User not found", "registered_outputs": []}
     except Exception as e:
         logger.error(f"Data room sync failed for connector {connector_id}: {str(e)}")
-        
+
         # Update connector with error status
         try:
             connector = DataRoomConnector.objects.get(id=connector_id)
@@ -532,11 +601,11 @@ def sync_data_room_task(self, connector_id, user_id):
             connector.save(update_fields=['sync_status', 'sync_error_message'])
         except:
             pass
-        
+
         # Retry the task if it hasn't exceeded max retries
         if self.request.retries < self.max_retries:
             raise self.retry(countdown=300, exc=e)
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": str(e), "registered_outputs": []}
 
 
 # ═══════════════════════════════════════════════════════════════

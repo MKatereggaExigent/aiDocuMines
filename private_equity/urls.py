@@ -34,6 +34,8 @@ from .views import (
     ConsentFilingListCreateView,
     PortfolioComplianceView,
     RiskHeatmapView,
+    # Task Status View
+    PETaskStatusView,
 )
 
 app_name = 'private_equity'
@@ -138,4 +140,11 @@ urlpatterns = [
 
     # Risk Heatmap
     path('risk-heatmap/', RiskHeatmapView.as_view(), name='risk-heatmap'),
+
+    # ═══════════════════════════════════════════════════════════════
+    # 📊 TASK STATUS ENDPOINT
+    # ═══════════════════════════════════════════════════════════════
+
+    # Task Status (similar to TranslationTaskStatusView)
+    path('task-status/', PETaskStatusView.as_view(), name='task-status'),
 ]

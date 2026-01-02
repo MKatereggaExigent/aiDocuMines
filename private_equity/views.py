@@ -2063,3 +2063,118 @@ class RiskHeatmapView(APIView):
                 logger.warning(f"Failed to generate risk heatmap report: {e}")
 
         return Response(final_response)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 PE TASK STATUS VIEW - Celery Task Status with registered_outputs
+# ═══════════════════════════════════════════════════════════════
+
+class PETaskStatusView(APIView):
+    """
+    Check the status of Private Equity Celery tasks and return registered_outputs.
+    Similar to TranslationTaskStatusView pattern.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    @swagger_auto_schema(
+        operation_description="Get the status of a PE task by task_id",
+        tags=["Private Equity - Task Status"],
+        manual_parameters=[
+            openapi.Parameter('task_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True,
+                            description='Celery task ID'),
+            openapi.Parameter('task_type', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=False,
+                            description='Task type: classify, extract_risk, findings_report, sync_data_room'),
+        ],
+        responses={
+            200: openapi.Response(
+                description="Task status with registered_outputs",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'task_id': openapi.Schema(type=openapi.TYPE_STRING),
+                        'status': openapi.Schema(type=openapi.TYPE_STRING),
+                        'result': openapi.Schema(type=openapi.TYPE_OBJECT),
+                        'registered_outputs': openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    'filename': openapi.Schema(type=openapi.TYPE_STRING),
+                                    'file_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    'path': openapi.Schema(type=openapi.TYPE_STRING),
+                                }
+                            )
+                        ),
+                    }
+                )
+            )
+        }
+    )
+    def get(self, request):
+        """Get the status of a PE task"""
+        from celery.result import AsyncResult
+
+        task_id = request.query_params.get('task_id')
+        if not task_id:
+            return Response(
+                {"error": "task_id parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            result = AsyncResult(task_id)
+            task_status = result.status
+            task_result = result.result if result.ready() else None
+
+            response_data = {
+                'task_id': task_id,
+                'status': task_status,
+                'result': task_result,
+                'registered_outputs': []
+            }
+
+            # If task completed successfully, extract registered_outputs
+            if task_status == 'SUCCESS' and task_result:
+                # Check if result already has registered_outputs
+                if isinstance(task_result, dict) and 'registered_outputs' in task_result:
+                    response_data['registered_outputs'] = task_result['registered_outputs']
+                # For findings report, get the report file
+                elif isinstance(task_result, dict) and 'report_id' in task_result:
+                    report = FindingsReport.objects.filter(
+                        id=task_result['report_id'],
+                        user=request.user
+                    ).first()
+                    if report and report.report_file:
+                        response_data['registered_outputs'] = [{
+                            'filename': report.report_file.filename,
+                            'file_id': report.report_file.id,
+                            'path': report.report_file.filepath
+                        }]
+                # For classification tasks, get the classification record
+                elif isinstance(task_result, dict) and 'file_id' in task_result:
+                    file_obj = File.objects.filter(
+                        id=task_result['file_id'],
+                        user=request.user
+                    ).first()
+                    if file_obj:
+                        response_data['registered_outputs'] = [{
+                            'filename': file_obj.filename,
+                            'file_id': file_obj.id,
+                            'path': file_obj.filepath
+                        }]
+
+            elif task_status == 'FAILURE':
+                response_data['error'] = str(task_result) if task_result else 'Task failed'
+
+            elif task_status == 'PENDING':
+                response_data['message'] = 'Task is pending or does not exist'
+
+            return Response(response_data)
+
+        except Exception as e:
+            logger.error(f"Error checking task status for {task_id}: {str(e)}")
+            return Response(
+                {"error": f"Failed to check task status: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
