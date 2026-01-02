@@ -213,8 +213,13 @@ class FileUploadView(APIView):
                 continue
 
             # ---- 3️⃣ brand-new upload --------------------------------------
-            # final_dir  = os.path.join(base_dir, str(uuid.uuid4()))
-            final_dir  = base_dir
+            # If folder_name is provided, include it in the path so register_file_folder_link
+            # creates the correct folder hierarchy (e.g., 20260102/create-deal-workspace/file.html)
+            folder_name = request.data.get("folder_name") or request.query_params.get("folder_name")
+            if folder_name:
+                final_dir = os.path.join(base_dir, folder_name)
+            else:
+                final_dir = base_dir
             os.makedirs(final_dir, exist_ok=True)
             final_path = os.path.join(final_dir, str(timestamp)[8:]+"_"+meta["filename"])
             os.rename(meta["file_path"], final_path)
@@ -245,17 +250,11 @@ class FileUploadView(APIView):
                 service_id=service_id,
                 extension=extension
             )
+            # register_file_folder_link creates folder hierarchy based on filepath
+            # When folder_name is provided, the file is stored in:
+            # uploads/{client}/{user}/{project}/{service}/{YYYYMMDD}/{folder_name}/{file}
+            # This creates folders like: 20260102/create-deal-workspace/Report.html
             register_file_folder_link(fresh)
-            # _link_to_folder(fresh, user, project_id, service_id)
-
-            # ✅ REMOVED: The folder_name logic was creating duplicate root-level folders
-            # register_file_folder_link already creates the correct folder hierarchy based on file path
-            # The old code was creating an additional FileFolderLink to a root-level folder,
-            # which caused folders like "create-deal-workspace" to appear at root instead of
-            # inside the datetime folder (e.g., "20260102/create-deal-workspace")
-            #
-            # If you need to create a named output folder, ensure the file path includes
-            # the folder name, and register_file_folder_link will create it correctly.
 
             file_payload.append(_resp(fresh, "File uploaded successfully."))
 
