@@ -369,17 +369,48 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=120)
-def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report", project_id=None, service_id=None):
+def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Diligence Findings Report", project_id=None, service_id=None, file_id=None):
     """
     Celery task to generate a comprehensive findings report for a due diligence run.
     Generates a JSON report file and registers it using register_generated_file.
     Returns registered_outputs with file_id for consistency with translation pattern.
+
+    Args:
+        dd_run_id: Due diligence run ID
+        user_id: User ID
+        report_name: Name for the report
+        project_id: Project ID for file registration (will derive from files if not provided)
+        service_id: Service ID for file registration (defaults to 'pe-findings-report')
+        file_id: Optional file ID to derive project_id/service_id from
     """
     try:
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
 
         logger.info(f"Generating findings report for DD run: {dd_run.deal_name}")
+
+        # Get project_id and service_id from the first classified file if not provided
+        # This ensures the report is associated with the same project as the input documents
+        effective_project_id = project_id
+        effective_service_id = service_id or "pe-findings-report"
+        reference_file = None
+
+        if not effective_project_id:
+            # Try to get from specified file_id
+            if file_id:
+                reference_file = File.objects.filter(id=file_id, user=user).first()
+
+            # If no file_id or file not found, try to get from classified documents
+            if not reference_file:
+                first_classification = DocumentClassification.objects.filter(
+                    due_diligence_run=dd_run, user=user
+                ).select_related('file').first()
+                if first_classification:
+                    reference_file = first_classification.file
+
+            if reference_file:
+                effective_project_id = reference_file.project_id
+                logger.info(f"Derived project_id={effective_project_id} from reference file: {reference_file.filename}")
 
         with transaction.atomic():
             # Gather statistics
@@ -488,14 +519,15 @@ def generate_findings_report_task(self, dd_run_id, user_id, report_name="Due Dil
             # Register the generated file
             registered_outputs = []
             if os.path.exists(report_filepath):
-                # Get project_id and service_id from dd_run if not provided
-                effective_project_id = project_id or getattr(dd_run.run, 'project_id', None)
-                effective_service_id = service_id or "pe-findings-report"
+                # Use the reference file's run if available, otherwise use dd_run.run
+                # This is critical: the file must be associated with the original upload run
+                # to appear in the correct sidebar location
+                upload_run = reference_file.run if reference_file else dd_run.run
 
                 registered = register_generated_file(
                     file_path=report_filepath,
                     user=user,
-                    run=dd_run.run,
+                    run=upload_run,
                     project_id=effective_project_id,
                     service_id=effective_service_id,
                     folder_name=os.path.join("findings_reports", datetime_folder)

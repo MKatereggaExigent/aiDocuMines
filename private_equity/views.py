@@ -468,6 +468,11 @@ class IssueSpottingView(APIView):
         if generate_report and project_id and service_id:
             execution_time = time.time() - start_time
             try:
+                # Get a reference file to use its run (for proper file tree association)
+                # This ensures the report appears in the same folder structure as the source files
+                reference_file = files.first() if files.exists() else None
+                upload_run = reference_file.run if reference_file else dd_run.run
+
                 # Extract datetime_folder from DD run's files to maintain folder structure
                 datetime_folder = request.query_params.get('datetime_folder') or get_datetime_folder_from_dd_run(dd_run)
                 report_info = generate_and_register_service_report(
@@ -476,7 +481,7 @@ class IssueSpottingView(APIView):
                     vertical="Private Equity",
                     response_data=response_data,
                     user=request.user,
-                    run=dd_run.run,
+                    run=upload_run,
                     project_id=project_id,
                     service_id_folder=service_id,
                     folder_name="issue-spotting-results",
@@ -534,7 +539,10 @@ class FindingsReportView(APIView):
             type=openapi.TYPE_OBJECT,
             properties={
                 'dd_run_id': openapi.Schema(type=openapi.TYPE_INTEGER),
-                'report_name': openapi.Schema(type=openapi.TYPE_STRING)
+                'report_name': openapi.Schema(type=openapi.TYPE_STRING),
+                'project_id': openapi.Schema(type=openapi.TYPE_STRING, description="Project ID for file registration"),
+                'service_id': openapi.Schema(type=openapi.TYPE_STRING, description="Service ID for file registration"),
+                'file_id': openapi.Schema(type=openapi.TYPE_INTEGER, description="Reference file ID to derive project context")
             },
             required=['dd_run_id']
         ),
@@ -544,6 +552,9 @@ class FindingsReportView(APIView):
         """Generate a new findings report"""
         dd_run_id = request.data.get('dd_run_id')
         report_name = request.data.get('report_name', 'Due Diligence Findings Report')
+        project_id = request.data.get('project_id')
+        service_id = request.data.get('service_id')
+        file_id = request.data.get('file_id')
 
         if not dd_run_id:
             return Response(
@@ -554,8 +565,15 @@ class FindingsReportView(APIView):
         # Ensure user owns the DD run
         dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, run__user=request.user)
 
-        # Trigger report generation task
-        task = generate_findings_report_task.delay(dd_run.id, request.user.id, report_name)
+        # Trigger report generation task with project context
+        task = generate_findings_report_task.delay(
+            dd_run.id,
+            request.user.id,
+            report_name,
+            project_id=project_id,
+            service_id=service_id,
+            file_id=file_id
+        )
 
         return Response({
             "message": "Findings report generation started",
@@ -733,6 +751,13 @@ class RiskClauseSummaryView(APIView):
         if generate_report and project_id and service_id:
             execution_time = time.time() - start_time
             try:
+                # Get a reference file to use its run (for proper file tree association)
+                first_risk_clause = RiskClause.objects.filter(
+                    due_diligence_run=dd_run, user=request.user
+                ).select_related('file').first()
+                reference_file = first_risk_clause.file if first_risk_clause else None
+                upload_run = reference_file.run if reference_file else dd_run.run
+
                 datetime_folder = request.query_params.get('datetime_folder') or get_datetime_folder_from_dd_run(dd_run)
                 report_info = generate_and_register_service_report(
                     service_name="PE Risk Clause Summary",
@@ -740,7 +765,7 @@ class RiskClauseSummaryView(APIView):
                     vertical="Private Equity",
                     response_data=response_data,
                     user=request.user,
-                    run=dd_run.run,
+                    run=upload_run,
                     project_id=project_id,
                     service_id_folder=service_id,
                     folder_name="risk-summary-results",
