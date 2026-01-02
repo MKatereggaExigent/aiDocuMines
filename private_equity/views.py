@@ -198,30 +198,42 @@ class DocumentClassificationView(APIView):
         """Trigger document classification for uploaded files"""
         dd_run_id = request.data.get('dd_run_id')
         file_ids = request.data.get('file_ids', [])
-        
+        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        project_id = request.data.get('project_id')
+        service_id = request.data.get('service_id')
+
         if not dd_run_id or not file_ids:
             return Response(
-                {"error": "dd_run_id and file_ids are required"}, 
+                {"error": "dd_run_id and file_ids are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Ensure user owns the DD run
         dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, run__user=request.user)
-        
+
         # Ensure user owns all files
         files = File.objects.filter(id__in=file_ids, user=request.user)
         if files.count() != len(file_ids):
             return Response(
-                {"error": "Some files not found or not owned by user"}, 
+                {"error": "Some files not found or not owned by user"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Trigger classification tasks
+
+        # ✅ If project_id/service_id not provided, derive from first file
+        if not project_id and files.exists():
+            first_file = files.first()
+            project_id = first_file.project_id
+            service_id = service_id or first_file.service_id
+
+        # Trigger classification tasks with project context
         task_ids = []
         for file_obj in files:
-            task = classify_document_task.delay(file_obj.id, dd_run.id, request.user.id)
+            task = classify_document_task.delay(
+                file_obj.id, dd_run.id, request.user.id,
+                project_id=project_id, service_id=service_id
+            )
             task_ids.append(task.id)
-        
+
         return Response({
             "message": "Document classification started",
             "task_ids": task_ids,
@@ -290,30 +302,42 @@ class RiskClauseExtractionView(APIView):
         """Trigger risk clause extraction for documents"""
         dd_run_id = request.data.get('dd_run_id')
         file_ids = request.data.get('file_ids', [])
-        
+        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        project_id = request.data.get('project_id')
+        service_id = request.data.get('service_id')
+
         if not dd_run_id or not file_ids:
             return Response(
-                {"error": "dd_run_id and file_ids are required"}, 
+                {"error": "dd_run_id and file_ids are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         # Ensure user owns the DD run
         dd_run = get_object_or_404(DueDiligenceRun, pk=dd_run_id, run__user=request.user)
-        
+
         # Ensure user owns all files
         files = File.objects.filter(id__in=file_ids, user=request.user)
         if files.count() != len(file_ids):
             return Response(
-                {"error": "Some files not found or not owned by user"}, 
+                {"error": "Some files not found or not owned by user"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Trigger risk extraction tasks
+
+        # ✅ If project_id/service_id not provided, derive from first file
+        if not project_id and files.exists():
+            first_file = files.first()
+            project_id = first_file.project_id
+            service_id = service_id or first_file.service_id
+
+        # Trigger risk extraction tasks with project context
         task_ids = []
         for file_obj in files:
-            task = extract_risk_clauses_task.delay(file_obj.id, dd_run.id, request.user.id)
+            task = extract_risk_clauses_task.delay(
+                file_obj.id, dd_run.id, request.user.id,
+                project_id=project_id, service_id=service_id
+            )
             task_ids.append(task.id)
-        
+
         return Response({
             "message": "Risk clause extraction started",
             "task_ids": task_ids,
@@ -352,6 +376,9 @@ class IssueSpottingView(APIView):
         """Trigger AI issue spotting for deal documents"""
         deal_workspace_id = request.data.get('deal_workspace_id')
         file_ids = request.data.get('file_ids', [])
+        # ✅ Accept project_id and service_id from frontend to preserve tree location
+        project_id = request.data.get('project_id')
+        service_id = request.data.get('service_id')
         issue_categories = request.data.get('issue_categories', [
             'change_of_control', 'assignment_restrictions', 'mac_clauses',
             'termination_rights', 'indemnification', 'non_compete',
@@ -385,10 +412,19 @@ class IssueSpottingView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Trigger risk extraction tasks for issue spotting
+        # ✅ If project_id/service_id not provided, derive from first file
+        if not project_id and files.exists():
+            first_file = files.first()
+            project_id = first_file.project_id
+            service_id = service_id or first_file.service_id
+
+        # Trigger risk extraction tasks for issue spotting with project context
         task_ids = []
         for file_obj in files:
-            task = extract_risk_clauses_task.delay(file_obj.id, dd_run.id, request.user.id)
+            task = extract_risk_clauses_task.delay(
+                file_obj.id, dd_run.id, request.user.id,
+                project_id=project_id, service_id=service_id
+            )
             task_ids.append(task.id)
 
         return Response({

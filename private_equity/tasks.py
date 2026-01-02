@@ -272,15 +272,23 @@ def _calculate_risk_level(sentence, patterns):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def classify_document_task(self, file_id, dd_run_id, user_id):
+def classify_document_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None):
     """
     Celery task to classify a document using AI/ML models.
     This is a placeholder implementation - replace with actual ML classification logic.
+
+    Args:
+        project_id: Override project_id for output files (uses file's project_id if not provided)
+        service_id: Override service_id for output files (uses file's service_id if not provided)
     """
     try:
         file_obj = File.objects.get(id=file_id)
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
+
+        # ✅ Use provided project_id/service_id or fall back to file's values
+        effective_project_id = project_id or file_obj.project_id
+        effective_service_id = service_id or file_obj.service_id
 
         logger.info(f"Starting document classification for file {file_obj.filename}")
 
@@ -334,15 +342,15 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
                 "metadata": classification.classification_metadata
             }
 
-            # Create output directory
+            # Create output directory - use effective_project_id/service_id from frontend
             datetime_folder = timezone.now().strftime("%Y%m%d")
             output_dir = os.path.join(
                 settings.MEDIA_ROOT,
                 "uploads",
                 str(file_obj.user.client.client_id) if hasattr(file_obj.user, 'client') else "default",
                 str(file_obj.user.id),
-                file_obj.project_id or "default_project",
-                file_obj.service_id or "pe_classification",
+                effective_project_id or "default_project",
+                effective_service_id or "pe_classification",
                 datetime_folder,
                 "classifications"
             )
@@ -355,7 +363,7 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 json.dump(classification_data, f, indent=2, ensure_ascii=False)
 
-            # Register the generated file
+            # Register the generated file - use effective_project_id/service_id
             if os.path.exists(report_filepath):
                 upload_run = file_obj.run
 
@@ -363,8 +371,8 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
                     file_path=report_filepath,
                     user=file_obj.user,
                     run=upload_run,
-                    project_id=file_obj.project_id or "default_project",
-                    service_id=file_obj.service_id or "pe_classification",
+                    project_id=effective_project_id or "default_project",
+                    service_id=effective_service_id or "pe_classification",
                     folder_name=os.path.join("classifications", datetime_folder)
                 )
 
@@ -407,15 +415,23 @@ def classify_document_task(self, file_id, dd_run_id, user_id):
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
+def extract_risk_clauses_task(self, file_id, dd_run_id, user_id, project_id=None, service_id=None):
     """
     Celery task to extract risk clauses from a document using NLP.
     This is a placeholder implementation - replace with actual NLP extraction logic.
+
+    Args:
+        project_id: Override project_id for output files (uses file's project_id if not provided)
+        service_id: Override service_id for output files (uses file's service_id if not provided)
     """
     try:
         file_obj = File.objects.get(id=file_id)
         dd_run = DueDiligenceRun.objects.get(id=dd_run_id)
         user = User.objects.get(id=user_id)
+
+        # ✅ Use provided project_id/service_id or fall back to file's values
+        effective_project_id = project_id or file_obj.project_id
+        effective_service_id = service_id or file_obj.service_id
 
         logger.info(f"Starting risk clause extraction for file {file_obj.filename}")
 
@@ -481,15 +497,15 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
                 except RiskClause.DoesNotExist:
                     continue
 
-            # Create output directory
+            # Create output directory - use effective_project_id/service_id from frontend
             datetime_folder = timezone.now().strftime("%Y%m%d")
             output_dir = os.path.join(
                 settings.MEDIA_ROOT,
                 "uploads",
                 str(file_obj.user.client.client_id) if hasattr(file_obj.user, 'client') else "default",
                 str(file_obj.user.id),
-                file_obj.project_id or "default_project",
-                file_obj.service_id or "pe_risk_extraction",
+                effective_project_id or "default_project",
+                effective_service_id or "pe_risk_extraction",
                 datetime_folder,
                 "risk_clauses"
             )
@@ -502,7 +518,7 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
             with open(report_filepath, 'w', encoding='utf-8') as f:
                 json.dump(risk_clauses_data, f, indent=2, ensure_ascii=False)
 
-            # Register the generated file
+            # Register the generated file - use effective_project_id/service_id
             if os.path.exists(report_filepath):
                 upload_run = file_obj.run
 
@@ -510,8 +526,8 @@ def extract_risk_clauses_task(self, file_id, dd_run_id, user_id):
                     file_path=report_filepath,
                     user=file_obj.user,
                     run=upload_run,
-                    project_id=file_obj.project_id or "default_project",
-                    service_id=file_obj.service_id or "pe_risk_extraction",
+                    project_id=effective_project_id or "default_project",
+                    service_id=effective_service_id or "pe_risk_extraction",
                     folder_name=os.path.join("risk_clauses", datetime_folder)
                 )
 
