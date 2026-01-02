@@ -46,6 +46,11 @@ ALLOWED_FILE_TYPES = {
     "png": "image/png",
     "tiff": "image/tiff",
     "gif": "image/gif",
+    # ✅ Report/generated file types
+    "html": "text/html",
+    "json": "application/json",
+    "xml": "application/xml",
+    "md": "text/markdown",
 }
 
 # ✅ Max file size (100MB limit)

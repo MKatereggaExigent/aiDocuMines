@@ -619,25 +619,15 @@ class CreateServiceExecutionView(APIView):
     )
     def post(self, request):
         try:
-            # Get client and user from OAuth2
-            client_id = request.data.get('client_id') or request.query_params.get('client_id')
-            client_secret = request.data.get('client_secret') or request.query_params.get('client_secret')
-
-            if not client_id or not client_secret:
-                return Response({
-                    'success': False,
-                    'error': 'Missing client_id or client_secret'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            try:
-                client = Client.objects.get(client_id=client_id, client_secret=client_secret)
-            except Client.DoesNotExist:
-                return Response({
-                    'success': False,
-                    'error': 'Invalid client credentials'
-                }, status=status.HTTP_401_UNAUTHORIZED)
-
+            # Get client from authenticated user (multi-tenancy)
             user = request.user
+            client = getattr(user, 'client', None)
+
+            if not client:
+                return Response({
+                    'success': False,
+                    'error': 'User has no associated client'
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             # Extract request data
             vertical = request.data.get('vertical')
