@@ -169,7 +169,7 @@ tiktoken  # Required for OpenAI-style token estimation
 
 # ➕ SQL Streaming & Cross-DB Support
 pyodbc  # For MSSQL and other ODBC drivers
-mysqlclient  # For MySQL (optional, based on usage)
+# mysqlclient  # For MySQL (optional, based on usage) - Not needed, using PostgreSQL
 
 # ➕ PDF Image OCR Helpers (used in PDF chunking)
 wand  # Optional: used with ImageMagick for PDF → image conversion
@@ -183,7 +183,8 @@ streamlit  # If exposing a visual dashboard
 xlrd
 pandas
 
-unstructured[all-docs,pdf]
+# unstructured[all-docs,pdf]  # Requires cmake and onnx - use Docker for full functionality
+unstructured  # Base package without heavy ML dependencies
 
 pdf2image
 pytesseract
@@ -255,9 +256,8 @@ ujson
 urllib3
 
 unstructured
-unstructured[all-docs]
-
-unstructured[local-inference,pdf]
+# unstructured[all-docs]  # Requires cmake/onnx - use Docker for full functionality
+# unstructured[local-inference,pdf]  # Requires cmake/onnx - use Docker for full functionality
 beautifulsoup4
 markdown-it-py
 mdurl
