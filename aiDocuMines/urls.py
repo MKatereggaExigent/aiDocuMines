@@ -126,6 +126,9 @@ urlpatterns = [
     # Service Analytics
     path('api/v1/service-analytics/', include('service_analytics.urls')),
 
+    # Document Classification/Clustering
+    path('api/v1/classification/', include('document_classification.urls')),
+
 ]
 
 # Serve static files for Swagger UI

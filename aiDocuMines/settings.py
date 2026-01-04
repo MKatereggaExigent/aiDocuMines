@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "ip_litigation",
     "regulatory_compliance",
     "service_analytics",
+    "document_classification",
 ]
 
 MIDDLEWARE = [
