@@ -25,6 +25,8 @@ from core.models import File
 from grid_documents_interrogation.models import Topic
 from django.shortcuts import get_object_or_404
 from rest_framework import status, permissions
+from rest_framework.permissions import IsAuthenticated
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 from document_operations.models import Folder, FileFolderLink
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
@@ -91,7 +93,7 @@ class FileUploadView(APIView):
     """
     parser_classes = [MultiPartParser, FormParser]
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Upload multiple files securely using OAuth2 authentication. "
@@ -371,7 +373,7 @@ class UniversalTaskStatusView(APIView):
     Fetch the latest status for a given run_id from EndpointResponseTable.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Retrieve the status of an asynchronous task using run_id.",
@@ -423,7 +425,7 @@ class MetadataView(APIView):
     ✅ Triggers metadata extraction for a given file.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Trigger metadata extraction for a specific file.",
@@ -462,7 +464,7 @@ class FileDownloadView(APIView):
     ✅ Download a file using file_id, dynamically supporting all common formats.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Download a file using file_id. Supports multiple file types.",
@@ -550,7 +552,7 @@ class BulkFolderUploadView(APIView):
     """
     parser_classes = [MultiPartParser, FormParser]
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Upload a folder with multiple documents. Subdirectory structure is preserved.",
@@ -655,7 +657,8 @@ class BulkFolderUploadView(APIView):
 
 
 class AssociateTopicToFileView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def patch(self, request, file_id):
         topic_id = request.data.get("topic_id")
@@ -680,7 +683,7 @@ class FileInsightView(APIView):
     Returns full insight for a given file_id including run, project, and metadata links.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Retrieve insight for a specific file including metadata and associated run.",
@@ -728,7 +731,7 @@ class RunSummaryView(APIView):
     Summarize a processing run by run_id.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Get a summary of a run including all linked files.",
@@ -774,7 +777,7 @@ class ClientSummaryView(APIView):
     Summarize total activity for the current OAuth2 user.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Returns a summary of the current user's files, runs, and storage usage.",
@@ -810,7 +813,7 @@ class StorageLocationsView(APIView):
     Show storage paths for a given file_id (upload and output).
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Returns upload and output paths for a file.",
@@ -840,7 +843,7 @@ class ProjectSummaryView(APIView):
     Lists all files linked to a project_id for the current user.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Returns files belonging to a specific project.",
@@ -877,7 +880,7 @@ class ServiceSummaryView(APIView):
     Lists all files linked to a service_id for the current user.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Returns files linked to a specific service.",

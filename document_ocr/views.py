@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from oauth2_provider.models import Application
@@ -14,6 +15,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 import uuid
 from glob import glob
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ class SubmitOCRAPIView(APIView):
     """
 
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Submit a file for OCR processing.",
@@ -191,7 +193,7 @@ class CheckOCRStatusAPIView(APIView):
     """
 
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Check the status of an OCR process using `ocr_run_id`.",

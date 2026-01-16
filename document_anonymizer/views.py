@@ -27,6 +27,7 @@ from django.shortcuts import get_object_or_404
 from document_anonymizer.models import Anonymize
 from core.models import File
 from document_anonymizer.utils import export_to_markdown, export_to_docx, summarize_blocks, update_structured_block
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 from document_anonymizer.tasks import compute_risk_score_task
 import uuid
 from document_anonymizer.tasks import compute_anonymization_stats_task
@@ -75,7 +76,7 @@ def get_user_from_client_id(client_id):
 
 class SubmitAnonymizationAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[
@@ -219,7 +220,7 @@ class SubmitAnonymizationAPIView(APIView):
 
 class DownloadAnonymizedFileAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[
@@ -279,7 +280,7 @@ class DownloadAnonymizedFileAPIView(APIView):
 
 class SubmitDeAnonymizationAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[client_id_param, file_id_param])
     def post(self, request):
@@ -294,7 +295,7 @@ class SubmitDeAnonymizationAPIView(APIView):
 
 class DownloadDeAnonymizedFileAPIView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[client_id_param, file_id_param])
     def get(self, request):
@@ -306,7 +307,8 @@ class DownloadDeAnonymizedFileAPIView(APIView):
 
 
 class StructuredBlocksView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[
         openapi.Parameter('file_id', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
@@ -333,7 +335,8 @@ class StructuredBlocksView(APIView):
 
 class SummarizeBlocksView(APIView):
     parser_classes = [JSONParser]
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         file_id = request.data.get("file_id")
@@ -353,7 +356,8 @@ class SummarizeBlocksView(APIView):
 
 class EditBlockView(APIView):
     parser_classes = [JSONParser]
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def patch(self, request):
         file_id = request.data.get("file_id")
@@ -369,7 +373,8 @@ class EditBlockView(APIView):
 
 class ExportBlocksView(APIView):
     parser_classes = [JSONParser]
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         file_id = request.data.get("file_id")
@@ -390,7 +395,8 @@ class ExportBlocksView(APIView):
 
 
 class DownloadStructuredMarkdownView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[file_id_param, variant_param]
@@ -413,7 +419,8 @@ class DownloadStructuredMarkdownView(APIView):
 
 
 class DownloadStructuredHTMLView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[file_id_param, variant_param]
@@ -436,7 +443,8 @@ class DownloadStructuredHTMLView(APIView):
 
 
 class DownloadStructuredTextView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[file_id_param, variant_param]
@@ -462,7 +470,8 @@ class DownloadStructuredTextView(APIView):
 
 
 class DownloadStructuredJSONView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[file_id_param, variant_param]
@@ -491,7 +500,7 @@ from celery.result import AsyncResult
 
 class DocumentRiskScoreView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[file_id_param])
     def get(self, request):
@@ -509,7 +518,7 @@ class DocumentRiskScoreResultView(APIView):
     Fetches the result of a risk score analysis task
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[
         openapi.Parameter("task_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
@@ -533,7 +542,8 @@ class DocumentRiskScoreResultView(APIView):
 
 
 class DownloadStructuredDocxView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get(self, request):
         file_id = request.query_params.get("file_id")
@@ -551,7 +561,8 @@ class DownloadStructuredDocxView(APIView):
 
 
 class DownloadRedactionReadyJSONView(APIView):
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(manual_parameters=[
         openapi.Parameter("file_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
@@ -589,7 +600,7 @@ from datetime import datetime
 
 class AnonymizationStatsView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[
@@ -633,7 +644,7 @@ class AnonymizationStatsView(APIView):
 
 class AnonymizationStatsResultView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         manual_parameters=[
@@ -669,7 +680,7 @@ class AnonymizationStatsResultView(APIView):
 
 class AnonymizationStatsHistoryView(generics.ListAPIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
     serializer_class = AnonymizationStatsSerializer
     # pagination_class = PageNumberPagination  # Uses Django's default pagination
     pagination_class = StandardResultsSetPagination
@@ -694,7 +705,7 @@ class AnonymizationStatsHistoryView(generics.ListAPIView):
 
 class AnonymizationInsightsView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Fetch or compute anonymization insights for the current user.",
@@ -745,7 +756,7 @@ class AnonymizationInsightsView(APIView):
 
 class SupportedEntitiesView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [IsAuthenticated, TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="Lists the actual spaCy & Presidio entity labels available at runtime.",

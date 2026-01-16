@@ -13,6 +13,7 @@ from datetime import datetime
 from django.shortcuts import get_object_or_404
 from oauth2_provider.models import Application
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 from django.http import FileResponse
 import logging
 from django.db.utils import IntegrityError
@@ -29,7 +30,7 @@ class FileEventLogView(APIView):
     ✅ Return a list of actions performed on a file (opened, modified, processed).
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdminOrSuperUser]
 
     @swagger_auto_schema(
         operation_description="List file events (e.g. opened, modified, processed)",

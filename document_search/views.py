@@ -9,6 +9,7 @@ from sentence_transformers import SentenceTransformer
 
 from rest_framework.permissions import IsAuthenticated
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 
 from django.core.cache import cache
 from celery.result import AsyncResult
@@ -63,7 +64,7 @@ class SemanticFileSearchView(APIView):
     body: {"query": "data science", "top_k": 5, "file_id": optional, "filters": optional}
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request, *args, **kwargs):
         user = request.user
@@ -101,7 +102,8 @@ class SemanticFileSearchView(APIView):
 # 🔍 Search API (sync)
 # ─────────────────────────────────────────────────────────────
 class ChunkedFileSearchView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [permissions.IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         serializer = SearchRequestSerializer(data=request.data)
@@ -181,7 +183,8 @@ class TriggerVectorIndexingView(APIView):
     POST  /api/v1/document-search/index/
     body: {"file_ids": [2, 3, 4], "force": false}
     """
-    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [permissions.IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         ser = IndexRequestSerializer(data=request.data)
@@ -227,9 +230,9 @@ class BulkReindexMissingView(APIView):
         )
 
 
-class ChunkedFileSearchView(APIView):
+class ChunkedFileSearchViewV2(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request, *args, **kwargs):
         user = request.user
@@ -272,7 +275,7 @@ class ChunkedFileSearchView(APIView):
 
 class AdvancedDocumentSearchView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         user = request.user
@@ -359,7 +362,7 @@ class AdvancedDocumentSearchView(APIView):
 
 class SearchResultView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get(self, request, task_id, *args, **kwargs):
         task_id = str(task_id)

@@ -3,6 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 
 from .models import Topic, Query, DatabaseConnection
 from .serializers import TopicSerializer, QuerySerializer, DatabaseConnectionSerializer
@@ -25,7 +26,7 @@ from .file_readers import read_pdf_file
 # ──────────────────────────────────────────────────────────────────────────────
 class DatabaseConnectionViewSet(viewsets.ModelViewSet):
     serializer_class = DatabaseConnectionSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get_queryset(self):
         return DatabaseConnection.objects.filter(owner=self.request.user)
@@ -54,7 +55,7 @@ class DatabaseConnectionViewSet(viewsets.ModelViewSet):
 # ──────────────────────────────────────────────────────────────────────────────
 class TopicViewSet(viewsets.ModelViewSet):
     serializer_class = TopicSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get_queryset(self):
         return Topic.objects.filter(user=self.request.user)
@@ -152,7 +153,7 @@ class TopicViewSet(viewsets.ModelViewSet):
 # ──────────────────────────────────────────────────────────────────────────────
 class QueryViewSet(viewsets.ModelViewSet):
     serializer_class = QuerySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get_queryset(self):
         return Query.objects.filter(user=self.request.user).order_by('-created_at')

@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
 from rest_framework import status, generics, filters
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 
 from integrations.oidc_utils import get_or_create_nextcloud_oidc_user, generate_nextcloud_oidc_url
 from integrations.tasks import generate_nextcloud_url_async, sync_user_to_nextcloud_host
@@ -49,7 +50,7 @@ class NextcloudRedirectView(LoginRequiredMixin, View):
 
 
 class NextcloudAutologinView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def get(self, request):
         user = request.user

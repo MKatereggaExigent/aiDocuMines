@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication
+from custom_authentication.permissions import IsClientOrAdminOrSuperUser
 
 from . import utils
 from .serializers import SearchRequestSerializer, AdvancedSearchSerializer
@@ -32,7 +33,7 @@ class ForceReindexView(APIView):
 
 class IndexSingleFileView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request, file_id):
         try:
@@ -51,7 +52,7 @@ class IndexSingleFileView(APIView):
 
 class SearchView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         serializer = SearchRequestSerializer(data=request.data)
@@ -72,7 +73,7 @@ class SearchView(APIView):
 
 class AdvancedSearchView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsClientOrAdminOrSuperUser]
 
     def post(self, request):
         serializer = AdvancedSearchSerializer(data=request.data)
