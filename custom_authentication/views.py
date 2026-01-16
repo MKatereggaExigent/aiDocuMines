@@ -665,10 +665,14 @@ class ListUsersView(APIView):
         tags=["Admin"],
     )
     def get(self, request):
-        if not request.user.is_staff:
+        if not request.user.is_staff and not request.user.is_superuser:
             return Response({"error": "Admin access required"}, status=status.HTTP_403_FORBIDDEN)
 
-        users = User.objects.filter(client=request.user.client)
+        # Superusers can see all users, admins can only see users from their client
+        if request.user.is_superuser:
+            users = User.objects.all()
+        else:
+            users = User.objects.filter(client=request.user.client)
 
         user_data = []
         for user in users:
