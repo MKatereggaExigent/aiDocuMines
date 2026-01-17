@@ -1645,3 +1645,376 @@ class SupersuperuserCleanDatabaseView(APIView):
         except Exception as e:
             logger.error(f"❌ Cleanup failed: {e}")
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROLE MANAGEMENT ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Define the available roles in the system
+AVAILABLE_ROLES = [
+    {"name": "Admin", "description": "Full administrative access", "level": 100},
+    {"name": "Manager", "description": "Can manage users and projects within their client", "level": 80},
+    {"name": "Developer", "description": "Technical access for API integrations", "level": 60},
+    {"name": "Client", "description": "Standard client user access", "level": 40},
+    {"name": "Guest", "description": "Limited read-only access", "level": 20},
+]
+
+ROLE_NAMES = [role["name"] for role in AVAILABLE_ROLES]
+
+
+class ListRolesView(APIView):
+    """List all available roles in the system."""
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAdminOrSuperUser]
+
+    @swagger_auto_schema(
+        operation_description="List all available roles that can be assigned to users.",
+        tags=["Admin - Roles"],
+        responses={200: "List of available roles"},
+    )
+    def get(self, request):
+        # Ensure all roles exist in the database
+        for role in AVAILABLE_ROLES:
+            Group.objects.get_or_create(name=role["name"])
+
+        return Response({
+            "roles": AVAILABLE_ROLES,
+            "total": len(AVAILABLE_ROLES)
+        }, status=status.HTTP_200_OK)
+
+
+class GetUserRolesView(APIView):
+    """Get all roles assigned to a specific user."""
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAdminOrSuperUser]
+
+    @swagger_auto_schema(
+        operation_description="Get all roles assigned to a specific user.",
+        tags=["Admin - Roles"],
+        responses={200: "User roles", 404: "User not found"},
+    )
+    def get(self, request, user_id):
+        try:
+            user = CustomUser.objects.get(id=user_id)
+            user_roles = list(user.groups.values_list("name", flat=True))
+
+            return Response({
+                "user_id": user.id,
+                "email": user.email,
+                "roles": user_roles,
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+            }, status=status.HTTP_200_OK)
+
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AssignUserRoleView(APIView):
+    """Assign a role to a user."""
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAdminOrSuperUser]
+
+    @swagger_auto_schema(
+        operation_description="Assign a role to a user. Multiple roles can be assigned.",
+        tags=["Admin - Roles"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "role": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Role name to assign",
+                    enum=ROLE_NAMES
+                ),
+                "set_staff": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Also set is_staff=True (for Admin role)",
+                    default=False
+                ),
+                "set_superuser": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Also set is_superuser=True (for Admin role)",
+                    default=False
+                ),
+            },
+            required=["role"],
+        ),
+        responses={200: "Role assigned", 400: "Invalid role", 404: "User not found"},
+    )
+    def post(self, request, user_id):
+        role_name = request.data.get("role")
+        set_staff = request.data.get("set_staff", False)
+        set_superuser = request.data.get("set_superuser", False)
+
+        if not role_name:
+            return Response({"error": "Role name is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role_name not in ROLE_NAMES:
+            return Response({
+                "error": f"Invalid role '{role_name}'. Available roles: {ROLE_NAMES}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = CustomUser.objects.get(id=user_id)
+
+            # Prevent non-superusers from assigning Admin role
+            if role_name == "Admin" and not request.user.is_superuser:
+                return Response({
+                    "error": "Only superusers can assign the Admin role"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get or create the role group
+            role_group, _ = Group.objects.get_or_create(name=role_name)
+
+            # Add the role to the user
+            user.groups.add(role_group)
+
+            # Optionally set staff/superuser flags
+            if set_staff or role_name == "Admin":
+                user.is_staff = True
+            if set_superuser:
+                if not request.user.is_superuser:
+                    return Response({
+                        "error": "Only superusers can grant superuser status"
+                    }, status=status.HTTP_403_FORBIDDEN)
+                user.is_superuser = True
+
+            user.save()
+
+            # Log the activity
+            log_activity(user, "ROLE_ASSIGNED", {
+                "role": role_name,
+                "assigned_by": request.user.id,
+                "assigned_by_email": request.user.email
+            })
+
+            return Response({
+                "message": f"Role '{role_name}' assigned to user {user.email}",
+                "user_id": user.id,
+                "email": user.email,
+                "roles": list(user.groups.values_list("name", flat=True)),
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+            }, status=status.HTTP_200_OK)
+
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class RemoveUserRoleView(APIView):
+    """Remove a role from a user."""
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAdminOrSuperUser]
+
+    @swagger_auto_schema(
+        operation_description="Remove a role from a user.",
+        tags=["Admin - Roles"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "role": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description="Role name to remove",
+                    enum=ROLE_NAMES
+                ),
+                "revoke_staff": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Also set is_staff=False",
+                    default=False
+                ),
+                "revoke_superuser": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Also set is_superuser=False",
+                    default=False
+                ),
+            },
+            required=["role"],
+        ),
+        responses={200: "Role removed", 400: "Invalid role", 404: "User not found"},
+    )
+    def post(self, request, user_id):
+        role_name = request.data.get("role")
+        revoke_staff = request.data.get("revoke_staff", False)
+        revoke_superuser = request.data.get("revoke_superuser", False)
+
+        if not role_name:
+            return Response({"error": "Role name is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if role_name not in ROLE_NAMES:
+            return Response({
+                "error": f"Invalid role '{role_name}'. Available roles: {ROLE_NAMES}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = CustomUser.objects.get(id=user_id)
+
+            # Prevent removing Admin role from self
+            if role_name == "Admin" and user.id == request.user.id:
+                return Response({
+                    "error": "You cannot remove the Admin role from yourself"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Prevent non-superusers from removing Admin role
+            if role_name == "Admin" and not request.user.is_superuser:
+                return Response({
+                    "error": "Only superusers can remove the Admin role"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Get the role group
+            try:
+                role_group = Group.objects.get(name=role_name)
+                user.groups.remove(role_group)
+            except Group.DoesNotExist:
+                pass  # Role doesn't exist, nothing to remove
+
+            # Optionally revoke staff/superuser flags
+            if revoke_staff:
+                user.is_staff = False
+            if revoke_superuser:
+                if not request.user.is_superuser:
+                    return Response({
+                        "error": "Only superusers can revoke superuser status"
+                    }, status=status.HTTP_403_FORBIDDEN)
+                user.is_superuser = False
+
+            # If removing Admin role, also revoke elevated permissions
+            if role_name == "Admin":
+                user.is_staff = False
+                user.is_superuser = False
+                # Assign Guest role as fallback
+                guest_group, _ = Group.objects.get_or_create(name="Guest")
+                user.groups.add(guest_group)
+
+            user.save()
+
+            # Log the activity
+            log_activity(user, "ROLE_REMOVED", {
+                "role": role_name,
+                "removed_by": request.user.id,
+                "removed_by_email": request.user.email
+            })
+
+            return Response({
+                "message": f"Role '{role_name}' removed from user {user.email}",
+                "user_id": user.id,
+                "email": user.email,
+                "roles": list(user.groups.values_list("name", flat=True)),
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+            }, status=status.HTTP_200_OK)
+
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class SetUserRolesView(APIView):
+    """Set all roles for a user (replaces existing roles)."""
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [IsAdminOrSuperUser]
+
+    @swagger_auto_schema(
+        operation_description="Set all roles for a user. This replaces all existing roles.",
+        tags=["Admin - Roles"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "roles": openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(type=openapi.TYPE_STRING, enum=ROLE_NAMES),
+                    description="List of role names to set"
+                ),
+                "set_staff": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Set is_staff flag",
+                    default=False
+                ),
+                "set_superuser": openapi.Schema(
+                    type=openapi.TYPE_BOOLEAN,
+                    description="Set is_superuser flag",
+                    default=False
+                ),
+            },
+            required=["roles"],
+        ),
+        responses={200: "Roles set", 400: "Invalid roles", 404: "User not found"},
+    )
+    def post(self, request, user_id):
+        role_names = request.data.get("roles", [])
+        set_staff = request.data.get("set_staff", False)
+        set_superuser = request.data.get("set_superuser", False)
+
+        if not role_names:
+            return Response({"error": "At least one role is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate all roles
+        invalid_roles = [r for r in role_names if r not in ROLE_NAMES]
+        if invalid_roles:
+            return Response({
+                "error": f"Invalid roles: {invalid_roles}. Available roles: {ROLE_NAMES}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user = CustomUser.objects.get(id=user_id)
+
+            # Check Admin role assignment permissions
+            if "Admin" in role_names and not request.user.is_superuser:
+                return Response({
+                    "error": "Only superusers can assign the Admin role"
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Prevent removing Admin role from self
+            current_roles = set(user.groups.values_list("name", flat=True))
+            if "Admin" in current_roles and "Admin" not in role_names and user.id == request.user.id:
+                return Response({
+                    "error": "You cannot remove the Admin role from yourself"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Clear all existing roles
+            user.groups.clear()
+
+            # Add new roles
+            for role_name in role_names:
+                role_group, _ = Group.objects.get_or_create(name=role_name)
+                user.groups.add(role_group)
+
+            # Set staff/superuser flags based on roles
+            if "Admin" in role_names:
+                user.is_staff = True
+                if set_superuser:
+                    if not request.user.is_superuser:
+                        return Response({
+                            "error": "Only superusers can grant superuser status"
+                        }, status=status.HTTP_403_FORBIDDEN)
+                    user.is_superuser = True
+            else:
+                user.is_staff = set_staff
+                if set_superuser:
+                    if not request.user.is_superuser:
+                        return Response({
+                            "error": "Only superusers can grant superuser status"
+                        }, status=status.HTTP_403_FORBIDDEN)
+                    user.is_superuser = set_superuser
+                else:
+                    user.is_superuser = False
+
+            user.save()
+
+            # Log the activity
+            log_activity(user, "ROLES_SET", {
+                "roles": role_names,
+                "set_by": request.user.id,
+                "set_by_email": request.user.email
+            })
+
+            return Response({
+                "message": f"Roles set for user {user.email}",
+                "user_id": user.id,
+                "email": user.email,
+                "roles": list(user.groups.values_list("name", flat=True)),
+                "is_staff": user.is_staff,
+                "is_superuser": user.is_superuser,
+            }, status=status.HTTP_200_OK)
+
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
