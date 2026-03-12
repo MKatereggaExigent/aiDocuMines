@@ -175,7 +175,7 @@ class FileAccessEntry(models.Model):
             models.UniqueConstraint(fields=["file_link", "user"], name="unique_file_user_access"),
             models.UniqueConstraint(fields=["file_link", "group"], name="unique_file_group_access"),
             models.CheckConstraint(
-                check=(
+                condition=(
                     models.Q(user__isnull=False, group__isnull=True) |
                     models.Q(user__isnull=True, group__isnull=False)
                 ),
