@@ -185,6 +185,7 @@ pandas
 
 # unstructured[all-docs,pdf]  # Requires cmake and onnx - use Docker for full functionality
 unstructured  # Base package without heavy ML dependencies
+unstructured-inference  # Required by unstructured for PDF processing
 
 pdf2image
 pytesseract
