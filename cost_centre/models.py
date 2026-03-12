@@ -87,7 +87,7 @@ class EventLog(BaseModel):
         constraints = [
             # prevent impossible combinations at DB level when we mirror tokens_used on the event
             models.CheckConstraint(
-                check=Q(service_type=ServiceType.PAYABLE) | Q(tokens_used=0),
+                condition=Q(service_type=ServiceType.PAYABLE) | Q(tokens_used=0),
                 name="cc_evt_tokens_zero_if_non_payable",
             ),
             # best-effort idempotency guard (not globally unique to allow null/blank)
@@ -134,8 +134,8 @@ class Budget(BaseModel):
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["user", "tenant"], name="cc_budget_user_tenant_unique"),
-            models.CheckConstraint(check=Q(token_limit__gte=0), name="cc_budget_token_nonneg"),
-            models.CheckConstraint(check=Q(financial_limit__gte=0), name="cc_budget_fin_nonneg"),
+            models.CheckConstraint(condition=Q(token_limit__gte=0), name="cc_budget_token_nonneg"),
+            models.CheckConstraint(condition=Q(financial_limit__gte=0), name="cc_budget_fin_nonneg"),
         ]
         indexes = [
             models.Index(fields=["tenant", "user"], name="cc_budget_ten_user"),
@@ -183,7 +183,7 @@ class Subscription(BaseModel):
             models.Index(fields=["plan_code"], name="cc_sub_plan"),
         ]
         constraints = [
-            models.CheckConstraint(check=Q(seat_count__gte=1), name="cc_sub_seats_ge_1"),
+            models.CheckConstraint(condition=Q(seat_count__gte=1), name="cc_sub_seats_ge_1"),
         ]
 
     def __str__(self):
@@ -218,7 +218,7 @@ class PaymentHistory(BaseModel):
             models.Index(fields=["user", "-payment_date"], name="cc_pay_user_date"),
         ]
         constraints = [
-            models.CheckConstraint(check=Q(amount_paid__gte=0), name="cc_pay_amount_nonneg"),
+            models.CheckConstraint(condition=Q(amount_paid__gte=0), name="cc_pay_amount_nonneg"),
         ]
 
     def __str__(self):
