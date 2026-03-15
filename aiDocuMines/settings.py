@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.postgres",
     "rest_framework",
     "rest_framework.authtoken",
     "django_extensions",
@@ -266,6 +267,7 @@ OIDC_ISS_ENDPOINT = "https://aidocumines-api-layer.aidocumines.com/o"
 
 CORS_ALLOWED_ORIGINS = [
     "http://aidocumines.com",
+    "https://aidocumines.com",
     "https://aidocumines.aidocumines.com",
     "http://41.76.109.131:8020",
     "http://41.76.109.131:4200",  # ✅ ADD THIS
