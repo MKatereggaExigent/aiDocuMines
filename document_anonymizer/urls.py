@@ -21,6 +21,7 @@ from .views import (
     AnonymizationStatsHistoryView,
     AnonymizationInsightsView,
     SupportedEntitiesView,   # ← add this
+    CheckAnonymizationResultsView,
     health_check
 )
 from .task_statuses import AnonymizationTaskStatusView
@@ -66,6 +67,9 @@ urlpatterns = [
 
     # urlpatterns (add near the insights / stats routes)
     path("supported-entities/", SupportedEntitiesView.as_view(), name="supported-entities"),
+
+    # Batch check results
+    path("check-results/", CheckAnonymizationResultsView.as_view(), name="check-anonymization-results"),
 
     # Health
     path("health/", health_check, name="health_check"),

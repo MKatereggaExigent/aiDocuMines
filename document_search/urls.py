@@ -19,5 +19,8 @@ urlpatterns = [
 
     # ──────────── 🔍 Retrieve Semantic Search Results ───────────────
     path( "search-results/<uuid:task_id>/", views.SearchResultView.as_view(), name="search-results",),
+
+    # ──────────── 🔍 Check Index Status ───────────────
+    path("check-index/", views.CheckIndexView.as_view(), name="check-index"),
 ]
 

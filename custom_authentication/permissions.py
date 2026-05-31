@@ -1,5 +1,5 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
-from document_operations.models import EffectiveAccess, FileFolderLink, Folder
+from document_operations.models import EffectiveAccess, FileFolderLink, Folder, FileAccessEntry
 from core.models import File
 
 
@@ -250,6 +250,24 @@ class HasEffectiveAccess(BasePermission):
 
         required = method_map.get(request.method)
         return getattr(access, required, False) if required else True
+
+
+class HasAnyAccess(BasePermission):
+    """Checks if user has any access (owner via EffectiveAccess or sharee via FileAccessEntry)."""
+    def has_object_permission(self, request, view, obj):
+        if isinstance(obj, Folder):
+            if EffectiveAccess.objects.filter(user=request.user, folder=obj).exists():
+                return True
+            return FileAccessEntry.objects.filter(user=request.user, file_link__folder=obj).exists()
+        elif isinstance(obj, File):
+            if EffectiveAccess.objects.filter(user=request.user, file=obj).exists():
+                return True
+            return FileAccessEntry.objects.filter(user=request.user, file_link__file=obj).exists()
+        elif isinstance(obj, FileFolderLink):
+            if EffectiveAccess.objects.filter(user=request.user, file=obj.file).exists():
+                return True
+            return FileAccessEntry.objects.filter(user=request.user, file_link=obj).exists()
+        return False
 
 
 class IsReadOnly(BasePermission):

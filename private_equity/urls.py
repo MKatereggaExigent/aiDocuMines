@@ -81,6 +81,7 @@ urlpatterns = [
 
     # Post-Close Obligations
     path('post-close-obligations/', PostCloseObligationListCreateView.as_view(), name='post-close-obligations'),
+    path('import-obligations/', PostCloseObligationListCreateView.as_view(), name='import-obligations-alias'),
 
     # Deal Velocity Metrics
     path('deal-velocity-metrics/', DealVelocityMetricsListView.as_view(), name='deal-velocity-metrics'),
@@ -114,6 +115,7 @@ urlpatterns = [
 
     # Signature Trackers
     path('signature-trackers/', SignatureTrackerListCreateView.as_view(), name='signature-trackers'),
+    path('signature-tracker/', SignatureTrackerListCreateView.as_view(), name='signature-tracker-alias'),
 
     # ═══════════════════════════════════════════════════════════════
     # 📋 CLOSING MANAGEMENT ENDPOINTS
@@ -121,9 +123,11 @@ urlpatterns = [
 
     # Conditions Precedent
     path('conditions-precedent/', ConditionPrecedentListCreateView.as_view(), name='conditions-precedent'),
+    path('cp-tracker/', ConditionPrecedentListCreateView.as_view(), name='cp-tracker-alias'),
 
     # Closing Binders
     path('closing-binders/', ClosingBinderListCreateView.as_view(), name='closing-binders'),
+    path('closing-binder/', ClosingBinderListCreateView.as_view(), name='closing-binder-alias'),
 
     # ═══════════════════════════════════════════════════════════════
     # 📊 COMPLIANCE TRACKING ENDPOINTS
@@ -131,9 +135,11 @@ urlpatterns = [
 
     # Covenants
     path('covenants/', CovenantListCreateView.as_view(), name='covenants'),
+    path('covenant-tracker/', CovenantListCreateView.as_view(), name='covenant-tracker-alias'),
 
     # Consent Filings
     path('consent-filings/', ConsentFilingListCreateView.as_view(), name='consent-filings'),
+    path('consent-filing-tracker/', ConsentFilingListCreateView.as_view(), name='consent-filing-tracker-alias'),
 
     # Portfolio Compliance Dashboard
     path('portfolio-compliance/', PortfolioComplianceView.as_view(), name='portfolio-compliance'),

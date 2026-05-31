@@ -763,3 +763,30 @@ class SupportedEntitiesView(APIView):
             payload["weights"] = list_supported_entities_with_weights()
         return Response(payload, status=200)
 
+
+class CheckAnonymizationResultsView(APIView):
+    """
+    POST /api/v1/anonymizer/check-results/
+    Body: {"file_ids": [1, 2, 3]}
+    Returns anonymization processing status for each file.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    def post(self, request):
+        file_ids = request.data.get("file_ids", [])
+        if not file_ids:
+            return Response({"error": "file_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = {}
+        for fid in file_ids:
+            anon = Anonymize.objects.filter(
+                original_file__id=fid, status="Completed", is_active=True
+            ).order_by("-created_at").first()
+            if anon:
+                results[fid] = {"status": "Completed", "anonymized_id": str(anon.id)}
+            else:
+                results[fid] = {"status": "NotProcessed"}
+
+        return Response({"results": results}, status=status.HTTP_200_OK)
+

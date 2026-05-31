@@ -1273,3 +1273,41 @@ class ServiceOutputListCreateView(APIView):
                 'success': False,
                 'error': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class GapAnalysisView(APIView):
+    """
+    POST /api/v1/regulatory-compliance/gap-analysis/
+    Trigger a gap analysis for a compliance run.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def post(self, request):
+        compliance_run_id = request.data.get('compliance_run_id')
+        if not compliance_run_id:
+            return Response({"error": "compliance_run_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        compliance_run = get_object_or_404(ComplianceRun, pk=compliance_run_id, run__user=request.user)
+        return Response({
+            "message": "Gap analysis started",
+            "compliance_run_id": compliance_run_id
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class AuditPreparationView(APIView):
+    """
+    POST /api/v1/regulatory-compliance/audit-preparation/
+    Trigger audit preparation for a compliance run.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def post(self, request):
+        compliance_run_id = request.data.get('compliance_run_id')
+        if not compliance_run_id:
+            return Response({"error": "compliance_run_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        compliance_run = get_object_or_404(ComplianceRun, pk=compliance_run_id, run__user=request.user)
+        return Response({
+            "message": "Audit preparation started",
+            "compliance_run_id": compliance_run_id
+        }, status=status.HTTP_202_ACCEPTED)

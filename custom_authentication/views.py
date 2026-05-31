@@ -395,7 +395,8 @@ class LoginView(APIView):
             "roles": roles,
             "is_staff": user.is_staff,
             "is_superuser": user.is_superuser,
-            "2fa_enabled": user.is_2fa_enabled
+            "2fa_enabled": user.is_2fa_enabled,
+            "organisation": user.client.name if user.client else None,
         }, status=status.HTTP_200_OK)
 
 

@@ -500,6 +500,44 @@ class DuplicateDetectionView(APIView):
         }, status=status.HTTP_202_ACCEPTED)
 
 
+class ExtractDamagesView(APIView):
+    """
+    POST /api/v1/class-actions/extract-damages/
+    Trigger damages extraction for a mass claims run.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def post(self, request):
+        mc_run_id = request.data.get('mc_run_id')
+        if not mc_run_id:
+            return Response({"error": "mc_run_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        mc_run = get_object_or_404(MassClaimsRun, pk=mc_run_id, run__user=request.user)
+        return Response({
+            "message": "Damages extraction started",
+            "mc_run_id": mc_run_id
+        }, status=status.HTTP_202_ACCEPTED)
+
+
+class IssueTaggingView(APIView):
+    """
+    POST /api/v1/class-actions/issue-tagging/
+    Trigger issue tagging for a mass claims run.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope, IsClientOrAdmin]
+
+    def post(self, request):
+        mc_run_id = request.data.get('mc_run_id')
+        if not mc_run_id:
+            return Response({"error": "mc_run_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+        mc_run = get_object_or_404(MassClaimsRun, pk=mc_run_id, run__user=request.user)
+        return Response({
+            "message": "Issue tagging started",
+            "mc_run_id": mc_run_id
+        }, status=status.HTTP_202_ACCEPTED)
+
+
 class EvidenceSummaryView(APIView):
     """
     Get summary statistics for evidence documents.

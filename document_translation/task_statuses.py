@@ -135,8 +135,13 @@ class TranslationTaskStatusView(APIView):
         for tf in qs:
             if not tf.translated_filepath:
                 continue
+            
+            # Find the File record for this translated file
+            file_record = File.objects.filter(filepath=tf.translated_filepath).first()
+            
             registered_outputs.append({
                 "translated_file_id": str(tf.id),
+                "file_id": str(file_record.id) if file_record else None,
                 "language": tf.run.to_language,
                 "filename": os.path.basename(tf.translated_filepath) if tf.translated_filepath else None,
                 "filepath": tf.translated_filepath,

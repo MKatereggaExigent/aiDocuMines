@@ -57,6 +57,26 @@ def delete_folder(folder: Folder):
     folder.delete()
 
 
+def trash_folder_recursive(folder):
+    folder.is_trashed = True
+    folder.save()
+    for link in folder.files.all():
+        link.is_trashed = True
+        link.save()
+    for sub in folder.subfolders.all():
+        trash_folder_recursive(sub)
+
+
+def restore_folder_recursive(folder):
+    folder.is_trashed = False
+    folder.save()
+    for link in folder.files.all():
+        link.is_trashed = False
+        link.save()
+    for sub in folder.subfolders.all():
+        restore_folder_recursive(sub)
+
+
 # 📄 File Operations
 def rename_file(file_id, new_name, actor=None):
     file = File.objects.get(id=file_id)

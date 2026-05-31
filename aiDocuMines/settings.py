@@ -270,11 +270,14 @@ CORS_ALLOWED_ORIGINS = [
     "https://aidocumines.com",
     "https://aidocumines.aidocumines.com",
     "http://41.76.109.131:8020",
-    "http://41.76.109.131:4200",  # ✅ ADD THIS
+    "http://41.76.109.131:4200",
     "http://localhost:4200",
     "http://127.0.0.1:3000",
     "https://aidocumines-frontend.aidocumines.com",
-    "https://ai-docu-mines-frontend.vercel.app"
+    "https://ai-docu-mines-frontend.vercel.app",
+    "https://aidocumines.apps.datasqan.com",
+    "https://aidocumines-api-layer.apps.datasqan.com",
+    "https://aidocumines-backend.apps.datasqan.com",
 ]
 
 SESSION_COOKIE_SECURE = True  # Optional but recommended

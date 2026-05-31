@@ -2172,6 +2172,9 @@ class RiskHeatmapView(APIView):
 
         return Response(final_response)
 
+    def post(self, request):
+        return self.get(request)
+
 
 # ═══════════════════════════════════════════════════════════════
 # 📊 PE TASK STATUS VIEW - Celery Task Status with registered_outputs

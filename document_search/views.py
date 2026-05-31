@@ -14,6 +14,7 @@ from django.core.cache import cache
 from celery.result import AsyncResult
 
 from document_search.models import VectorChunk
+from core.models import File as CoreFile
 from document_search.serializers import (
     SearchRequestSerializer,
     SearchResultSerializer,
@@ -406,4 +407,25 @@ class SearchResultView(APIView):
 
         else:
             return Response({"status": result.state})
+
+
+class CheckIndexView(APIView):
+    """
+    POST /api/v1/document-search/check-index/
+    Body: {"file_ids": [1, 2, 3]}
+    Returns vector indexing status for each file.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        file_ids = request.data.get("file_ids", [])
+        if not file_ids:
+            return Response({"error": "file_ids is required"}, status=400)
+
+        results = {}
+        for fid in file_ids:
+            has_chunks = VectorChunk.objects.filter(file_id=fid).exists()
+            results[fid] = {"indexed": has_chunks}
+
+        return Response({"results": results}, status=200)
 

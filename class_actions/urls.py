@@ -12,6 +12,8 @@ from .views import (
     IntakeFormSummaryView,
     ServiceExecutionListCreateView,
     ServiceOutputListCreateView,
+    ExtractDamagesView,
+    IssueTaggingView,
 )
 
 app_name = 'class_actions'
@@ -38,6 +40,9 @@ urlpatterns = [
     
     # Duplicate Detection
     path('detect-duplicates/', DuplicateDetectionView.as_view(), name='detect-duplicates'),
+    path('duplicate-detection/', DuplicateDetectionView.as_view(), name='duplicate-detection-alias'),
+    path('extract-damages/', ExtractDamagesView.as_view(), name='extract-damages'),
+    path('issue-tagging/', IssueTaggingView.as_view(), name='issue-tagging'),
     
     # Analytics and Summaries
     path('evidence-summary/', EvidenceSummaryView.as_view(), name='evidence-summary'),

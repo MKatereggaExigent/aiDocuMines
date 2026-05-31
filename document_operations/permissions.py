@@ -39,6 +39,18 @@ class HasEffectiveAccess(BasePermission):
         return getattr(access, required, False) if required else True
 
 
+class HasAnyAccess(BasePermission):
+    """Checks if user has any access rights on a given File or Folder (for hide/unhide)."""
+    def has_object_permission(self, request, view, obj):
+        if isinstance(obj, Folder):
+            return EffectiveAccess.objects.filter(user=request.user, folder=obj).exists()
+        elif isinstance(obj, File):
+            return EffectiveAccess.objects.filter(user=request.user, file=obj).exists()
+        elif isinstance(obj, FileFolderLink):
+            return EffectiveAccess.objects.filter(user=request.user, file=obj.file).exists()
+        return False
+
+
 class IsReadOnly(BasePermission):
     """Allows only read-only access."""
     def has_permission(self, request, view):

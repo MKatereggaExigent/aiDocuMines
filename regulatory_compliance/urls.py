@@ -6,7 +6,8 @@ from .views import (
     RedactionTaskView, ComplianceAlertView,
     ComplianceSummaryView, DSARSummaryView, RedactionSummaryView,
     AlertSummaryView, ComplianceReportView,
-    ServiceExecutionListCreateView, ServiceOutputListCreateView
+    ServiceExecutionListCreateView, ServiceOutputListCreateView,
+    GapAnalysisView, AuditPreparationView,
 )
 
 app_name = 'regulatory_compliance'
@@ -42,6 +43,10 @@ urlpatterns = [
     
     # Report Generation
     path('reports/generate/', ComplianceReportView.as_view(), name='generate-compliance-report'),
+
+    # Gap Analysis & Audit Preparation
+    path('gap-analysis/', GapAnalysisView.as_view(), name='gap-analysis'),
+    path('audit-preparation/', AuditPreparationView.as_view(), name='audit-preparation'),
 
     # Service Execution Management
     path('service-executions/', ServiceExecutionListCreateView.as_view(), name='service-executions'),

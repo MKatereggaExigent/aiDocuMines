@@ -187,3 +187,84 @@ class FileAccessEntry(models.Model):
         target = self.user.email if self.user else f"[Group] {self.group.name}"
         return f"{target} -> {self.file_link.file.filename} (R:{self.can_read}, W:{self.can_write})"
 
+
+class UserFileHide(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    file_link = models.ForeignKey(FileFolderLink, on_delete=models.CASCADE, related_name='user_hides')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'file_link')
+
+    def __str__(self):
+        return f"{self.user.email} hid file_link {self.file_link.id}"
+
+
+class UserFolderHide(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='user_hides')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'folder')
+
+    def __str__(self):
+        return f"{self.user.email} hid folder {self.folder.id}"
+
+
+COLOR_CHOICES = [
+    ('red', 'Red'),
+    ('green', 'Green'),
+    ('blue', 'Blue'),
+    ('orange', 'Orange'),
+    ('purple', 'Purple'),
+    ('grey', 'Grey'),
+    ('yellow', 'Yellow'),
+]
+
+
+class FileColorTag(models.Model):
+    file_link = models.OneToOneField(FileFolderLink, on_delete=models.CASCADE, related_name='color_tag')
+    color = models.CharField(max_length=20, choices=COLOR_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.file_link.file.filename} -> {self.color}"
+
+
+class FolderColorTag(models.Model):
+    folder = models.OneToOneField(Folder, on_delete=models.CASCADE, related_name='color_tag')
+    color = models.CharField(max_length=20, choices=COLOR_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.folder.name} -> {self.color}"
+
+
+class FileAlias(models.Model):
+    file_link = models.ForeignKey(FileFolderLink, on_delete=models.CASCADE, related_name='aliases')
+    alias_name = models.CharField(max_length=255)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('file_link', 'alias_name')
+
+    def __str__(self):
+        return f"{self.alias_name} -> {self.file_link.file.filename}"
+
+
+class FolderAlias(models.Model):
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='aliases')
+    alias_name = models.CharField(max_length=255)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('folder', 'alias_name')
+
+    def __str__(self):
+        return f"{self.alias_name} -> {self.folder.name}"
+

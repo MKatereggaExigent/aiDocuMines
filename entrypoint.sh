@@ -126,6 +126,22 @@ if [ "${SERVICE_NAME:-}" = "web" ]; then
     echo "📂 Collecting static files..."
     python manage.py collectstatic --noinput
 
+    # ── Auto-indexing ───────────────────────────────────────────────────
+    echo "🔍 Checking for unindexed files..."
+    python manage.py shell -c "
+import os, django
+os.environ['DJANGO_SETTINGS_MODULE'] = 'aiDocuMines.settings'
+django.setup()
+from core.models import File
+from document_search.models import VectorChunk
+if File.objects.exists() and not VectorChunk.objects.exists():
+    from document_search.tasks import bulk_reindex
+    r = bulk_reindex()
+    print(f'📥 Auto-indexing queued: {r}')
+else:
+    print(f'✅ Files: {File.objects.count()}, VectorChunks: {VectorChunk.objects.count()} — no indexing needed.')
+" 2>&1 | grep -v -E "(UserWarning|PyMilvusDeprecation|pk_resources|RequestDeprecat|tika|nlp_engine|Created NLP|registry|Loaded recognizer|Recognizer not|spaCy|140 object)" | grep -v "^\s*$" | tail -5
+
     echo "🌍 Starting Gunicorn..."
     exec gunicorn aiDocuMines.wsgi:application \
         --bind 0.0.0.0:8020 \

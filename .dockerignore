@@ -1,23 +1,52 @@
-# Virtual envs
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments - critical
 vmEnv312/
 venv/
 .venv/
+env/
+ENV/
 
-# Python junk
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# VCS
+# Git / editors
 .git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
 
-# Node
-node_modules/
+# Local env/secrets
+.env.*
+*.pem
+*.key
 
-# Local artifacts
+# Logs
 *.log
 logs/
-media/
+
+# Archives / deployment bundles - critical
+*.tar
+*.tar.gz
+*.zip
+*.bak
+*.backup
+
+# Node/build caches
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Runtime/generated data
 tmp/
+temp/
 .cache/
+
+# Runtime mounts
+media/
+staticfiles/

@@ -685,6 +685,43 @@ def calculate_anonymization_insights(user):
     )
     insights["deanonymization_count"] = deanonymize_count
 
+    # Aggregate entity stats across all anonymized files for this user
+    anonymize_records = Anonymize.objects.filter(original_file__user=user, is_active=True)
+    files_with_entities = 0
+    files_without_entities = 0
+    total_entities_anonymized = 0
+    entity_type_breakdown = {}
+
+    for record in anonymize_records:
+        combined_map = {}
+        if record.presidio_masking_map:
+            combined_map.update(record.presidio_masking_map)
+        if record.spacy_masking_map:
+            combined_map.update(record.spacy_masking_map)
+
+        entity_counts = {}
+        for mask, original in combined_map.items():
+            entity_type = mask.split("_MASKED_")[0]
+            entity_counts[entity_type] = entity_counts.get(entity_type, 0) + 1
+
+        file_entity_total = sum(entity_counts.values())
+        total_entities_anonymized += file_entity_total
+
+        for entity_type, count in entity_counts.items():
+            entity_type_breakdown[entity_type] = (
+                entity_type_breakdown.get(entity_type, 0) + count
+            )
+
+        if file_entity_total > 0:
+            files_with_entities += 1
+        else:
+            files_without_entities += 1
+
+    insights["files_with_entities"] = files_with_entities
+    insights["files_without_entities"] = files_without_entities
+    insights["total_entities_anonymized"] = total_entities_anonymized
+    insights["entity_type_breakdown"] = entity_type_breakdown
+
     return insights
 
 

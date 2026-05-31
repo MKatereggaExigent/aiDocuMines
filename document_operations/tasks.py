@@ -19,7 +19,9 @@ from .utils import (
     restore_folder_from_trash,
     generate_public_link,
     revoke_public_link,
-    has_file_access
+    has_file_access,
+    trash_folder_recursive,
+    restore_folder_recursive,
 )
 
 import os
@@ -397,4 +399,36 @@ def async_password_protect_file(self, file_id, password_hint):
         raise Exception(result["message"])
 
     return result
+
+
+@shared_task
+def async_bulk_trash_folders(folder_ids):
+    for fid in folder_ids:
+        try:
+            folder = Folder.objects.get(id=fid)
+            trash_folder_recursive(folder)
+        except Folder.DoesNotExist:
+            continue
+    return {"message": f"Trashed {len(folder_ids)} folder(s) recursively"}
+
+
+@shared_task
+def async_bulk_restore_folders(folder_ids):
+    for fid in folder_ids:
+        try:
+            folder = Folder.objects.get(id=fid)
+            restore_folder_recursive(folder)
+        except Folder.DoesNotExist:
+            continue
+    return {"message": f"Restored {len(folder_ids)} folder(s) recursively"}
+
+
+@shared_task
+def async_bulk_delete_folders(folder_ids):
+    for fid in folder_ids:
+        try:
+            Folder.objects.get(id=fid).delete()
+        except Folder.DoesNotExist:
+            continue
+    return {"message": f"Deleted {len(folder_ids)} folder(s) permanently"}
 

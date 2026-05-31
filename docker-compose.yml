@@ -46,7 +46,7 @@ services:
     image: ollama/ollama:latest          # pin latest or a specific version
     container_name: aidocumines_ollama
     restart: unless-stopped
-    ports: ["11434:11434"]
+    ports: ["11435:11434"]
     environment:
       # bind to localhost unless you *need* LAN/Internet access
       # if you need LAN: use 0.0.0.0:11434 and protect with a reverse proxy / firewall
@@ -219,7 +219,7 @@ services:
     networks: [captain-overlay-network]
 
   milvus:
-    image: milvusdb/milvus:v2.4.4
+    image: milvusdb/milvus:v2.6.17
     container_name: aidocumines_milvus
     command: ["milvus", "run", "standalone"]
     restart: unless-stopped

@@ -4,15 +4,24 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from .models import Folder, FileFolderLink
+from .models import (
+    Folder, FileFolderLink, UserFileHide, UserFolderHide,
+    FileColorTag, FolderColorTag, FileAlias, FolderAlias,
+)
 from .serializers import (
     FolderSerializer, FileFolderLinkSerializer,
-    FileSerializer, EffectiveAccessSerializer, RecursiveFolderSerializer
+    FileSerializer, EffectiveAccessSerializer, RecursiveFolderSerializer,
+    FileColorTagSerializer, FolderColorTagSerializer,
+    FileAliasSerializer, FolderAliasSerializer,
 )
 from core.models import File
-from custom_authentication.permissions import IsOwner, HasEffectiveAccess
+from custom_authentication.permissions import IsOwner, HasEffectiveAccess, HasAnyAccess, IsAdminOrSuperUser
+from .models import COLOR_CHOICES
 from .tasks import (
     async_bulk_trash_files,
+    async_bulk_trash_folders,
+    async_bulk_restore_folders,
+    async_bulk_delete_folders,
     async_bulk_move_files_to_folder,
     async_rename_file,
     async_rename_folder,
@@ -90,9 +99,9 @@ class FileDetailView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def get(self, request, pk):
-        file = get_object_or_404(File, pk=pk)
-        self.check_object_permissions(request, file)
-        serializer = FileSerializer(file)
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        serializer = FileSerializer(file_link.file)
         return Response(serializer.data)
 
 
@@ -113,7 +122,7 @@ class RenameFileView(APIView):
             extra={"new_name": new_name}
         )
 
-        async_rename_file.delay(pk, new_name)
+        async_rename_file.delay(file_link.file.id, new_name)
         return Response({"message": "File rename initiated."}, status=202)
 
 
@@ -163,7 +172,7 @@ class MoveFilesView(APIView):
 
 
 class DeleteFileView(APIView):
-    permission_classes = [IsAuthenticated, IsOwner, HasEffectiveAccess]
+    permission_classes = [IsAuthenticated, IsOwner, HasEffectiveAccess, IsAdminOrSuperUser]
 
     def delete(self, request, pk):
         file_link = get_object_or_404(FileFolderLink, pk=pk)
@@ -179,7 +188,7 @@ class DeleteFileView(APIView):
 
 
 class DeleteFolderView(APIView):
-    permission_classes = [IsAuthenticated, IsOwner, HasEffectiveAccess]
+    permission_classes = [IsAuthenticated, IsOwner, HasEffectiveAccess, IsAdminOrSuperUser]
 
     def delete(self, request, pk):
         async_delete_folder.delay(pk)
@@ -202,7 +211,9 @@ class CopyFileView(APIView):
         if not target_folder:
             return Response({"error": "Missing target_folder"}, status=400)
 
-        async_copy_file.delay(pk, target_folder)
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        async_copy_file.delay(file_link.file.id, target_folder)
         return Response({"message": "File copy initiated."}, status=202)
 
 
@@ -267,8 +278,9 @@ class ListFileVersionsView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def get(self, request, pk):
-        file = get_object_or_404(File, pk=pk)
-        versions = file.versions.all()
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        versions = file_link.file.versions.all()
         data = [{
             "version": v.version_number,
             "uploaded_at": v.uploaded_at,
@@ -282,8 +294,9 @@ class RestoreFileVersionView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def post(self, request, pk, version_number):
-        file = get_object_or_404(File, pk=pk)
-        self.check_object_permissions(request, file)
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        file = file_link.file
 
         try:
             version = get_object_or_404(file.versions, version_number=version_number)
@@ -352,11 +365,12 @@ class ShareFileView(APIView):
     parser_classes = [JSONParser] 
 
     @swagger_auto_schema(
-        operation_description="Share a file with users",
+        operation_description="Share a file with users by ID or email",
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 "user_ids": openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_INTEGER)),
+                "emails": openapi.Schema(type=openapi.TYPE_ARRAY, items=openapi.Items(type=openapi.TYPE_STRING)),
                 "access_level": openapi.Schema(type=openapi.TYPE_STRING, enum=["read", "write", "owner"], default="read")
             }
         ),
@@ -366,7 +380,8 @@ class ShareFileView(APIView):
         file_link = get_object_or_404(FileFolderLink, pk=pk)
         self.check_object_permissions(request, file_link)
 
-        user_ids = request.data.get("user_ids", [])
+        user_ids = request.data.get("user_ids", []) or []
+        emails = request.data.get("emails", []) or []
         level = request.data.get("access_level", "read")
 
         access_map = {
@@ -375,6 +390,14 @@ class ShareFileView(APIView):
             "owner": {"can_read": True, "can_write": True, "can_share": True, "is_owner": True}
         }
         perms = access_map.get(level, {"can_read": True})
+
+        # Resolve emails to user IDs
+        if emails:
+            resolved = list(User.objects.filter(email__in=emails).values_list("id", flat=True))
+            user_ids = list(set(user_ids + resolved))
+            unresolved = set(emails) - set(User.objects.filter(email__in=emails).values_list("email", flat=True))
+            if unresolved:
+                return Response({"error": f"Users not found: {', '.join(unresolved)}"}, status=404)
 
         if not user_ids:
             return Response({"error": "No users provided."}, status=400)
@@ -415,8 +438,9 @@ class FilePreviewView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def get(self, request, pk):
-        file = get_object_or_404(File, pk=pk)
-        self.check_object_permissions(request, file)
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        file = file_link.file
 
         return Response({
             "filename": file.filename,
@@ -430,11 +454,14 @@ class FileAuditLogView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def get(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+
         # Logs from FileAuditLog model
-        logs = FileAuditLog.objects.filter(file_id=pk).order_by("-timestamp")
+        logs = FileAuditLog.objects.filter(file_id=file_link.file.id).order_by("-timestamp")
 
         # Access entries from sharing
-        access_entries = FileAccessEntry.objects.filter(file_link__file_id=pk)
+        access_entries = FileAccessEntry.objects.filter(file_link__file_id=file_link.file.id)
 
         log_data = [
             {
@@ -500,6 +527,132 @@ class FileAuditLogView(APIView):
 
         return Response(file_logs + access_log_data, status=200)
 '''
+
+class HideFileView(APIView):
+    permission_classes = [IsAuthenticated, HasAnyAccess]
+
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        UserFileHide.objects.get_or_create(user=request.user, file_link=file_link)
+        return Response({"message": "File hidden from your view."}, status=200)
+
+
+class UnhideFileView(APIView):
+    permission_classes = [IsAuthenticated, HasAnyAccess]
+
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        UserFileHide.objects.filter(user=request.user, file_link=file_link).delete()
+        return Response({"message": "File unhidden."}, status=200)
+
+
+class HideFolderView(APIView):
+    permission_classes = [IsAuthenticated, HasAnyAccess]
+
+    def post(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        self.check_object_permissions(request, folder)
+        UserFolderHide.objects.get_or_create(user=request.user, folder=folder)
+        return Response({"message": "Folder hidden from your view."}, status=200)
+
+
+class UnhideFolderView(APIView):
+    permission_classes = [IsAuthenticated, HasAnyAccess]
+
+    def post(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        self.check_object_permissions(request, folder)
+        UserFolderHide.objects.filter(user=request.user, folder=folder).delete()
+        return Response({"message": "Folder unhidden."}, status=200)
+
+
+class BulkTrashFoldersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        folder_ids = request.data.get("folder_ids", [])
+        if not folder_ids:
+            return Response({"error": "Missing folder_ids list."}, status=400)
+        async_bulk_trash_folders.delay(folder_ids)
+        return Response({"message": "Bulk folder trash initiated."}, status=202)
+
+
+class BulkRestoreFoldersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        folder_ids = request.data.get("folder_ids", [])
+        if not folder_ids:
+            return Response({"error": "Missing folder_ids list."}, status=400)
+        async_bulk_restore_folders.delay(folder_ids)
+        return Response({"message": "Bulk folder restore initiated."}, status=202)
+
+
+class BulkDeleteFoldersView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminOrSuperUser]
+
+    def post(self, request):
+        folder_ids = request.data.get("folder_ids", [])
+        if not folder_ids:
+            return Response({"error": "Missing folder_ids list."}, status=400)
+        async_bulk_delete_folders.delay(folder_ids)
+        return Response({"message": "Bulk folder delete initiated."}, status=202)
+
+
+class SharedTreeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        access_entries = FileAccessEntry.objects.filter(user=request.user).select_related(
+            'file_link__file', 'file_link__folder'
+        )
+        owner_map = {}
+        for entry in access_entries:
+            link = entry.file_link
+            if not link:
+                continue
+            owner_key = link.file.user.email if link.file and link.file.user else "unknown"
+            folder = link.folder
+            if not folder:
+                continue
+            if owner_key not in owner_map:
+                owner_map[owner_key] = {"name": owner_key, "type": "folder", "project_id": "shared", "service_id": "shared", "children": []}
+            folder_path = []
+            cur = folder
+            while cur:
+                folder_path.insert(0, cur)
+                cur = cur.parent
+            current_list = owner_map[owner_key]["children"]
+            for depth_folder in folder_path:
+                existing = next((c for c in current_list if c.get("name") == depth_folder.name and c.get("id") == str(depth_folder.id)), None)
+                if not existing:
+                    existing = {
+                        "id": str(depth_folder.id),
+                        "name": depth_folder.name,
+                        "type": "folder",
+                        "project_id": depth_folder.project_id,
+                        "service_id": depth_folder.service_id,
+                        "children": []
+                    }
+                    current_list.append(existing)
+                current_list = existing["children"]
+            current_list.append({
+                "id": link.id,
+                "file_id": link.file.id,
+                "file_name": link.file.filename,
+                "type": "file",
+                "is_shared": True,
+                "owner": owner_key,
+                "folder": str(folder.id),
+                "is_trashed": link.is_trashed,
+                "created_at": link.file.created_at,
+                "file_size": link.file.file_size,
+                "file_type": link.file.file_type,
+            })
+        return Response(list(owner_map.values()), status=200)
+
 
 class PublicSharedFileView(RetrieveAPIView):
     permission_classes = []  # public access
@@ -599,12 +752,27 @@ class TrashSingleFileView(APIView):
     permission_classes = [IsAuthenticated, HasEffectiveAccess]
 
     def patch(self, request, pk):
-        file = get_object_or_404(File, pk=pk)
-        self.check_object_permissions(request, file)
-        file.is_trashed = True
-        file.save()
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        file_link.is_trashed = True
+        file_link.save()
         return Response({"message": f"File {pk} moved to trash."}, status=200)
 
+
+class TrashFolderView(APIView):
+    """
+    PATCH /api/v1/documents/folders/<uuid:pk>/trash/
+
+    Moves a single folder to trash.
+    """
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    def patch(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        self.check_object_permissions(request, folder)
+        folder.is_trashed = True
+        folder.save()
+        return Response({"message": f"Folder {pk} moved to trash."}, status=200)
 
 
 class FolderListCreateView(APIView):
@@ -960,4 +1128,146 @@ class GrantPublicLinkView(APIView):
 
         async_grant_public_link.delay(file_link.id)
         return Response({"message": "Public access link is being generated."}, status=202)
+
+
+class FileColorTagView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    @swagger_auto_schema(
+        operation_description="Set or update color tag on a file",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={'color': openapi.Schema(type=openapi.TYPE_STRING, description='red|green|blue|orange|purple|grey|yellow')}
+        ),
+        responses={200: FileColorTagSerializer()}
+    )
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        color = request.data.get('color')
+        if color not in dict(COLOR_CHOICES):
+            return Response({'error': f'Invalid color. Choices: {", ".join(dict(COLOR_CHOICES).keys())}'}, status=400)
+        tag, created = FileColorTag.objects.update_or_create(
+            file_link=file_link,
+            defaults={'color': color}
+        )
+        serializer = FileColorTagSerializer(tag)
+        return Response(serializer.data, status=201 if created else 200)
+
+    def delete(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        FileColorTag.objects.filter(file_link=file_link).delete()
+        return Response({'message': 'Color tag removed'}, status=200)
+
+
+class FolderColorTagView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Set or update color tag on a folder",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={'color': openapi.Schema(type=openapi.TYPE_STRING, description='red|green|blue|orange|purple|grey|yellow')}
+        ),
+        responses={200: FolderColorTagSerializer()}
+    )
+    def post(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        color = request.data.get('color')
+        if color not in dict(COLOR_CHOICES):
+            return Response({'error': f'Invalid color. Choices: {", ".join(dict(COLOR_CHOICES).keys())}'}, status=400)
+        tag, created = FolderColorTag.objects.update_or_create(
+            folder=folder,
+            defaults={'color': color}
+        )
+        serializer = FolderColorTagSerializer(tag)
+        return Response(serializer.data, status=201 if created else 200)
+
+    def delete(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        FolderColorTag.objects.filter(folder=folder).delete()
+        return Response({'message': 'Color tag removed'}, status=200)
+
+
+class FileAliasView(APIView):
+    permission_classes = [IsAuthenticated, HasEffectiveAccess]
+
+    @swagger_auto_schema(
+        operation_description="Create an alias for a file",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={'alias_name': openapi.Schema(type=openapi.TYPE_STRING, description='Alias name for the file')}
+        ),
+        responses={201: FileAliasSerializer()}
+    )
+    def post(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        alias_name = request.data.get('alias_name')
+        if not alias_name:
+            return Response({'error': 'alias_name is required'}, status=400)
+        alias = FileAlias.objects.create(
+            file_link=file_link,
+            alias_name=alias_name,
+            created_by=request.user
+        )
+        serializer = FileAliasSerializer(alias)
+        return Response(serializer.data, status=201)
+
+    def get(self, request, pk):
+        file_link = get_object_or_404(FileFolderLink, pk=pk)
+        self.check_object_permissions(request, file_link)
+        aliases = file_link.aliases.all()
+        serializer = FileAliasSerializer(aliases, many=True)
+        return Response(serializer.data)
+
+
+class FileAliasDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk, alias_id):
+        alias = get_object_or_404(FileAlias, pk=alias_id, file_link_id=pk)
+        alias.delete()
+        return Response({'message': 'Alias deleted'}, status=200)
+
+
+class FolderAliasView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_description="Create an alias for a folder",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={'alias_name': openapi.Schema(type=openapi.TYPE_STRING, description='Alias name for the folder')}
+        ),
+        responses={201: FolderAliasSerializer()}
+    )
+    def post(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        alias_name = request.data.get('alias_name')
+        if not alias_name:
+            return Response({'error': 'alias_name is required'}, status=400)
+        alias = FolderAlias.objects.create(
+            folder=folder,
+            alias_name=alias_name,
+            created_by=request.user
+        )
+        serializer = FolderAliasSerializer(alias)
+        return Response(serializer.data, status=201)
+
+    def get(self, request, pk):
+        folder = get_object_or_404(Folder, pk=pk)
+        aliases = folder.aliases.all()
+        serializer = FolderAliasSerializer(aliases, many=True)
+        return Response(serializer.data)
+
+
+class FolderAliasDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk, alias_id):
+        alias = get_object_or_404(FolderAlias, pk=alias_id, folder_id=pk)
+        alias.delete()
+        return Response({'message': 'Alias deleted'}, status=200)
 

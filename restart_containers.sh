@@ -9,3 +9,4 @@ docker restart aidocumines_celery_beat
 docker restart aidocumines_file_monitor
 docker restart aidocumines_milvus
 docker restart aidocumines_elasticsearch
+docker restart aidocumines_ollama

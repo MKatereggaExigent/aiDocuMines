@@ -239,3 +239,28 @@ class CheckOCRStatusAPIView(APIView):
             status=status.HTTP_200_OK if ocr_run.status == "Completed" else status.HTTP_202_ACCEPTED,
         )
 
+
+class CheckOCRResultsView(APIView):
+    """
+    POST /api/v1/ocr/check-results/
+    Body: {"file_ids": [1, 2, 3]}
+    Returns processing status for each file.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    def post(self, request):
+        file_ids = request.data.get("file_ids", [])
+        if not file_ids:
+            return Response({"error": "file_ids is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        results = {}
+        for fid in file_ids:
+            ocr_file = OCRFile.objects.filter(original_file__id=fid).order_by("-created_at").first()
+            if ocr_file and ocr_file.status == "Processed" and ocr_file.ocr_filepath:
+                results[fid] = {"status": "Processed", "ocr_run_id": str(ocr_file.run.id) if ocr_file.run else None}
+            else:
+                results[fid] = {"status": "NotProcessed"}
+
+        return Response({"results": results}, status=status.HTTP_200_OK)
+
