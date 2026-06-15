@@ -1,6 +1,13 @@
-# core/elastic_indexes.py
 from elasticsearch_dsl import Document, Date, Keyword, Text, Integer, Long
 from elasticsearch_dsl.connections import connections
+
+try:
+    from document_search import config
+    ES_SHARDS = getattr(config, "ES_SHARDS", 3)
+    ES_REPLICAS = getattr(config, "ES_REPLICAS", 1)
+except ImportError:
+    ES_SHARDS = 3
+    ES_REPLICAS = 1
 
 
 class RunIndex(Document):
@@ -14,13 +21,19 @@ class RunIndex(Document):
     updated_at = Date()
 
     class Index:
-        name = 'runs'
+        name = "runs"
 
 
 class FileIndex(Document):
     id = Keyword()
-    filename = Text(analyzer='standard', fields={'raw': Keyword()})
-    filepath = Text(analyzer='standard', fields={'raw': Keyword()})
+    filename = Text(
+        analyzer="standard",
+        fields={"raw": Keyword(), "trigram": Text(analyzer="trigram")},
+    )
+    filepath = Text(
+        analyzer="standard",
+        fields={"raw": Keyword(), "trigram": Text(analyzer="trigram")},
+    )
     file_size = Integer()
     status = Keyword()
     project_id = Keyword()
@@ -29,10 +42,30 @@ class FileIndex(Document):
     updated_at = Date()
     md5_hash = Keyword()
     user_id = Long()
-    content = Text(analyzer='english')
+    client_id = Keyword()
+    content = Text(analyzer="english")
 
     class Index:
-        name = 'files'
+        name = "files"
+        settings = {
+            "number_of_shards": ES_SHARDS,
+            "number_of_replicas": ES_REPLICAS,
+            "analysis": {
+                "analyzer": {
+                    "trigram": {
+                        "type": "custom",
+                        "tokenizer": "trigram",
+                    }
+                },
+                "tokenizer": {
+                    "trigram": {
+                        "type": "ngram",
+                        "min_gram": 3,
+                        "max_gram": 4,
+                    }
+                },
+            },
+        }
 
 
 class MetadataIndex(Document):
@@ -49,7 +82,7 @@ class MetadataIndex(Document):
     pdf_version = Keyword()
 
     class Index:
-        name = 'metadata'
+        name = "metadata"
 
 
 class EndpointResponseTableIndex(Document):
@@ -60,7 +93,7 @@ class EndpointResponseTableIndex(Document):
     updated_at = Date()
 
     class Index:
-        name = 'endpoint_responses'
+        name = "endpoint_responses"
 
 
 class WebhookIndex(Document):
@@ -69,5 +102,4 @@ class WebhookIndex(Document):
     secret_key = Keyword()
 
     class Index:
-        name = 'webhooks'
-
+        name = "webhooks"

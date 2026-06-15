@@ -16,6 +16,7 @@ class TranslationRun(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_id = models.CharField(max_length=255, db_index=True)
     service_id = models.CharField(max_length=255, db_index=True)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, null=True, blank=True, related_name='translation_runs')
     client_name = models.CharField(max_length=255, db_index=True)  # ✅ Include client_name for tracking
     from_language = models.CharField(max_length=10, db_index=True)
     to_language = models.CharField(max_length=10, db_index=True)

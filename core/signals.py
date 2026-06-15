@@ -1,16 +1,23 @@
+import logging
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from core.models import File
 from core.elastic_indexes import FileIndex
 
+logger = logging.getLogger(__name__)
+
+
 @receiver(post_save, sender=File)
-def index_file(sender, instance, **kwargs):
-    """
-    Called whenever a File is created or updated.
-    Saves the File into the Elasticsearch index.
-    """
+def index_file_to_elasticsearch(sender, instance, **kwargs):
+    from document_search.utils import extract_text
+    client_id = None
+    if instance.user and instance.user.client:
+        client_id = str(instance.user.client.id)
+
+    content_text = extract_text(instance.filepath) if instance.filepath else ""
+
     doc = FileIndex(
-        meta={'id': str(instance.id)},
+        meta={"id": str(instance.id)},
         id=str(instance.id),
         filename=instance.filename,
         filepath=instance.filepath,
@@ -22,20 +29,30 @@ def index_file(sender, instance, **kwargs):
         updated_at=instance.updated_at,
         md5_hash=instance.md5_hash,
         user_id=instance.user.id if instance.user else None,
+        client_id=client_id,
+        content=content_text,
     )
     doc.save()
-    print(f"Indexed file {instance.id} -> Elasticsearch.")
+    logger.info("Indexed file %s -> Elasticsearch.", instance.id)
+
 
 @receiver(post_delete, sender=File)
-def delete_file_from_index(sender, instance, **kwargs):
-    """
-    Called whenever a File is deleted.
-    Deletes the File from the Elasticsearch index.
-    """
+def delete_file_from_es_index(sender, instance, **kwargs):
     try:
         doc = FileIndex.get(id=str(instance.id))
         doc.delete()
-        print(f"Deleted file {instance.id} from Elasticsearch index.")
+        logger.info("Deleted file %s from Elasticsearch index.", instance.id)
     except FileIndex.DoesNotExist:
-        print(f"File {instance.id} not found in Elasticsearch index; skipping delete.")
+        logger.debug("File %s not found in ES index; skipping delete.", instance.id)
 
+
+@receiver(post_save, sender=File)
+def index_file_to_milvus(sender, instance, created, **kwargs):
+    if not created:
+        return
+    try:
+        from document_search.tasks import index_file as milvus_index_task
+        milvus_index_task.delay(instance.id, force=False)
+        logger.info("Queued file %s for Milvus vector indexing.", instance.id)
+    except Exception as e:
+        logger.warning("Failed to queue Milvus indexing for file %s: %s", instance.id, e)

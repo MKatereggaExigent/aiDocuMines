@@ -272,3 +272,18 @@ class AccountDeactivationRequest(models.Model):
 
     def __str__(self):
         return f"Deactivation Request - {self.user.email} ({'Processed' if self.is_processed else 'Pending'})"
+
+
+class TwoFactorCode(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="two_factor_codes")
+    code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_used = models.BooleanField(default=False)
+
+    EXPIRATION_MINUTES = 5
+
+    def is_valid(self):
+        return not self.is_used and (now() - self.created_at).total_seconds() < self.EXPIRATION_MINUTES * 60
+
+    def __str__(self):
+        return f"2FA Code for {self.user.email} - {'Used' if self.is_used else 'Pending'}"

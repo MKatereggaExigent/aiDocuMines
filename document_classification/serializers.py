@@ -5,7 +5,7 @@ Serializers for clustering/classification models and input validation.
 """
 
 from rest_framework import serializers
-from document_classification.models import ClusteringRun, ClusterResult, ClusterFile, ClusterStorage
+from document_classification.models import ClusteringRun, ClusterResult, ClusterFile, ClusterStorage, SubClusterRun
 
 
 class ClusterFileSerializer(serializers.ModelSerializer):
@@ -102,8 +102,16 @@ class ClusteringSubmitSerializer(serializers.Serializer):
     project_id = serializers.CharField(required=True, max_length=255)
     service_id = serializers.CharField(required=True, max_length=255)
     clustering_method = serializers.ChoiceField(
-        choices=['agglomerative', 'dbscan', 'kmeans', 'spectral'],
+        choices=[
+            'agglomerative', 'dbscan', 'optics', 'kmeans',
+            'spectral', 'affinity_propagation', 'birch', 'mean_shift'
+        ],
         default='agglomerative',
+        required=False
+    )
+    nb_cluster_method = serializers.ChoiceField(
+        choices=['silhouette', 'dendrogram', 'elbow'],
+        default='silhouette',
         required=False
     )
     embedding_model = serializers.ChoiceField(
@@ -140,4 +148,38 @@ class ClusteringResultsSerializer(serializers.Serializer):
     clusters = ClusterResultSerializer(many=True)
     elapsed_time = serializers.DictField()
     price = serializers.DictField()
+
+
+class SubClusterRunSerializer(serializers.ModelSerializer):
+    """Serializer for sub-clustering runs."""
+
+    class Meta:
+        model = SubClusterRun
+        fields = [
+            'id', 'parent_run', 'parent_cluster_id', 'status',
+            'error_message', 'optimal_subclusters', 'result_data',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'status', 'error_message',
+                           'optimal_subclusters', 'result_data',
+                           'created_at', 'updated_at']
+
+
+class SubClusterSubmitSerializer(serializers.Serializer):
+    """Serializer for sub-clustering submission request."""
+    run_id = serializers.UUIDField(required=True)
+    cluster_id = serializers.IntegerField(required=True)
+    clustering_method = serializers.ChoiceField(
+        choices=[
+            'agglomerative', 'dbscan', 'optics', 'kmeans',
+            'spectral', 'affinity_propagation', 'birch', 'mean_shift'
+        ],
+        default='agglomerative',
+        required=False
+    )
+    nb_cluster_method = serializers.ChoiceField(
+        choices=['silhouette', 'dendrogram', 'elbow'],
+        default='silhouette',
+        required=False
+    )
 

@@ -44,7 +44,8 @@ class ClusteringExecutor:
         self,
         filepaths: List[str],
         filenames: List[str],
-        run_id: str
+        run_id: str,
+        cluster_ids: Optional[List[int]] = None
     ) -> Dict[str, Any]:
         """
         Execute the clustering pipeline.
@@ -53,6 +54,7 @@ class ClusteringExecutor:
             filepaths: List of file paths to cluster
             filenames: List of file names
             run_id: Unique run identifier
+            cluster_ids: Optional pre-assigned cluster IDs (for sub-clustering)
             
         Returns:
             Dictionary with clustering results
@@ -92,12 +94,19 @@ class ClusteringExecutor:
             labels, optimal_clusters = perform_clustering(
                 embeddings,
                 method=self.config.clustering_method,
+                nb_cluster_method=self.config.nb_cluster_method,
                 distance_threshold=self.config.distance_threshold,
                 eps=self.config.dbscan_eps,
                 min_samples=self.config.dbscan_min_samples,
                 n_clusters=self.config.kmeans_n_clusters or self.config.spectral_n_clusters
             )
             self.elapsed_time['clustering'] = time.time() - clustering_start
+            
+            # If cluster_ids provided (sub-clustering), assign those instead of computed labels
+            if cluster_ids:
+                for i, file_result in enumerate(results['files']):
+                    if file_result['status'] == 'Completed':
+                        file_result['cluster_id'] = cluster_ids[i]
             
             # Step 4: Calculate metrics
             metrics = calculate_clustering_metrics(embeddings, labels)
@@ -155,6 +164,103 @@ class ClusteringExecutor:
         
         return results
     
+    def execute_subcluster(
+        self,
+        filepaths: List[str],
+        filenames: List[str],
+        run_id: str,
+        parent_cluster_id: int,
+        texts: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Execute sub-clustering on files within an existing cluster.
+
+        Args:
+            filepaths: List of file paths to sub-cluster
+            filenames: List of file names
+            run_id: Unique run identifier
+            parent_cluster_id: The parent cluster ID being sub-clustered
+            texts: Pre-extracted text content
+
+        Returns:
+            Dictionary with sub-clustering results
+        """
+        start_time = time.time()
+        results = {
+            'run_id': run_id,
+            'status': 'Processing',
+            'files': [],
+            'subclusters': [],
+            'parent_cluster_id': parent_cluster_id,
+            'metrics': {},
+            'elapsed_time': {},
+            'token_usage': {}
+        }
+
+        try:
+            if len(texts) < 2:
+                raise ValueError("At least 2 files are required for sub-clustering")
+
+            # Generate embeddings
+            embedding_start = time.time()
+            embeddings = generate_embeddings(
+                texts,
+                model_name=self.config.embedding_model,
+                batch_size=self.config.batch_size
+            )
+            self.elapsed_time['embedding'] = time.time() - embedding_start
+
+            # Perform sub-clustering
+            clustering_start = time.time()
+            labels, optimal_clusters = perform_clustering(
+                embeddings,
+                method=self.config.clustering_method,
+                nb_cluster_method=self.config.nb_cluster_method,
+                distance_threshold=self.config.distance_threshold,
+                eps=self.config.dbscan_eps,
+                min_samples=2,
+                n_clusters=self.config.kmeans_n_clusters
+            )
+            self.elapsed_time['clustering'] = time.time() - clustering_start
+
+            # Assign sub-cluster IDs (prefixed to avoid collision with parent)
+            for i, (filepath, filename) in enumerate(zip(filepaths, filenames)):
+                results['files'].append({
+                    'filepath': filepath,
+                    'filename': filename,
+                    'status': 'Completed',
+                    'subcluster_id': int(labels[i]),
+                    'parent_cluster_id': parent_cluster_id
+                })
+
+            # Calculate metrics
+            metrics = calculate_clustering_metrics(embeddings, labels)
+            results['metrics'] = metrics
+
+            # Group into sub-clusters
+            subcluster_texts = self._group_texts_by_cluster(texts, labels)
+            for sub_id, sub_texts in subcluster_texts.items():
+                results['subclusters'].append({
+                    'subcluster_id': int(sub_id),
+                    'parent_cluster_id': parent_cluster_id,
+                    'file_count': len(sub_texts),
+                    'files': [f for f in results['files']
+                              if f.get('subcluster_id') == sub_id]
+                })
+
+            results['optimal_subclusters'] = optimal_clusters
+            results['status'] = 'Completed'
+
+        except Exception as e:
+            logger.error(f"Sub-clustering failed: {e}")
+            results['status'] = 'Failed'
+            results['error'] = str(e)
+
+        self.elapsed_time['total'] = time.time() - start_time
+        results['elapsed_time'] = self.elapsed_time
+
+        return results
+
     def _extract_texts(
         self,
         filepaths: List[str],

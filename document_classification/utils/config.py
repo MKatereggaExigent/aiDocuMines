@@ -76,6 +76,7 @@ class ClusteringConfig:
 
     # Clustering method
     clustering_method: str = 'agglomerative'
+    nb_cluster_method: str = 'silhouette'
 
     # Embedding model
     embedding_model: str = 'bert-base-uncased'
@@ -133,6 +134,7 @@ class ClusteringConfig:
         """Convert config to dictionary."""
         return {
             'clustering_method': self.clustering_method,
+            'nb_cluster_method': self.nb_cluster_method,
             'embedding_model': self.embedding_model,
             'generate_descriptions': self.generate_descriptions,
             'llm_model': self.llm_model,

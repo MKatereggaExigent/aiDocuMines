@@ -28,8 +28,18 @@ class ClusteringRun(models.Model):
     CLUSTERING_METHOD_CHOICES = [
         ('agglomerative', 'Agglomerative Clustering'),
         ('dbscan', 'DBSCAN'),
+        ('optics', 'OPTICS'),
         ('kmeans', 'K-Means'),
         ('spectral', 'Spectral Clustering'),
+        ('affinity_propagation', 'Affinity Propagation'),
+        ('birch', 'BIRCH'),
+        ('mean_shift', 'Mean Shift'),
+    ]
+
+    NB_CLUSTER_METHOD_CHOICES = [
+        ('silhouette', 'Silhouette Score'),
+        ('dendrogram', 'Dendrogram'),
+        ('elbow', 'Elbow Method'),
     ]
 
     EMBEDDING_MODEL_CHOICES = [
@@ -56,14 +66,19 @@ class ClusteringRun(models.Model):
     
     # Clustering configuration
     clustering_method = models.CharField(
-        max_length=50, 
-        choices=CLUSTERING_METHOD_CHOICES, 
+        max_length=50,
+        choices=CLUSTERING_METHOD_CHOICES,
         default='agglomerative',
         db_index=True
     )
+    nb_cluster_method = models.CharField(
+        max_length=20,
+        choices=NB_CLUSTER_METHOD_CHOICES,
+        default='silhouette'
+    )
     embedding_model = models.CharField(
-        max_length=50, 
-        choices=EMBEDDING_MODEL_CHOICES, 
+        max_length=50,
+        choices=EMBEDDING_MODEL_CHOICES,
         default='bert-base-uncased'
     )
     generate_descriptions = models.BooleanField(default=True)
@@ -198,4 +213,41 @@ class ClusterStorage(models.Model):
 
     def __str__(self):
         return f"Storage for Run {self.run_id}"
+
+
+class SubClusterRun(models.Model):
+    """
+    Tracks sub-clustering of files within an existing cluster.
+    """
+    STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Processing', 'Processing'),
+        ('Completed', 'Completed'),
+        ('Failed', 'Failed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    parent_run = models.ForeignKey(
+        ClusteringRun, on_delete=models.CASCADE,
+        related_name='subcluster_runs'
+    )
+    parent_cluster_id = models.IntegerField()
+
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default='Pending', db_index=True
+    )
+    error_message = models.TextField(blank=True, null=True)
+
+    optimal_subclusters = models.IntegerField(default=0)
+    result_data = models.JSONField(default=dict)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'document_classification_subcluster_run'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"SubCluster {self.id} - Cluster {self.parent_cluster_id} ({self.status})"
 

@@ -6,8 +6,8 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication
+from custom_authentication.rbac import HasPermission
 
 from . import utils
 from .serializers import SearchRequestSerializer, AdvancedSearchSerializer
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 class DeleteIndexView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAdminUser]
+    permission_classes = [HasPermission('backup.delete')]
 
     def post(self, request):
         utils.delete_index()
@@ -30,7 +30,7 @@ class DeleteIndexView(APIView):
 
 class ForceReindexView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAdminUser]
+    permission_classes = [HasPermission('backup.create')]
 
     def post(self, request):
         reindex_files_task.delay()
@@ -38,7 +38,7 @@ class ForceReindexView(APIView):
 
 class IndexSingleFileView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('document.upload')]
 
     def post(self, request, file_id):
         try:
@@ -57,52 +57,57 @@ class IndexSingleFileView(APIView):
 
 class SearchView(APIView):
     """
-    Elasticsearch basic search.
+    Elasticsearch ranked full-text search with pagination.
     POST /api/v1/es/search/
     body: {
         "query": "search term",
         "scope": "both" | "filename" | "content",
-        "project_id": optional (for report registration),
-        "service_id": optional (for report registration),
-        "generate_report": optional (default: false)
+        "page": 1,
+        "page_size": 50,
+        "project_id": optional,
+        "service_id": optional,
+        "generate_report": false
     }
+    Results are ranked by relevance (filename matches score highest).
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('search.semantic')]
 
     def post(self, request):
         start_time = time.time()
         serializer = SearchRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        query = serializer.validated_data.get("query")
+        query = serializer.validated_data.get("query", "")
         scope = serializer.validated_data.get("scope", "both")
-
-        # New parameters for report generation
+        page = serializer.validated_data.get("page", 1)
+        page_size = serializer.validated_data.get("page_size", 50)
         project_id = request.data.get("project_id")
         service_id = request.data.get("service_id")
         generate_report = request.data.get("generate_report", False)
 
         accessible_ids = get_user_accessible_file_ids(request.user)
-        results = utils.basic_search(
+        result = utils.basic_search(
             query=query,
             scope=scope,
             user=request.user,
             accessible_ids=accessible_ids,
+            page=page,
+            page_size=page_size,
         )
 
         execution_time = time.time() - start_time
-        results_list = [hit.to_dict() for hit in results]
-
         response_data = {
-            "results": results_list,
-            "count": len(results_list),
+            "results": result["results"],
+            "total": result["total"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "max_score": result.get("max_score"),
             "query": query,
             "scope": scope,
-            "execution_time_seconds": round(execution_time, 2)
+            "execution_time_seconds": round(execution_time, 2),
         }
 
-        # Generate and register report if requested
         if generate_report and project_id and service_id:
             try:
                 run = Run.objects.create(
@@ -110,9 +115,8 @@ class SearchView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                     status="completed",
-                    result_json=response_data
+                    result_json=response_data,
                 )
-
                 report_info = generate_and_register_service_report(
                     service_name="Elasticsearch Search",
                     service_id="ai-elasticsearch-search",
@@ -127,13 +131,12 @@ class SearchView(APIView):
                     execution_time_seconds=execution_time,
                     additional_metadata={
                         "scope": scope,
-                        "result_count": len(results_list)
-                    }
+                        "result_count": result["total"],
+                    },
                 )
                 response_data["report_file"] = report_info
-                logger.info(f"✅ Generated ES search report: {report_info.get('filename')}")
             except Exception as report_error:
-                logger.warning(f"Failed to generate report: {report_error}")
+                logger.warning("Failed to generate report: %s", report_error)
                 response_data["report_error"] = str(report_error)
 
         return Response(response_data)
@@ -141,47 +144,52 @@ class SearchView(APIView):
 
 class AdvancedSearchView(APIView):
     """
-    Elasticsearch advanced search.
+    Elasticsearch advanced search with field-level filters and pagination.
     POST /api/v1/es/advanced-search/
     body: {
-        "must": [...],
-        "filter": [...],
-        "project_id": optional (for report registration),
-        "service_id": optional (for report registration),
-        "generate_report": optional (default: false)
+        "must": [{"field": "content", "value": "term"}, ...],
+        "filter": [{"field": "status", "value": "Completed"}, ...],
+        "page": 1,
+        "page_size": 50,
+        "project_id": optional,
+        "service_id": optional,
+        "generate_report": false
     }
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('search.advanced')]
 
     def post(self, request):
         start_time = time.time()
         serializer = AdvancedSearchSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # New parameters for report generation
         project_id = request.data.get("project_id")
         service_id = request.data.get("service_id")
         generate_report = request.data.get("generate_report", False)
+        page = serializer.validated_data.get("page", 1)
+        page_size = serializer.validated_data.get("page_size", 50)
 
         accessible_ids = get_user_accessible_file_ids(request.user)
-        results = utils.advanced_search(
-            must=serializer.validated_data.get("must"),
-            filter=serializer.validated_data.get("filter"),
+        result = utils.advanced_search(
+            must=serializer.validated_data.get("must", []),
+            filter_clauses=serializer.validated_data.get("filter", []),
             user=request.user,
             accessible_ids=accessible_ids,
+            page=page,
+            page_size=page_size,
         )
 
         execution_time = time.time() - start_time
-        results_list = [hit.to_dict() for hit in results]
-
         response_data = {
-            "results": results_list,
-            "count": len(results_list),
-            "execution_time_seconds": round(execution_time, 2)
+            "results": result["results"],
+            "total": result["total"],
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "max_score": result.get("max_score"),
+            "execution_time_seconds": round(execution_time, 2),
         }
 
-        # Generate and register report if requested
         if generate_report and project_id and service_id:
             try:
                 run = Run.objects.create(
@@ -189,9 +197,8 @@ class AdvancedSearchView(APIView):
                     project_id=project_id,
                     service_id=service_id,
                     status="completed",
-                    result_json=response_data
+                    result_json=response_data,
                 )
-
                 report_info = generate_and_register_service_report(
                     service_name="Elasticsearch Advanced Search",
                     service_id="ai-elasticsearch-advanced-search",
@@ -203,14 +210,11 @@ class AdvancedSearchView(APIView):
                     service_id_folder=service_id,
                     folder_name="elasticsearch-advanced-search-results",
                     execution_time_seconds=execution_time,
-                    additional_metadata={
-                        "result_count": len(results_list)
-                    }
+                    additional_metadata={"result_count": result["total"]},
                 )
                 response_data["report_file"] = report_info
-                logger.info(f"✅ Generated ES advanced search report: {report_info.get('filename')}")
             except Exception as report_error:
-                logger.warning(f"Failed to generate report: {report_error}")
+                logger.warning("Failed to generate report: %s", report_error)
                 response_data["report_error"] = str(report_error)
 
         return Response(response_data)

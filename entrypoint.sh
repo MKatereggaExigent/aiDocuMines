@@ -70,6 +70,9 @@ if [ "${SERVICE_NAME:-}" = "db_prepare" ]; then
 
     python manage.py migrate --noinput
 
+    echo "🔐 Seeding RBAC permissions and roles..."
+    python manage.py seed_rbac
+
     echo "👤 Ensuring superuser exists..."
     python manage.py shell <<EOF
 import json
@@ -88,12 +91,19 @@ client, _ = Client.objects.get_or_create(
     defaults={"industry": "AI", "use_case": "Bootstrap"}
 )
 
-if not User.objects.filter(email=email).exists():
-    user = User.objects.create_superuser(
-        email=email,
-        password=password,
-        client=client
-    )
+    if not User.objects.filter(email=email).exists():
+        user = User.objects.create_superuser(
+            email=email,
+            password=password,
+            client=client
+        )
+        superadmin_group, _ = Group.objects.get_or_create(name="SuperAdmin")
+        user.groups.add(superadmin_group)
+    else:
+        user = User.objects.get(email=email)
+    user.is_2fa_enabled = True
+    user.two_factor_enabled = True
+    user.save()
     secret = generate_client_secret()
     app = Application.objects.create(
         user=user,
@@ -110,8 +120,6 @@ if not User.objects.filter(email=email).exists():
             "client_secret": secret
         }, f, indent=2)
     print("✅ Superuser created")
-else:
-    print("✅ Superuser already exists")
 EOF
 
     touch /app/logs/migrations_complete

@@ -38,7 +38,7 @@ def generate_nextcloud_autologin_url(user) -> str:
         raise Exception(f"Unable to retrieve client_id: {str(e)}")
 
     # 3. Load config
-    NEXTCLOUD_ADMIN_USER = os.getenv("NEXTCLOUD_ADMIN_USER", "admin@aidocumines.com")
+    NEXTCLOUD_ADMIN_USER = os.getenv("NEXTCLOUD_ADMIN_USER", "michael.kateregga@datasqan.com")
     NEXTCLOUD_ADMIN_PASS = os.getenv("NEXTCLOUD_ADMIN_PASS")
     NEXTCLOUD_URL = os.getenv("NEXTCLOUD_URL", "https://nextcloud.aidocumines.com")
     NC_CONTAINER_NAME = os.getenv("NEXTCLOUD_DOCKER_CONTAINER", "srv-captain--nextcloud")

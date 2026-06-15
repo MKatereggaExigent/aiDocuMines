@@ -10,7 +10,7 @@ from oauth2_provider.generators import generate_client_secret
 User = get_user_model()
 
 # Settings
-ADMIN_EMAIL = "admin@aidocumines.com"
+ADMIN_EMAIL = "michael.kateregga@datasqan.com"
 ADMIN_PASSWORD = "superpassword"
 
 # 1️⃣ Delete all superusers

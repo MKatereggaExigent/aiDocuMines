@@ -7,6 +7,8 @@ from oauth2_provider.models import Application
 from core.models import File
 from document_ocr.models import OCRRun, OCRFile
 from document_ocr.tasks import process_ocr
+from core.tenancy import ClientScopedViewMixin
+from custom_authentication.permissions import IsAdminOrManagerMutation
 import os
 import logging
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
@@ -55,13 +57,13 @@ def get_user_from_client_id(client_id):
 
 
 
-class SubmitOCRAPIView(APIView):
+class SubmitOCRAPIView(ClientScopedViewMixin):
     """
     Submit a file for OCR processing.
     """
 
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [TokenHasReadWriteScope, IsAdminOrManagerMutation]
 
     @swagger_auto_schema(
         operation_description="Submit a file for OCR processing.",
@@ -75,8 +77,8 @@ class SubmitOCRAPIView(APIView):
         file_id = request.query_params.get("file_id")
         ocr_option = request.query_params.get("ocr_option")
 
-        # Validate file
-        file_obj = get_object_or_404(File, id=file_id)
+        # Validate file with client scoping
+        file_obj = self.get_object_by_client(File.objects.all(), id=file_id)
         if not os.path.exists(file_obj.filepath):
             return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -99,10 +101,11 @@ class SubmitOCRAPIView(APIView):
                 "message": "OCR has already been completed for this file."
             }, status=status.HTTP_202_ACCEPTED)
 
-        # Create OCRRun
+        # Create OCRRun with client FK
         ocr_run = OCRRun.objects.create(
             project_id=file_obj.project_id,
             service_id=file_obj.service_id,
+            client=request.user.client,
             client_name=file_obj.user.username if file_obj.user and file_obj.user.username else file_obj.user.email,
             status="Pending",
             ocr_option=ocr_option
@@ -185,13 +188,14 @@ class SubmitOCRAPIView(APIView):
         }, status=status.HTTP_202_ACCEPTED)
 '''
 
-class CheckOCRStatusAPIView(APIView):
+class CheckOCRStatusAPIView(ClientScopedViewMixin):
     """
     Check the OCR status using `ocr_run_id`.
     """
 
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="Check the status of an OCR process using `ocr_run_id`.",
@@ -214,8 +218,8 @@ class CheckOCRStatusAPIView(APIView):
         if not user:
             return Response({"error": "Invalid client ID"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Fetch `OCRRun`
-        ocr_run = get_object_or_404(OCRRun, id=ocr_run_id)
+        # Fetch `OCRRun` scoped by client
+        ocr_run = self.get_object_by_client(OCRRun.objects.all(), id=ocr_run_id)
 
         # Retrieve OCR file if completed
         ocr_file = OCRFile.objects.filter(run=ocr_run).first()
@@ -240,14 +244,14 @@ class CheckOCRStatusAPIView(APIView):
         )
 
 
-class CheckOCRResultsView(APIView):
+class CheckOCRResultsView(ClientScopedViewMixin):
     """
     POST /api/v1/ocr/check-results/
     Body: {"file_ids": [1, 2, 3]}
     Returns processing status for each file.
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [TokenHasReadWriteScope, IsAdminOrManagerMutation]
 
     def post(self, request):
         file_ids = request.data.get("file_ids", [])
@@ -256,7 +260,10 @@ class CheckOCRResultsView(APIView):
 
         results = {}
         for fid in file_ids:
-            ocr_file = OCRFile.objects.filter(original_file__id=fid).order_by("-created_at").first()
+            file_obj = File.objects.filter(id=fid, user__client=request.user.client).first()
+            if not file_obj:
+                continue
+            ocr_file = OCRFile.objects.filter(original_file=file_obj).order_by("-created_at").first()
             if ocr_file and ocr_file.status == "Processed" and ocr_file.ocr_filepath:
                 results[fid] = {"status": "Processed", "ocr_run_id": str(ocr_file.run.id) if ocr_file.run else None}
             else:

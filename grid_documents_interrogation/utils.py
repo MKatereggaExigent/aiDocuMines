@@ -24,7 +24,12 @@ MODEL_CONTEXT_WINDOWS = {
     "llama2": 4096,
     "mistral": 8192,
     "minilm": 512,
-    "default": 4096
+    "default": 4096,
+    # vLLM-hosted models (typical context windows)
+    "Qwen/Qwen2.5-7B-Instruct": 32768,
+    "mistralai/Mistral-7B-Instruct-v0.3": 32768,
+    "meta-llama/Meta-Llama-3.1-8B-Instruct": 128000,
+    "microsoft/Phi-3-mini-4k-instruct": 4096,
 }
 
 
@@ -293,6 +298,30 @@ def dispatch_to_llm(
         except Exception as e:
             # Include url & model to make ops/debugging trivial
             raise RuntimeError(f"Ollama invocation failed (url={base_url}, model={model}): {e}")
+
+    elif provider == "vllm":
+        # vLLM exposes an OpenAI-compatible API
+        base_url = (
+            llm_config.get("endpoint")
+            or os.getenv("VLLM_URL")
+            or "http://vllm:8000/v1"
+        )
+        api_key = llm_config.get("api_key") or os.getenv("VLLM_API_KEY", "EMPTY")
+
+        try:
+            client = OpenAI(api_key=api_key, base_url=base_url)
+            messages = _build_messages_for_openai(previous_messages, chunk, query_text, model)
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=1024,
+                temperature=temperature,
+                timeout=timeout,
+            )
+            text = response.choices[0].message.content or ""
+            return text if isinstance(text, str) else str(text)
+        except Exception as e:
+            raise RuntimeError(f"vLLM invocation failed (url={base_url}, model={model}): {e}")
 
     elif provider == "langchain":
         raise NotImplementedError("LangChain provider wrapper is not implemented here.")

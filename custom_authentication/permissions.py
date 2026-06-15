@@ -66,23 +66,27 @@ class HasAnyRole(BasePermission):
 
     def has_permission(self, request, view):
         if not request.user or not request.user.is_authenticated:
-            print("❌ Not authenticated")
             return False
+
+        # Also check x-role header (passed by frontend auth interceptor)
+        header_role = request.META.get("HTTP_X_ROLE", "") or getattr(request, "role", "")
+        if header_role:
+            for role in self.roles:
+                if role == 'admin' and header_role in ('Admin',):
+                    return True
+                if role.startswith('group:') and role.split(':', 1)[1] == header_role:
+                    return True
 
         for role in self.roles:
             if role == 'superuser' and request.user.is_superuser:
-                print("✅ Detected superuser")
                 return True
             elif role == 'admin' and (request.user.is_staff or request.user.groups.filter(name='Admin').exists()):
-                print("✅ Detected admin (via is_staff or group membership)")
                 return True
             elif role.startswith('group:'):
                 group_name = role.split(':', 1)[1]
                 if request.user.groups.filter(name=group_name).exists():
-                    print(f"✅ Detected group member: {group_name}")
                     return True
 
-        print("❌ No matching role found")
         return False
 
 # --- Reusable Composites (Just Inherit) ---
@@ -289,4 +293,30 @@ class IsSuperSuperUser(BasePermission):
             and request.user.is_superuser
             and request.user.groups.filter(name="SuperSuperUser").exists()
         )
+
+
+# Import additional permission classes from the comprehensive RBAC module
+from .rbac import (
+    IsAdminOrManagerMutation,
+    RequireAdminOrManagerMutation,
+    HasPermission,
+    HasAnyPermissions,
+    HasAllPermissions,
+    CanViewDocuments,
+    CanCreateDocuments,
+    CanSubmitOCR,
+    CanSubmitTranslation,
+    CanSubmitAnonymization,
+    CanManageUsers,
+    CanManageBackups,
+    CanViewAuditLogs,
+    CanManageRoles,
+    CanManageIntegrations,
+    CanSearch,
+    seed_permissions_and_roles,
+    PERMISSION_DEFINITIONS,
+    ROLE_DEFINITIONS,
+    get_role_permissions,
+    get_permission_codenames,
+)
 

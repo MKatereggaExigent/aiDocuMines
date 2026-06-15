@@ -21,15 +21,17 @@ from drf_yasg import openapi
 from celery.result import AsyncResult
 
 from core.models import File
-from document_classification.models import ClusteringRun, ClusterResult, ClusterFile
+from document_classification.models import ClusteringRun, ClusterResult, ClusterFile, SubClusterRun
 from document_classification.serializers import (
     ClusteringRunSerializer,
     ClusteringRunListSerializer,
     ClusterResultSerializer,
     ClusterFileSerializer,
-    ClusteringSubmitSerializer
+    ClusteringSubmitSerializer,
+    SubClusterRunSerializer,
+    SubClusterSubmitSerializer
 )
-from document_classification.tasks import cluster_documents_task
+from document_classification.tasks import cluster_documents_task, subcluster_documents_task
 from document_classification.pagination import StandardResultsSetPagination
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,7 @@ class SubmitClusteringAPIView(APIView):
             service_id=service_id,
             client_name=user.username or user.email,
             clustering_method=data.get('clustering_method', 'agglomerative'),
+            nb_cluster_method=data.get('nb_cluster_method', 'silhouette'),
             embedding_model=data.get('embedding_model', 'bert-base-uncased'),
             generate_descriptions=data.get('generate_descriptions', True),
             status='Pending'
@@ -127,6 +130,7 @@ class SubmitClusteringAPIView(APIView):
             run_id=str(run.id),
             file_ids=list(file_ids),
             clustering_method=run.clustering_method,
+            nb_cluster_method=run.nb_cluster_method,
             embedding_model=run.embedding_model,
             generate_descriptions=run.generate_descriptions
         )
@@ -287,5 +291,87 @@ class ClusterDetailsAPIView(APIView):
         cluster_result = get_object_or_404(ClusterResult, run=run, cluster_id=int(cluster_id))
         serializer = ClusterResultSerializer(cluster_result)
 
+        return Response(serializer.data)
+
+
+class SubClusterAPIView(APIView):
+    """
+    Submit sub-clustering on an existing cluster.
+    """
+    authentication_classes = [OAuth2Authentication]
+    permission_classes = [TokenHasReadWriteScope]
+
+    @swagger_auto_schema(
+        manual_parameters=[client_id_param, client_secret_param],
+        request_body=SubClusterSubmitSerializer,
+        operation_description="Sub-cluster files within an existing cluster."
+    )
+    def post(self, request):
+        client_id = request.headers.get("X-Client-ID")
+        client_secret = request.headers.get("X-Client-Secret")
+
+        if not all([client_id, client_secret]):
+            return Response({"error": "Missing client credentials"}, status=status.HTTP_400_BAD_REQUEST)
+
+        application = get_object_or_404(Application, client_id=client_id)
+        user = application.user
+
+        serializer = SubClusterSubmitSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        run_id = data['run_id']
+        cluster_id = data['cluster_id']
+
+        # Verify run exists and belongs to user
+        run = get_object_or_404(ClusteringRun, id=run_id)
+        if run.user and str(run.user.id) != str(user.id):
+            raise PermissionDenied("You are not authorized to sub-cluster this run")
+
+        # Create sub-cluster run
+        sub_run = SubClusterRun.objects.create(
+            parent_run=run,
+            parent_cluster_id=cluster_id,
+            status='Pending'
+        )
+
+        task = subcluster_documents_task.delay(
+            sub_run_id=str(sub_run.id),
+            run_id=str(run_id),
+            cluster_id=cluster_id,
+            clustering_method=data.get('clustering_method', 'agglomerative'),
+            nb_cluster_method=data.get('nb_cluster_method', 'silhouette')
+        )
+
+        return Response({
+            "sub_run_id": str(sub_run.id),
+            "task_id": task.id,
+            "status": "Pending",
+            "parent_run_id": str(run_id),
+            "parent_cluster_id": cluster_id,
+            "message": "Sub-clustering started"
+        }, status=status.HTTP_202_ACCEPTED)
+
+    @swagger_auto_schema(
+        manual_parameters=[
+            client_id_param,
+            openapi.Parameter("sub_run_id", openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True)
+        ]
+    )
+    def get(self, request):
+        sub_run_id = request.query_params.get("sub_run_id")
+        if not sub_run_id:
+            return Response({"error": "sub_run_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        client_id = request.headers.get("X-Client-ID")
+        user = get_user_from_client_id(client_id)
+
+        sub_run = get_object_or_404(SubClusterRun, id=sub_run_id)
+
+        if sub_run.parent_run.user and str(sub_run.parent_run.user.id) != str(user.id):
+            raise PermissionDenied("You are not authorized to view this sub-cluster run")
+
+        serializer = SubClusterRunSerializer(sub_run)
         return Response(serializer.data)
 

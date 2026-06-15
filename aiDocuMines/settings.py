@@ -68,6 +68,12 @@ INSTALLED_APPS = [
     "regulatory_compliance",
     "service_analytics",
     "document_classification",
+
+    # New services - May 2025
+    "document_redlining",
+    "document_workflows",
+    "document_automation",
+    "document_versioning",
 ]
 
 MIDDLEWARE = [
@@ -79,6 +85,7 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "custom_authentication.middleware.APICallLoggingMiddleware",
+    "custom_authentication.middleware.RBACMiddleware",
     "oauth2_provider.middleware.OAuth2TokenMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -289,6 +296,8 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "x-client-id",
     "x-client-secret",
+    "x-role",
+    "x-user-id",
 ]
 CORS_ALLOW_METHODS = ["GET", "POST", "OPTIONS", "PUT", "PATCH", "DELETE"]
 

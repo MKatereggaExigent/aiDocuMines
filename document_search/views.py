@@ -2,19 +2,16 @@
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions, generics
-from django.shortcuts import get_object_or_404
+from rest_framework import status, generics
 from pymilvus import Collection, connections
-from sentence_transformers import SentenceTransformer
 
-from rest_framework.permissions import IsAuthenticated
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication
+from custom_authentication.rbac import HasPermission
 
 from django.core.cache import cache
 from celery.result import AsyncResult
 
 from document_search.models import VectorChunk
-from core.models import File as CoreFile
 from document_search.serializers import (
     SearchRequestSerializer,
     SearchResultSerializer,
@@ -28,8 +25,8 @@ from document_search.utils import _get_model
 from document_search.tasks import (
     index_file,
     bulk_reindex,
+    _ensure_collection,
 )
-from document_search.tasks import exec_search
 from document_search.tasks import semantic_search_task
 
 import time
@@ -38,7 +35,15 @@ from datetime import datetime
 import logging
 
 # 🔁 Use the same config the tasks use (host/port/collection)
-from document_search.config import COLLECTION_NAME, MILVUS_HOST, MILVUS_PORT
+from document_search.config import (
+    COLLECTION_NAME,
+    MILVUS_HOST,
+    MILVUS_PORT,
+    MILVUS_METRIC_TYPE,
+    MILVUS_NPROBE,
+    MILVUS_EF,
+    MILVUS_SEARCH_TOP_K,
+)
 
 from document_operations.utils import get_user_accessible_file_ids
 from document_operations.models import FileAccessEntry
@@ -48,10 +53,27 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────
 # 🧠  Connect to Milvus collection (same host/port as tasks.py)
 # ─────────────────────────────────────────────────────────────
-def _get_collection() -> Collection:
-    connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+def _get_partition_names(accessible_file_ids):
+    """Resolve Milvus partition names from accessible file IDs."""
+    if not accessible_file_ids:
+        return set()
+    owner_rows = File.objects.filter(id__in=accessible_file_ids).values("id", "user_id")
+    return {f"user_{row['user_id']}" for row in owner_rows}
+
+
+def _load_collection_partitions(partitions=None):
+    """Connect and load only the specified partitions (or none = load all)."""
+    if not connections.has_connection("default"):
+        connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+    _ensure_collection()
     collection = Collection(COLLECTION_NAME)
-    collection.load()
+    if partitions:
+        for p in partitions:
+            if not collection.has_partition(p):
+                collection.create_partition(p)
+        collection.load(partition_names=list(partitions))
+    else:
+        collection.load()
     return collection
 
 # -------------------------------------------------------------
@@ -72,7 +94,7 @@ class SemanticFileSearchView(APIView):
     }
     """
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('search.semantic')]
 
     def post(self, request, *args, **kwargs):
         user = request.user
@@ -118,7 +140,7 @@ class SemanticFileSearchView(APIView):
 # 🔍 Search API (sync)
 # ─────────────────────────────────────────────────────────────
 class ChunkedFileSearchView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasPermission('search.semantic')]
 
     def post(self, request):
         serializer = SearchRequestSerializer(data=request.data)
@@ -128,36 +150,38 @@ class ChunkedFileSearchView(APIView):
         user = request.user
         query = serializer.validated_data["query"]
         file_id = serializer.validated_data.get("file_id")
-        top_k = serializer.validated_data["top_k"]
+        top_k = serializer.validated_data.get("top_k", 10)
+        page = serializer.validated_data.get("page", 1)
+        page_size = serializer.validated_data.get("page_size", 10)
 
-        # ✅ Embed query
+        accessible_file_ids = set(get_user_accessible_file_ids(user))
+
+        if file_id and int(file_id) not in accessible_file_ids:
+            return Response({"error": "You do not have access to this file."}, status=403)
+        if file_id:
+            accessible_file_ids &= {int(file_id)}
+        if not accessible_file_ids:
+            return Response({"results": [], "total": 0, "page": page}, status=200)
+
         embed_model = _get_model()
         query_vector = embed_model.encode([query])[0]
 
-        # ✅ Setup Milvus
-        collection = _get_collection()
+        partitions = _get_partition_names(accessible_file_ids)
+        collection = _load_collection_partitions(partitions)
 
-        # ✅ Get file access scope
-        accessible_file_ids = get_user_accessible_file_ids(user)
+        client_id_val = user.client.id if hasattr(user, "client") and user.client else -1
+        id_list = ",".join(map(str, sorted(accessible_file_ids)))
+        expr = f"file_id in [{id_list}] and client_id == {client_id_val}"
 
-        # If filtering by file_id, validate access
-        expr = ""
-        if file_id:
-            if file_id not in accessible_file_ids:
-                return Response({"error": "You do not have access to this file."}, status=403)
-            expr = f"file_id == {file_id}"
-        else:
-            if not accessible_file_ids:
-                return Response([], status=200)
-            id_list = ",".join(map(str, accessible_file_ids))
-            expr = f"file_id in [{id_list}]"
+        offset = (page - 1) * page_size
+        fetch_top_k = offset + page_size
 
         try:
             results = collection.search(
                 data=[query_vector],
                 anns_field="vector",
-                param={"metric_type": "COSINE", "params": {"nprobe": 10}},
-                limit=top_k,
+                param={"metric_type": MILVUS_METRIC_TYPE, "params": {"nprobe": MILVUS_NPROBE, "ef": MILVUS_EF}},
+                limit=max(fetch_top_k, top_k),
                 expr=expr,
                 output_fields=["file_id", "chunk_text"],
             )
@@ -165,32 +189,48 @@ class ChunkedFileSearchView(APIView):
             logger.exception("Search failed")
             return Response({"error": str(e)}, status=500)
 
-        top_matches = []
+        seen_file_ids = set()
+        all_matches = []
         for hit in results[0]:
-            chunk_text = hit.entity.get("chunk_text", "")
-            file_id = hit.entity.get("file_id")
-            if file_id not in accessible_file_ids:
+            fid = int(hit.entity.get("file_id"))
+            if fid in seen_file_ids:
+                continue
+            seen_file_ids.add(fid)
+            if fid not in accessible_file_ids:
                 continue
             try:
-                file_obj = File.objects.get(id=file_id)
+                file_obj = File.objects.get(id=fid)
             except File.DoesNotExist:
                 continue
-
-            top_matches.append({
-                "file_id": file_obj.id,
+            all_matches.append({
+                "file_id": fid,
                 "file_name": getattr(file_obj, "filename", str(file_obj)),
-                "chunk_text": chunk_text,
-                "score": hit.score
+                "chunk_text": hit.entity.get("chunk_text", ""),
+                "score": float(hit.score),
             })
 
-        response = SearchResultSerializer(top_matches, many=True)
-        return Response(response.data, status=200)
+        page_matches = all_matches[offset:offset + page_size] if offset < len(all_matches) else []
+        return Response({
+            "results": page_matches,
+            "total": len(all_matches),
+            "page": page,
+            "page_size": page_size,
+            "query": query,
+        }, status=200)
 
 
 class VectorChunkListView(generics.ListAPIView):
-    queryset = VectorChunk.objects.all().select_related("file")
     serializer_class = VectorChunkSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [HasPermission('search.advanced')]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = VectorChunk.objects.select_related("file")
+        if user.is_superuser:
+            return qs
+        if hasattr(user, "client") and user.client:
+            return qs.filter(file__user__client=user.client)
+        return qs.filter(file__user=user)
 
 
 class TriggerVectorIndexingView(APIView):
@@ -198,7 +238,7 @@ class TriggerVectorIndexingView(APIView):
     POST  /api/v1/document-search/index/
     body: {"file_ids": [2, 3, 4], "force": false}
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasPermission('document.upload')]
 
     def post(self, request):
         ser = IndexRequestSerializer(data=request.data)
@@ -232,11 +272,10 @@ class BulkReindexMissingView(APIView):
     POST  /api/v1/document-search/reindex-missing/
     – queues indexing for every file that currently has **no** VectorChunk rows.
     """
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [HasPermission('search.advanced')]
 
     def post(self, request):
         task = bulk_reindex.delay()
-        # ⬇️ bind owner (admin user)
         cache.set(f"task_owner:{task.id}", request.user.id, timeout=3600)
         return Response(
             {"message": "Bulk re-index started", "task_id": task.id},
@@ -244,52 +283,9 @@ class BulkReindexMissingView(APIView):
         )
 
 
-class ChunkedFileSearchView(APIView):
-    authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request, *args, **kwargs):
-        user = request.user
-        query = request.data.get("query")
-        file_id = request.data.get("file_id")
-        top_k = int(request.data.get("top_k", 5))
-
-        if not query:
-            return Response({"error": "Missing 'query' in request"}, status=400)
-
-        # ✅ Check if the file is accessible
-        if file_id:
-            owns_file = File.objects.filter(id=file_id, uploaded_by=user).exists()
-            shared_file = FileAccessEntry.objects.filter(file_id=file_id, user=user, can_read=True).exists()
-            if not owns_file and not shared_file:
-                return Response({"error": "You do not have permission to access this file."}, status=403)
-
-        # 🚀 Submit task
-        task = exec_search.apply_async(args=[user.id, query, file_id, top_k])
-
-        # Wait for result (max 60s)
-        timeout = 60
-        start = time.time()
-        while not task.ready() and (time.time() - start) < timeout:
-            time.sleep(1)
-
-        if task.successful():
-            return Response({
-                "status": "ok",
-                "query": query,
-                "results": task.result,
-                "count": len(task.result),
-            })
-        else:
-            return Response({
-                "status": "error",
-                "detail": str(task.result) if task.result else "search-failed"
-            }, status=500)
-
-
 class AdvancedDocumentSearchView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('search.advanced')]
 
     def post(self, request):
         user = request.user
@@ -300,40 +296,40 @@ class AdvancedDocumentSearchView(APIView):
         if not query:
             return Response({"error": "Query is required"}, status=400)
 
-        # Step 1: run vector search
+        # Step 1: resolve accessible files first
+        accessible_file_ids = set(get_user_accessible_file_ids(user))
+        if not accessible_file_ids:
+            return Response({"count": 0, "results": []}, status=200)
+
+        # Step 2: load only relevant Milvus partitions
+        partitions = _get_partition_names(accessible_file_ids)
+        collection = _load_collection_partitions(partitions)
+
+        # Step 3: vector search scoped to accessible files + client
         embed_model = _get_model()
         query_vector = embed_model.encode([query])[0]
 
-        collection = _get_collection()
+        client_id_val = user.client.id if hasattr(user, "client") and user.client else -1
+        id_list = ",".join(map(str, sorted(accessible_file_ids)))
+        expr = f"file_id in [{id_list}] and client_id == {client_id_val}"
+
         results = collection.search(
             data=[query_vector],
             anns_field="vector",
             param={"metric_type": "COSINE", "params": {"nprobe": 10}},
             limit=top_k,
+            expr=expr,
             output_fields=["file_id", "chunk_text"],
         )
 
-        vector_file_ids = list({hit.entity.get("file_id") for hit in results[0]})
-
-        if not vector_file_ids:
-            return Response({"count": 0, "results": []}, status=200)
-
-        # Step 2: compute accessible files (owned or shared)
-        accessible_file_ids = list(
-            File.objects.filter(uploaded_by=user).values_list("id", flat=True)
-        ) + list(
-            FileAccessEntry.objects.filter(user=user, can_read=True).values_list("file_id", flat=True)
-        )
-
-        # Step 3: filter intersection of vector results and accessible files
-        allowed_file_ids = set(vector_file_ids) & set(accessible_file_ids)
+        vector_file_ids = {int(hit.entity.get("file_id")) for hit in results[0]}
+        allowed_file_ids = vector_file_ids & accessible_file_ids
 
         if not allowed_file_ids:
             return Response({"count": 0, "results": []}, status=200)
 
-        # Step 4: build full queryset with additional filters
+        # Step 4: apply additional Django-level filters
         q = Q(id__in=allowed_file_ids)
-
         if filters.get("created_from"):
             q &= Q(created_at__gte=datetime.fromisoformat(filters["created_from"]))
         if filters.get("created_to"):
@@ -347,9 +343,20 @@ class AdvancedDocumentSearchView(APIView):
 
         files = File.objects.filter(q).prefetch_related("metadata")
 
+        best_per_file = {}
+        for hit in results[0]:
+            fid = int(hit.entity.get("file_id"))
+            if fid not in allowed_file_ids:
+                continue
+            score = float(hit.score)
+            chunk = hit.entity.get("chunk_text", "")
+            if (fid not in best_per_file) or (score > best_per_file[fid][1]):
+                best_per_file[fid] = (chunk, score)
+
         results_out = []
         for file in files:
             metadata = file.metadata.first()
+            chunk_text, score = best_per_file.get(file.id, ("", None))
             results_out.append({
                 "file_id": file.id,
                 "filename": file.filename,
@@ -358,14 +365,8 @@ class AdvancedDocumentSearchView(APIView):
                 "created_at": file.created_at,
                 "author": metadata.author if metadata else None,
                 "keywords": metadata.keywords if metadata else None,
-                "chunk_text": next(
-                    (hit.entity.get("chunk_text") for hit in results[0] if hit.entity.get("file_id") == file.id),
-                    ""
-                ),
-                "score": next(
-                    (hit.score for hit in results[0] if hit.entity.get("file_id") == file.id),
-                    None
-                )
+                "chunk_text": chunk_text,
+                "score": score,
             })
 
         return Response({
@@ -376,7 +377,7 @@ class AdvancedDocumentSearchView(APIView):
 
 class SearchResultView(APIView):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [HasPermission('search.semantic')]
 
     def get(self, request, task_id, *args, **kwargs):
         task_id = str(task_id)
@@ -414,16 +415,20 @@ class CheckIndexView(APIView):
     POST /api/v1/document-search/check-index/
     Body: {"file_ids": [1, 2, 3]}
     Returns vector indexing status for each file.
+    Only returns status for files the user can access.
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasPermission('search.semantic')]
 
     def post(self, request):
         file_ids = request.data.get("file_ids", [])
         if not file_ids:
             return Response({"error": "file_ids is required"}, status=400)
 
+        accessible_ids = set(get_user_accessible_file_ids(request.user))
         results = {}
         for fid in file_ids:
+            if int(fid) not in accessible_ids:
+                continue
             has_chunks = VectorChunk.objects.filter(file_id=fid).exists()
             results[fid] = {"indexed": has_chunks}
 

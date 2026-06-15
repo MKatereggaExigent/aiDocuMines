@@ -129,6 +129,12 @@ urlpatterns = [
     # Document Classification/Clustering
     path('api/v1/classification/', include('document_classification.urls')),
 
+    # New Document Services - May 2025
+    path('api/v1/redlining/', include('document_redlining.urls')),
+    path('api/v1/workflows/', include('document_workflows.urls')),
+    path('api/v1/automation/', include('document_automation.urls')),
+    path('api/v1/versioning/', include('document_versioning.urls')),
+
 ]
 
 # Serve static files for Swagger UI

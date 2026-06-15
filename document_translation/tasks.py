@@ -8,7 +8,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 from core.models import File
 from document_translation.models import TranslationRun, TranslationFile
-from document_translation.utils import TranslationService, AzureBlobService
+from document_translation.utils import TranslationService, AzureBlobService, get_language_name
 from core.utils import register_generated_file
 
 
@@ -52,7 +52,7 @@ def translate_document_task(file_id, translation_run_id, from_language, to_langu
                 run=file_entry.run,
                 project_id=file_entry.project_id,
                 service_id=file_entry.service_id,
-                folder_name=os.path.join("translations", to_language)
+                folder_name=os.path.join("translations", get_language_name(to_language))
             )
 
         return {
@@ -70,7 +70,8 @@ def translate_document_task(file_id, translation_run_id, from_language, to_langu
     # ✅ Set up translation containers
     source_container = f"translation-source-{uuid.uuid4()}"
     target_container = f"translation-target-{uuid.uuid4()}"
-    output_dir = os.path.join(os.path.dirname(file_entry.filepath), "translations", to_language)
+    lang_name = get_language_name(to_language)
+    output_dir = os.path.join(os.path.dirname(file_entry.filepath), "translations", lang_name)
     os.makedirs(output_dir, exist_ok=True)
 
     try:
@@ -314,10 +315,10 @@ def translate_document_task(file_id, from_language, to_language):
                 # run=existing_translation.run,  # ✅ FIXED
                 project_id=file_entry.project_id,
                 service_id=file_entry.service_id,
-                folder_name=os.path.join("translations", to_language)
-            )
+                    folder_name=os.path.join("translations", lang_name)
+                )
 
-        registered_files.append({
+            registered_files.append({
             "filename": registered.filename,
             "file_id": registered.id,
             "path": registered.filepath

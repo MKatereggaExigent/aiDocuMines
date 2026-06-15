@@ -45,7 +45,7 @@ class OIDCCallbackView(View):
             secrets = load_superuser_secrets()
 
             token_url = "https://aidocumines-api-layer.aidocumines.com/o/token/"
-            redirect_uri = "https://nextcloud.aidocumines.com/apps/user_oidc/code"
+            redirect_uri = "https://nextcloud.apps.datasqan.com/apps/user_oidc/code"
             client_id = secrets.get("client_id")
             client_secret = secrets.get("client_secret")
 
@@ -70,7 +70,7 @@ class OIDCCallbackView(View):
                 details="OIDC callback successful, ID token retrieved."
             )
 
-            return redirect("https://nextcloud.aidocumines.com")
+            return redirect("https://nextcloud.apps.datasqan.com")
 
         except Exception as e:
             IntegrationLog.objects.create(

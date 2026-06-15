@@ -11,7 +11,7 @@ curl -X 'POST' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
   -d '{
-    "email": "admin@aidocumines.com",
+    "email": "michael.kateregga@datasqan.com",
     "password": "AdminSecure#789",
     "organisation": "AI DocuMines",
     "contact_name": "John Doe",
@@ -23,7 +23,7 @@ curl -X 'POST' \
 ```
 #####Response
 ```
-{"error":"Admin account already exists. Authentication required.","email":"admin@aidocumines.com","password":"superpassword","client_id":"VEBvGSRH6ZBhSyDNXWzRqMtEX2S12R61DK29JJ3Y","client_secret":"UfU5sZzS7uD53mtq71gThbH4TVMkpSW3SeCHQDlbDNS9lOrqY5FNwSfsQ5SwzqSLtwujARciaxUbxdUeYAEDB8JxcjRehpUH41isNKiXIfBSKxHVz5B2RTkJhyQDeos8"}
+{"error":"Admin account already exists. Authentication required.","email":"michael.kateregga@datasqan.com","password":"superpassword","client_id":"VEBvGSRH6ZBhSyDNXWzRqMtEX2S12R61DK29JJ3Y","client_secret":"UfU5sZzS7uD53mtq71gThbH4TVMkpSW3SeCHQDlbDNS9lOrqY5FNwSfsQ5SwzqSLtwujARciaxUbxdUeYAEDB8JxcjRehpUH41isNKiXIfBSKxHVz5B2RTkJhyQDeos8"}
 ```
 #### Login Super Admin User
 #####Request
@@ -35,7 +35,7 @@ curl -X 'POST' \
   -H 'X-Client-ID: VEBvGSRH6ZBhSyDNXWzRqMtEX2S12R61DK29JJ3Y' \
   -H 'X-Client-Secret: UfU5sZzS7uD53mtq71gThbH4TVMkpSW3SeCHQDlbDNS9lOrqY5FNwSfsQ5SwzqSLtwujARciaxUbxdUeYAEDB8JxcjRehpUH41isNKiXIfBSKxHVz5B2RTkJhyQDeos8' \
   -d '{
-    "email": "admin@aidocumines.com",
+    "email": "michael.kateregga@datasqan.com",
     "password": "superpassword"
   }'
 ```
@@ -55,7 +55,7 @@ curl -X 'GET' \
 ```
 #####Response
 ```
-[{"id":1,"email":"admin@aidocumines.com","organisation":"AI DocuMines","is_active":true},{"id":4,"email":"testuser@neworg.com","organisation":"New AI Startups","is_active":true},{"id":5,"email":"freshuser@aiworld.com","organisation":"AI Global Solutions","is_active":true},{"id":6,"email":"uniquetestuser@nextgenai.com","organisation":"NextGen AI Innovations","is_active":true},{"id":7,"email":"brandnewuser@futureai.com","organisation":"Future AI Technologies","is_active":true}]
+[{"id":1,"email":"michael.kateregga@datasqan.com","organisation":"AI DocuMines","is_active":true},{"id":4,"email":"testuser@neworg.com","organisation":"New AI Startups","is_active":true},{"id":5,"email":"freshuser@aiworld.com","organisation":"AI Global Solutions","is_active":true},{"id":6,"email":"uniquetestuser@nextgenai.com","organisation":"NextGen AI Innovations","is_active":true},{"id":7,"email":"brandnewuser@futureai.com","organisation":"Future AI Technologies","is_active":true}]
 ```
 
 

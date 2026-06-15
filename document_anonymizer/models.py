@@ -21,6 +21,7 @@ class AnonymizationRun(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project_id = models.CharField(max_length=255, db_index=True)
     service_id = models.CharField(max_length=255, db_index=True)
+    client = models.ForeignKey('custom_authentication.Client', on_delete=models.CASCADE, null=True, blank=True, related_name='anonymization_runs')
     client_name = models.CharField(max_length=255, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending', db_index=True)
     anonymization_type = models.CharField(max_length=20, choices=ANONYMIZATION_TYPE_CHOICES, default='Presidio', db_index=True)

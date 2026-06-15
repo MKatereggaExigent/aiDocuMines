@@ -6,6 +6,7 @@ from django.shortcuts import get_object_or_404
 from oauth2_provider.models import Application
 from core.models import File
 from document_translation.models import TranslationRun, TranslationFile
+from document_translation.utils import get_language_name
 import logging
 import os
 import json
@@ -143,6 +144,7 @@ class TranslationTaskStatusView(APIView):
                 "translated_file_id": str(tf.id),
                 "file_id": str(file_record.id) if file_record else None,
                 "language": tf.run.to_language,
+                "language_name": get_language_name(tf.run.to_language),
                 "filename": os.path.basename(tf.translated_filepath) if tf.translated_filepath else None,
                 "filepath": tf.translated_filepath,
                 "status": tf.run.status,
@@ -292,16 +294,17 @@ class TranslationTaskStatusView(APIView):
         # ✅ Construct response
         response_data = {
             "translation_run_id": str(run_instance.id),
-            "original_file_id": str(file_instance.id),
+            "original_file_id": str(translation_file.original_file.id),
             "translated_file_id": str(translation_file.id),
             "from_language": run_instance.from_language,
             "to_language": run_instance.to_language,
+            "to_language_name": get_language_name(run_instance.to_language),
             "status": run_instance.status,
             "error_message": run_instance.error_message if run_instance.status == "Failed" else None,
-            "project_id": file_instance.project_id,
-            "service_id": file_instance.service_id,
+            "project_id": translation_file.original_file.project_id,
+            "service_id": translation_file.original_file.service_id,
             "client_name": run_instance.client_name,
-            "original_file_path": file_instance.filepath,
+            "original_file_path": translation_file.original_file.filepath,
             "translated_file_path": translation_file.translated_filepath,
             "created_at": translation_file.created_at.strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": translation_file.updated_at.strftime("%Y-%m-%d %H:%M:%S"),

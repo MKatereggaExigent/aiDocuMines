@@ -13,6 +13,8 @@ from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHa
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from core.models import File
+from core.tenancy import ClientScopedViewMixin
+from custom_authentication.permissions import IsAdminOrManagerMutation
 from document_anonymizer.models import Anonymize, DeAnonymize, AnonymizationRun
 from document_anonymizer.tasks import anonymize_document_task, deanonymize_document_task
 from document_anonymizer.llm_orchestrator import query_model  # New import
@@ -73,9 +75,9 @@ def get_user_from_client_id(client_id):
 
 
 
-class SubmitAnonymizationAPIView(APIView):
+class SubmitAnonymizationAPIView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [TokenHasReadWriteScope, IsAdminOrManagerMutation]
 
     @swagger_auto_schema(
         manual_parameters=[
@@ -101,7 +103,7 @@ class SubmitAnonymizationAPIView(APIView):
 
         application = get_object_or_404(Application, client_id=client_id)
         user = application.user
-        file_instance = get_object_or_404(File, id=file_id, project_id=project_id, service_id=service_id)
+        file_instance = self.get_object_by_client(File.objects.filter(project_id=project_id, service_id=service_id), id=file_id)
 
         if str(file_instance.user.id) != str(user.id):
             raise PermissionDenied("You are not authorized to process this file.")
@@ -126,11 +128,12 @@ class SubmitAnonymizationAPIView(APIView):
                 "status": "Completed"
             }, status=status.HTTP_200_OK)
 
-        # Proceed with new anonymization
+        # Proceed with new anonymization with client FK
         anonymization_run = AnonymizationRun.objects.create(
             id=str(uuid.uuid4()),
             project_id=project_id,
             service_id=service_id,
+            client=request.user.client,
             client_name=user.username or user.email,
             status="Processing",
             anonymization_type="Presidio-Spacy"
@@ -217,7 +220,7 @@ class SubmitAnonymizationAPIView(APIView):
 
 
 
-class DownloadAnonymizedFileAPIView(APIView):
+class DownloadAnonymizedFileAPIView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
 
@@ -244,6 +247,7 @@ class DownloadAnonymizedFileAPIView(APIView):
         if not user:
             return Response({"error": "Invalid client ID"}, status=403)
 
+        self.get_object_by_client(File.objects.all(), id=file_id)
         anonymized_file = get_object_or_404(Anonymize, original_file_id=file_id, file_type=file_type, is_active=True)
         de_anonymized_file = DeAnonymize.objects.filter(file_id=file_id).first()
 

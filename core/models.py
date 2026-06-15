@@ -269,3 +269,113 @@ class Webhook(models.Model):
     def __str__(self):
         return f"{self.user.username}'s webhook"
 
+
+class BulkJob(models.Model):
+    """
+    Tracks a bulk/batch processing job across multiple files.
+    """
+    JOB_TYPES = [
+        # Private Equity
+        ("pe_classify", "Classify Documents"),
+        ("pe_extract_risk_clauses", "Extract Risk Clauses"),
+        ("pe_issue_spotting", "Issue Spotting"),
+        ("pe_findings_report", "Findings Report"),
+        # Class Actions
+        ("ca_evidence_culling", "Evidence Culling"),
+        ("ca_pii_redaction", "PII Redaction"),
+        ("ca_extract_damages", "Extract Damages"),
+        ("ca_issue_tagging", "Issue Tagging"),
+        ("ca_duplicate_detection", "Duplicate Detection"),
+        # Labor & Employment
+        ("le_analyze_communications", "Analyze Communications"),
+        ("le_wage_hour_analysis", "Wage & Hour Analysis"),
+        ("le_policy_comparison", "Policy Comparison"),
+        # IP Litigation
+        ("ip_analyze_patent", "Patent Analysis"),
+        ("ip_prior_art_search", "Prior Art Search"),
+        ("ip_infringement", "Infringement Analysis"),
+        # Regulatory Compliance
+        ("rc_dsar_processing", "DSAR Processing"),
+        ("rc_redaction", "Redaction"),
+        ("rc_gap_analysis", "Gap Analysis"),
+        ("rc_policy_mapping", "Policy Mapping"),
+        # AI Document Processing
+        ("ai_document_search", "Semantic Document Search"),
+        ("ai_document_classification", "Document Classification"),
+        ("ai_anonymization", "Document Anonymization"),
+        ("ai_ocr", "OCR Text Extraction"),
+        ("ai_translation", "Document Translation"),
+        ("ai_document_structure", "Document Structure Analysis"),
+        ("ai_redlining", "Document Redlining"),
+        ("ai_metadata_extraction", "Metadata Extraction"),
+    ]
+
+    STATUS_CHOICES = [
+        ("Pending", "Pending"),
+        ("Queued", "Queued"),
+        ("Processing", "Processing"),
+        ("Completed", "Completed"),
+        ("Failed", "Failed"),
+        ("Partially_Completed", "Partially Completed"),
+        ("Cancelled", "Cancelled"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="bulk_jobs")
+    job_type = models.CharField(max_length=50, choices=JOB_TYPES, db_index=True)
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="Pending", db_index=True)
+    total_files = models.IntegerField(default=0)
+    processed_files = models.IntegerField(default=0)
+    failed_files = models.IntegerField(default=0)
+    project_id = models.CharField(max_length=255, db_index=True)
+    service_id = models.CharField(max_length=255, db_index=True)
+    folder_id = models.UUIDField(null=True, blank=True, help_text="Process all files in this folder")
+    input_parameters = models.JSONField(default=dict, blank=True, help_text="Service-specific parameters")
+    result_summary = models.JSONField(default=dict, blank=True, help_text="Summary of processing results")
+    error_log = models.JSONField(default=list, blank=True, help_text="List of errors with file details")
+    celery_group_id = models.CharField(max_length=255, null=True, blank=True, help_text="Celery group ID for tracking")
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"BulkJob({self.job_type}) {self.id} - {self.status} ({self.processed_files}/{self.total_files})"
+
+
+class BulkJobFileResult(models.Model):
+    """
+    Tracks the result of processing a single file within a BulkJob.
+    """
+    STATUS_CHOICES = [
+        ("Pending", "Pending"),
+        ("Processing", "Processing"),
+        ("Completed", "Completed"),
+        ("Failed", "Failed"),
+        ("Skipped", "Skipped"),
+    ]
+
+    id = models.BigAutoField(primary_key=True)
+    bulk_job = models.ForeignKey(BulkJob, on_delete=models.CASCADE, related_name="file_results")
+    file = models.ForeignKey(File, on_delete=models.CASCADE, related_name="bulk_results")
+    status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="Pending", db_index=True)
+    result_data = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(null=True, blank=True)
+    task_id = models.CharField(max_length=255, null=True, blank=True, help_text="Celery task ID")
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(fields=["bulk_job", "status"]),
+            models.Index(fields=["bulk_job", "file"]),
+        ]
+
+    def __str__(self):
+        return f"BulkJobFileResult({self.bulk_job_id}, file={self.file_id}) - {self.status}"
+

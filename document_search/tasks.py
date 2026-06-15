@@ -48,19 +48,36 @@ from core.utils import generate_and_register_service_report
 
 # ───────────────────────────── Config & constants ───────────────────────────
 try:
-    from document_search import config
-    MILVUS_HOST = getattr(config, "MILVUS_HOST", "localhost")
-    MILVUS_PORT = getattr(config, "MILVUS_PORT", "19530")
-    COLLECTION_NAME = getattr(config, "COLLECTION_NAME", "doc_embeddings")
-    PARTITION_PREFIX = getattr(config, "PARTITION_PREFIX", "user_")
+    from document_search import config as search_config
+    MILVUS_HOST = getattr(search_config, "MILVUS_HOST", "localhost")
+    MILVUS_PORT = getattr(search_config, "MILVUS_PORT", "19530")
+    COLLECTION_NAME = getattr(search_config, "COLLECTION_NAME", "doc_embeddings_v2")
+    PARTITION_PREFIX = getattr(search_config, "PARTITION_PREFIX", "user_")
+    VECTOR_DIM = getattr(search_config, "VECTOR_DIM", 384)
+    BATCH_SZ = getattr(search_config, "MILVUS_INSERT_BATCH", 500)
+    MILVUS_INDEX_TYPE = getattr(search_config, "MILVUS_INDEX_TYPE", "HNSW")
+    MILVUS_METRIC_TYPE = getattr(search_config, "MILVUS_METRIC_TYPE", "COSINE")
+    MILVUS_NLIST = getattr(search_config, "MILVUS_NLIST", 256)
+    MILVUS_NPROBE = getattr(search_config, "MILVUS_NPROBE", 16)
+    MILVUS_M = getattr(search_config, "MILVUS_M", 16)
+    MILVUS_EF_CONSTRUCTION = getattr(search_config, "MILVUS_EF_CONSTRUCTION", 200)
+    MILVUS_EF = getattr(search_config, "MILVUS_EF", 64)
+    MILVUS_NCENTROIDS = getattr(search_config, "MILVUS_NCENTROIDS", 16384)
 except ImportError:
     MILVUS_HOST = "localhost"
     MILVUS_PORT = "19530"
-    COLLECTION_NAME = "doc_embeddings"
+    COLLECTION_NAME = "doc_embeddings_v2"
     PARTITION_PREFIX = "user_"
-
-VECTOR_DIM = 384          # MiniLM / BGE-small default, stay in sync with utils.py
-BATCH_SZ   = 100          # Milvus insert batch size
+    VECTOR_DIM = 384
+    BATCH_SZ = 500
+    MILVUS_INDEX_TYPE = "HNSW"
+    MILVUS_METRIC_TYPE = "COSINE"
+    MILVUS_NLIST = 256
+    MILVUS_NPROBE = 16
+    MILVUS_M = 16
+    MILVUS_EF_CONSTRUCTION = 200
+    MILVUS_EF = 64
+    MILVUS_NCENTROIDS = 16384
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,36 +91,71 @@ from pymilvus import (
     Collection,
 )
 
+def _build_index_params():
+    """Return index params based on configured index type."""
+    if MILVUS_INDEX_TYPE == "HNSW":
+        return {
+            "index_type": "HNSW",
+            "metric_type": MILVUS_METRIC_TYPE,
+            "params": {
+                "M": MILVUS_M,
+                "efConstruction": MILVUS_EF_CONSTRUCTION,
+            },
+        }
+    elif MILVUS_INDEX_TYPE == "IVF_SQ8":
+        return {
+            "index_type": "IVF_SQ8",
+            "metric_type": MILVUS_METRIC_TYPE,
+            "params": {"nlist": MILVUS_NLIST},
+        }
+    elif MILVUS_INDEX_TYPE == "DISKANN":
+        return {
+            "index_type": "DISKANN",
+            "metric_type": MILVUS_METRIC_TYPE,
+        }
+    else:
+        return {
+            "index_type": "IVF_FLAT",
+            "metric_type": MILVUS_METRIC_TYPE,
+            "params": {"nlist": MILVUS_NLIST},
+        }
+
+
 def _ensure_collection() -> Collection:
     """Connect and create the single global collection if absent."""
     if not connections.has_connection("default"):
         connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
 
     if not utility.has_collection(COLLECTION_NAME):
-        LOGGER.info("Creating Milvus collection '%s' …", COLLECTION_NAME)
+        LOGGER.info("Creating Milvus collection '%s' with index '%s' ...", COLLECTION_NAME, MILVUS_INDEX_TYPE)
 
         schema = CollectionSchema(
             [
                 FieldSchema("pk",         DataType.INT64, is_primary=True, auto_id=True),
                 FieldSchema("file_id",    DataType.INT64),
-                FieldSchema("chunk_hash", DataType.INT64),                    # for dedup
-                FieldSchema("source",     DataType.VARCHAR, max_length=100),  # filename
-                FieldSchema("chunk_text", DataType.VARCHAR, max_length=2000),
+                FieldSchema("client_id",  DataType.INT64),
+                FieldSchema("chunk_hash", DataType.INT64),
+                FieldSchema("source",     DataType.VARCHAR, max_length=256),
+                FieldSchema("chunk_text", DataType.VARCHAR, max_length=5000),
                 FieldSchema("vector",     DataType.FLOAT_VECTOR, dim=VECTOR_DIM),
             ],
-            description="Chunked document embeddings (multi-tenant)",
+            description="Chunked document embeddings (multi-tenant, billion-scale)",
         )
 
         coll = Collection(name=COLLECTION_NAME, schema=schema)
-        coll.create_index(
-            field_name="vector",
-            index_params={
-                "index_type": "IVF_FLAT",
-                "metric_type": "COSINE",
-                "params": {"nlist": 128},
-            },
-        )
-    return Collection(COLLECTION_NAME)
+        coll.create_index(field_name="vector", index_params=_build_index_params())
+        coll.create_index(field_name="file_id", index_params={"index_type": "STL_SORT"})
+        coll.create_index(field_name="client_id", index_params={"index_type": "STL_SORT"})
+        LOGGER.info("Milvus collection '%s' created with index '%s'", COLLECTION_NAME, MILVUS_INDEX_TYPE)
+        return coll
+
+    coll = Collection(COLLECTION_NAME)
+    existing_fields = [f.name for f in coll.schema.fields]
+    if "client_id" not in existing_fields:
+        LOGGER.warning("Milvus collection '%s' missing client_id; dropping. Re-index needed.", COLLECTION_NAME)
+        coll.drop()
+        return _ensure_collection()
+    return coll
 
 
 def _ensure_partition(coll: Collection, name: str) -> None:
@@ -114,7 +166,7 @@ def _ensure_partition(coll: Collection, name: str) -> None:
 
 def _insert_batches(
     coll: Collection,
-    rows: List[Tuple[int, int, str, str, List[float]]],   # (file_id, chunk_hash, source, chunk_text, vector)
+    rows: List[Tuple[int, int, int, str, str, List[float]]],   # (file_id, client_id, chunk_hash, source, chunk_text, vector)
     partition: str,
     batch: int = BATCH_SZ,
 ) -> None:
@@ -125,10 +177,11 @@ def _insert_batches(
             coll.insert(
                 [
                     [r[0] for r in slice_],  # file_id
-                    [r[1] for r in slice_],  # chunk_hash
-                    [r[2] for r in slice_],  # source (filename)
-                    [r[3] for r in slice_],  # chunk_text
-                    [r[4] for r in slice_],  # vector
+                    [r[1] for r in slice_],  # client_id
+                    [r[2] for r in slice_],  # chunk_hash
+                    [r[3] for r in slice_],  # source (filename)
+                    [r[4] for r in slice_],  # chunk_text
+                    [r[5] for r in slice_],  # vector
                 ],
                 partition_name=partition,
             )
@@ -299,11 +352,13 @@ def index_file(file_id: int, force: bool = False) -> dict:
             batch_size=500,
         )
 
-    # 3️⃣ Insert into Milvus (partitioned by user)
+    # 3️⃣ Insert into Milvus (partitioned by user, tagged with client_id)
     coll = _ensure_collection()
     part = _partition_name(file.user_id)
     _ensure_partition(coll, part)
     coll.load(partition_names=[part])
+
+    client_id = file.user.client.id if file.user and file.user.client else -1
 
     seen = set()
     rows = []
@@ -312,7 +367,7 @@ def index_file(file_id: int, force: bool = False) -> dict:
         if h in seen:
             continue
         seen.add(h)
-        rows.append((file.id, h, file.filename, txt, vec))
+        rows.append((file.id, client_id, h, file.filename, txt, vec))
 
     _insert_batches(coll, rows, partition=part)
 
@@ -324,22 +379,46 @@ def index_file(file_id: int, force: bool = False) -> dict:
 
 
 @shared_task(name="document_search.bulk_reindex")
-def bulk_reindex() -> dict:
+def bulk_reindex(batch_size: int = 1000) -> dict:
     """
     Queue indexing for all Files missing VectorChunks.
+    Uses chunked iteration to scale to billions of files.
     """
-    unindexed: Iterable[File] = (
-        File.objects.filter(vector_chunks__isnull=True)
-        .order_by("id")
-        .distinct()
-    )
-    count = 0
-    for f in unindexed:
-        index_file.delay(f.id)
-        count += 1
+    total = File.objects.count()
+    LOGGER.info("Starting bulk reindex of %s total files ...", total)
 
-    LOGGER.info("📥 Enqueued %s files for indexing.", count)
-    return {"queued": count}
+    unindexed_qs = File.objects.filter(vector_chunks__isnull=True).order_by("id").distinct()
+    unindexed_count = unindexed_qs.count()
+    LOGGER.info("Found %s unindexed files.", unindexed_count)
+
+    queued = 0
+    ids_batch = []
+    for f_id in unindexed_qs.values_list("id", flat=True).iterator(chunk_size=batch_size):
+        ids_batch.append(f_id)
+        if len(ids_batch) >= batch_size:
+            _reindex_batch.delay(ids_batch)
+            queued += len(ids_batch)
+            ids_batch = []
+
+    if ids_batch:
+        _reindex_batch.delay(ids_batch)
+        queued += len(ids_batch)
+
+    LOGGER.info("Enqueued %s files for Milvus indexing.", queued)
+    return {"queued": queued, "total": total, "unindexed": unindexed_count}
+
+
+@shared_task(name="document_search.reindex_batch")
+def _reindex_batch(file_ids: list[int]) -> dict:
+    """Index a batch of file IDs into Milvus."""
+    indexed = 0
+    for fid in file_ids:
+        try:
+            index_file(fid, force=False)
+            indexed += 1
+        except Exception as e:
+            LOGGER.error("Failed to index file %s: %s", fid, e)
+    return {"indexed": indexed, "batch_size": len(file_ids)}
 
 '''
 @shared_task(name="document_search.exec_search")
@@ -377,7 +456,7 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
     res = coll.search(
         data=[q_vec],
         anns_field="vector",
-        param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+        param={"metric_type": MILVUS_METRIC_TYPE, "params": {"nprobe": MILVUS_NPROBE, "ef": MILVUS_EF}},
         limit=top_k,
         expr=expr,
         output_fields=["file_id", "chunk_text"],
@@ -464,12 +543,13 @@ def exec_search(user_id: int, query: str, file_id: int | None, top_k: int) -> li
     coll.load(partition_names=list(owner_partitions))
 
     id_list = ",".join(map(str, sorted(accessible_ids)))
-    expr = f"file_id in [{id_list}]"
+    client_id_val = user.client.id if hasattr(user, "client") and user.client else -1
+    expr = f"file_id in [{id_list}] and client_id == {client_id_val}"
 
     res = coll.search(
         data=[q_vec],
         anns_field="vector",
-        param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+        param={"metric_type": MILVUS_METRIC_TYPE, "params": {"nprobe": MILVUS_NPROBE, "ef": MILVUS_EF}},
         limit=top_k,
         expr=expr,
         output_fields=["file_id", "chunk_text"],
@@ -548,7 +628,7 @@ def semantic_search_task(
         results = collection.search(
             data=[query_vector],
             anns_field="vector",
-            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            param={"metric_type": MILVUS_METRIC_TYPE, "params": {"nprobe": MILVUS_NPROBE, "ef": MILVUS_EF}},
             limit=top_k,
             expr=expr,
             output_fields=["file_id", "chunk_text"],
@@ -687,12 +767,13 @@ def semantic_search_task(
         coll.load(partition_names=list(owner_partitions))
 
         id_list = ",".join(map(str, sorted(accessible_ids)))
-        expr = f"file_id in [{id_list}]"
+        client_id_val = user.client.id if hasattr(user, "client") and user.client else -1
+        expr = f"file_id in [{id_list}] and client_id == {client_id_val}"
 
         results = coll.search(
             data=[qvec],
             anns_field="vector",
-            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            param={"metric_type": MILVUS_METRIC_TYPE, "params": {"nprobe": MILVUS_NPROBE, "ef": MILVUS_EF}},
             limit=top_k,
             expr=expr,
             output_fields=["file_id", "chunk_text"],

@@ -11,7 +11,7 @@ CORE="$BASE/api/v1/core/onlyoffice"
 # OAuth2 creds (defaults = the ones you gave)
 # Override any of these via env vars if needed.
 # =========================
-OAUTH_USERNAME="${OAUTH_USERNAME:-admin@aidocumines.com}"
+OAUTH_USERNAME="${OAUTH_USERNAME:-michael.kateregga@datasqan.com}"
 OAUTH_PASSWORD="${OAUTH_PASSWORD:-superpassword}"
 OAUTH_CLIENT_ID="${OAUTH_CLIENT_ID:-3DQwq7NeVDNVavTZSqmg1oP2J8cbs8KIfyDRZcuv}"
 OAUTH_CLIENT_SECRET="${OAUTH_CLIENT_SECRET:-S5bMEDhAvABCBJLnDDW2uiTGPdsF640eRua2F9xTlI8yXTEZLjSdOdWUVxSzrZd6rY5BmyqBEoOoHAUFTwcJIBEpR8uQjiUBBL1DGvL08OBWDMYOU81E1DSXZ8qXoKO0}"

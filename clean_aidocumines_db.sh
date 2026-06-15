@@ -5,7 +5,7 @@ DB_CONTAINER="aidocumines_api_layer_db"
 DB_NAME="aidocumines_api_layer_database"
 DB_USER="aidocumines_administrator"
 DB_PORT="5432"
-SUPERUSER_EMAIL="admin@aidocumines.com"
+SUPERUSER_EMAIL="michael.kateregga@datasqan.com"
 
 echo "🔄 Starting cleanup of database '$DB_NAME'..."
 

@@ -312,8 +312,5 @@ def extract_document_text_task(file_id):
         # logger.info(f"✅ File upload completed: {file_instance.filename} - ID: {file_instance.id}")
 # 
         # return {"message": "File uploaded successfully", "file_id": file_instance.id}
-# 
-    # except Exception as e:
-        # logger.error(f"❌ File upload failed - Error: {str(e)}")
-        # return {"error": f"File upload failed: {str(e)}"}
-# 
+# Import bulk processing tasks so Celery discovers them (file is tasks_bulk.py, not tasks.py)
+from core.tasks_bulk import execute_bulk_job, process_single_file_in_bulk, cancel_bulk_job, finalize_bulk_job  # noqa: F401

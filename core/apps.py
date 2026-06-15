@@ -28,6 +28,14 @@ class CoreConfig(AppConfig):
         # ✅ Import signal handlers so they are registered when Django boots
         import core.signals
 
+        # ✅ Register bulk processing handlers
+        try:
+            from core.bulk_registry import discover_and_register
+            discover_and_register()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(f"Bulk handler registration failed: {exc}")
+
 
 '''
 from django.apps import AppConfig

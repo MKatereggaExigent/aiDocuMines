@@ -439,17 +439,8 @@ class QueryViewSet(viewsets.ModelViewSet):
 
         topic = get_object_or_404(Topic, id=topic_id, user=request.user)
         queries = Query.objects.filter(topic=topic, user=request.user).order_by('created_at')
-
-        history = []
-        for q in queries:
-            history.append({"role": "user", "content": q.query_text, "timestamp": q.created_at})
-            history.append({"role": "assistant", "content": q.response_text, "timestamp": q.created_at})
-
-        return Response({
-            "topic_id": topic.id,
-            "topic_name": topic.name,
-            "messages": history
-        })
+        serializer = QuerySerializer(queries, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'], url_path='ocr-preview')
     def ocr_preview(self, request):

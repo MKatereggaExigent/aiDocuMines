@@ -12,6 +12,7 @@ from document_classification.views import (
     ClusteringResultsAPIView,
     ClusteringRunListAPIView,
     ClusterDetailsAPIView,
+    SubClusterAPIView,
 )
 
 app_name = 'document_classification'
@@ -26,5 +27,6 @@ urlpatterns = [
     path('results/', ClusteringResultsAPIView.as_view(), name='clustering_results'),
     path('runs/', ClusteringRunListAPIView.as_view(), name='clustering_runs'),
     path('cluster/', ClusterDetailsAPIView.as_view(), name='cluster_details'),
+    path('subcluster/', SubClusterAPIView.as_view(), name='subcluster'),
 ]
 

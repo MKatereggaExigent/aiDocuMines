@@ -7,7 +7,6 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from oauth2_provider.models import Application
 from core.models import File
-# from document_translation.models import TranslationRun, TranslationFile, TranslationLanguage
 from document_translation.models import TranslationRun, TranslationFile, TranslationLanguage, TranslationStorage
 
 from document_translation.tasks import (
@@ -15,6 +14,8 @@ from document_translation.tasks import (
     check_translation_status_task,
     download_translated_file_task
 )
+from core.tenancy import ClientScopedViewMixin
+from custom_authentication.permissions import IsAdminOrManagerMutation
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
@@ -67,13 +68,13 @@ def get_user_from_client_id(client_id):
 
 
 ### **🔹 Submit Translation**
-class SubmitTranslationAPIView(APIView):
+class SubmitTranslationAPIView(ClientScopedViewMixin):
     """
     Submit a file for translation and track using `file_id` and `translation_run_id`.
     """
 
     authentication_classes = [OAuth2Authentication]
-    permission_classes = [TokenHasReadWriteScope]
+    permission_classes = [TokenHasReadWriteScope, IsAdminOrManagerMutation]
 
     @swagger_auto_schema(
         operation_description="Submit a file for translation.",
@@ -97,8 +98,8 @@ class SubmitTranslationAPIView(APIView):
         if not user:
             return Response({"error": "Invalid client ID"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # ✅ Get the file instance
-        file_instance = get_object_or_404(File, id=file_id)
+        # ✅ Get the file instance scoped by client
+        file_instance = self.get_object_by_client(File.objects.all(), id=file_id)
 
         if file_instance.user != user:
             raise PermissionDenied("You are not authorized to translate this file.")
@@ -107,25 +108,22 @@ class SubmitTranslationAPIView(APIView):
             return Response({"error": "File not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # ✅ Validate source and target languages
-        # "auto" is a special code for auto-detection (supported by Azure Translator)
         if from_lang != "auto" and not TranslationLanguage.objects.filter(code=from_lang).exists():
             return Response({"error": f"Invalid source language: {from_lang}"}, status=status.HTTP_400_BAD_REQUEST)
         if not TranslationLanguage.objects.filter(code=to_lang).exists():
             return Response({"error": f"Invalid target language: {to_lang}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ✅ Create a new translation run
+        # ✅ Create a new translation run with client FK
         translation_run = TranslationRun.objects.create(
             project_id=file_instance.project_id,
             service_id=file_instance.service_id,
             from_language=from_lang,
             to_language=to_lang,
             status="Processing",
+            client=request.user.client,
             client_name=user.username if user and user.username else user.email
         )
 
-        # ✅ Start translation asynchronously
-        # translate_document_task.delay(file_id, from_lang, to_lang)
-        # translate_document_task.delay(file_id, str(run.id), from_language, to_language)
         translate_document_task.delay(file_id, str(translation_run.id), from_lang, to_lang)
 
         response_data = {
@@ -138,13 +136,14 @@ class SubmitTranslationAPIView(APIView):
 
 
 ### **🔹 Check Translation Status**
-class CheckTranslationStatusAPIView(APIView):
+class CheckTranslationStatusAPIView(ClientScopedViewMixin):
     """
     Check the translation status using `translation_run_id`.
     """
 
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="Check the status of a document translation using `translation_run_id`.",
@@ -157,6 +156,9 @@ class CheckTranslationStatusAPIView(APIView):
         if not translation_run_id:
             return Response({"error": "Missing `translation_run_id` parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # ✅ Verify translation run belongs to user's client
+        self.get_object_by_client(TranslationRun.objects.all(), id=translation_run_id)
+
         # ✅ Fetch translation status asynchronously
         result = check_translation_status_task.delay(translation_run_id).get()
 
@@ -164,7 +166,7 @@ class CheckTranslationStatusAPIView(APIView):
 
 
 ### **🔹 Download Translated File**
-class DownloadTranslatedFileAPIView(APIView):
+class DownloadTranslatedFileAPIView(ClientScopedViewMixin):
     """
     Download the translated file.
     """
@@ -182,6 +184,9 @@ class DownloadTranslatedFileAPIView(APIView):
 
         if not file_id:
             return Response({"error": "Missing `file_id` parameter"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ✅ Verify file belongs to user's client
+        self.get_object_by_client(File.objects.all(), id=file_id)
 
         # ✅ Fetch translated file path asynchronously
         result = download_translated_file_task.delay(file_id).get()
@@ -219,9 +224,10 @@ class TranslationFileDownloadView(generics.RetrieveAPIView):
 ##################################################
 
 ### 🔹 TranslationRunSummaryView
-class TranslationRunSummaryView(APIView):
+class TranslationRunSummaryView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="Get summary of a translation run.",
@@ -233,7 +239,7 @@ class TranslationRunSummaryView(APIView):
         if not run_id:
             return Response({"error": "Missing translation_run_id"}, status=400)
 
-        run = get_object_or_404(TranslationRun, id=run_id)
+        run = self.get_object_by_client(TranslationRun.objects.all(), id=run_id)
         file_count = run.translation_files.count()
 
         return Response({
@@ -248,9 +254,10 @@ class TranslationRunSummaryView(APIView):
 
 
 ### 🔹 TranslatedFilesByRunView
-class TranslatedFilesByRunView(APIView):
+class TranslatedFilesByRunView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="List all translated files for a given translation run.",
@@ -262,7 +269,7 @@ class TranslatedFilesByRunView(APIView):
         if not run_id:
             return Response({"error": "Missing translation_run_id"}, status=400)
 
-        run = get_object_or_404(TranslationRun, id=run_id)
+        run = self.get_object_by_client(TranslationRun.objects.all(), id=run_id)
         files = run.translation_files.all()
 
         return Response([
@@ -276,7 +283,7 @@ class TranslatedFilesByRunView(APIView):
 
 
 ### 🔹 TranslationFileInsightView
-class TranslationFileInsightView(APIView):
+class TranslationFileInsightView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
 
@@ -291,6 +298,7 @@ class TranslationFileInsightView(APIView):
             return Response({"error": "Missing file_id"}, status=400)
 
         translation_file = get_object_or_404(TranslationFile, original_file__id=file_id)
+        self.get_object_by_client(File.objects.all(), id=translation_file.original_file.id)
         run = translation_file.run
 
         return Response({
@@ -305,7 +313,7 @@ class TranslationFileInsightView(APIView):
 
 
 ### 🔹 TranslationHistoryView
-class TranslationHistoryView(APIView):
+class TranslationHistoryView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
 
@@ -319,6 +327,7 @@ class TranslationHistoryView(APIView):
         if not file_id:
             return Response({"error": "Missing file_id"}, status=400)
 
+        self.get_object_by_client(File.objects.all(), id=file_id)
         translations = TranslationFile.objects.filter(original_file__id=file_id)
         return Response([
             {
@@ -346,9 +355,10 @@ class SupportedLanguagesView(APIView):
 
 
 ### 🔹 TranslationStorageLocationsView
-class TranslationStorageLocationsView(APIView):
+class TranslationStorageLocationsView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="Return upload and translated storage locations.",
@@ -360,6 +370,7 @@ class TranslationStorageLocationsView(APIView):
         if not run_id:
             return Response({"error": "Missing translation_run_id"}, status=400)
 
+        self.get_object_by_client(TranslationRun.objects.all(), id=run_id)
         storages = TranslationStorage.objects.filter(run__id=run_id)
         return Response([
             {
@@ -414,9 +425,10 @@ class TranslationClientSummaryView(APIView):
 
 
 ### 🔹 TranslationProjectSummaryView
-class TranslationProjectSummaryView(APIView):
+class TranslationProjectSummaryView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
+    client_scope_field = "client"
 
     @swagger_auto_schema(
         operation_description="Aggregate translation data for a specific project.",
@@ -428,7 +440,7 @@ class TranslationProjectSummaryView(APIView):
         if not project_id:
             return Response({"error": "Missing project_id"}, status=400)
 
-        runs = TranslationRun.objects.filter(project_id=project_id)
+        runs = self.get_client_scoped_queryset(TranslationRun.objects.filter(project_id=project_id))
         summary = {}
         for run in runs:
             lang = run.to_language
@@ -438,7 +450,7 @@ class TranslationProjectSummaryView(APIView):
 
 
 ### 🔹 TranslationLanguageSummaryView
-class TranslationLanguageSummaryView(APIView):
+class TranslationLanguageSummaryView(ClientScopedViewMixin):
     authentication_classes = [OAuth2Authentication]
     permission_classes = [TokenHasReadWriteScope]
 
@@ -452,7 +464,10 @@ class TranslationLanguageSummaryView(APIView):
         if not lang:
             return Response({"error": "Missing lang parameter"}, status=400)
 
-        files = TranslationFile.objects.filter(run__to_language=lang)
+        files = TranslationFile.objects.filter(
+            run__to_language=lang,
+            original_file__user__client=request.user.client
+        )
         projects = files.values("original_file__project_id").distinct()
 
         return Response({

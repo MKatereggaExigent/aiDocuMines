@@ -505,10 +505,13 @@ class FileDownloadView(APIView):
 
         filename = os.path.basename(real_path)
 
+        # Serve inline for renderable types, attachment only when ?download=true
+        is_download = request.query_params.get("download", "").lower() == "true"
+
         try:
             return FileResponse(
                 open(real_path, "rb"),
-                as_attachment=True,
+                as_attachment=is_download,
                 filename=filename,
                 content_type=content_type
             )
@@ -547,7 +550,7 @@ class FileDownloadView(APIView):
 
         return FileResponse(
             open(real_path, "rb"),
-            as_attachment=True,
+            as_attachment=False,
             filename=os.path.basename(real_path),
             content_type="application/pdf"
         )

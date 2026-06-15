@@ -12,7 +12,7 @@ set -euo pipefail
 ###############################################################################
 AIDOCUMINES_DATA="/home/aidocumines/Apps/aiDocuMines/media/uploads"
 NEXTCLOUD_ADMIN_USER="admin"
-NEXTCLOUD_URL="https://nextcloud.aidocumines.com"
+NEXTCLOUD_URL="https://nextcloud.apps.datasqan.com"
 PASSWORD_FILE="nextcloud_user_passwords.txt"
 
 ###############################################################################

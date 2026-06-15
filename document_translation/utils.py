@@ -20,6 +20,13 @@ from document_translation.models import TranslationLanguage
 
 from azure.core.exceptions import ResourceNotFoundError, ResourceExistsError
 
+
+def get_language_name(code):
+    try:
+        return TranslationLanguage.objects.get(code=code).name
+    except TranslationLanguage.DoesNotExist:
+        return code
+
 # ✅ Load environment variables
 load_dotenv()
 
@@ -221,7 +228,8 @@ class TranslationService:
         self.client.begin_translation(inputs=[translation_input]).wait()
 
         # Store the translated file using the original filename
-        translated_folder = os.path.join(os.path.dirname(original_file.filepath), "translations", target_language)
+        lang_name = get_language_name(target_language)
+        translated_folder = os.path.join(os.path.dirname(original_file.filepath), "translations", lang_name)
         os.makedirs(translated_folder, exist_ok=True)
 
         self.azure_service.download_files(target_container, translated_folder)

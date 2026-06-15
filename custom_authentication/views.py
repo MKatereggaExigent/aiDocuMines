@@ -10,10 +10,11 @@ from datetime import timedelta
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from oauth2_provider.contrib.rest_framework import OAuth2Authentication, TokenHasReadWriteScope
-from .models import PasswordResetToken, CustomUser, Client
+from .models import PasswordResetToken, CustomUser, Client, TwoFactorCode
 from .serializers import PasswordResetRequestSerializer, PasswordResetSerializer, CreateAdminUserSerializer, UserActivityLogSerializer
 from .tasks import send_signup_email_task, send_password_reset_email_task, send_admin_password_reset_email_task # ✅ Celery tasks
 from .tasks import send_password_reset_success_email_task
+from integrations.tasks import provision_nextcloud_user
 import logging
 from rest_framework.permissions import AllowAny
 from oauth2_provider.generators import generate_client_secret
@@ -39,6 +40,7 @@ import secrets
 import os
 import json
 import uuid
+import random
 from .serializers import ClientApplicationSerializer
 
 import json
@@ -348,17 +350,36 @@ class LoginView(APIView):
         if user is None:
             return Response({"error": "Invalid email or password"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # 🔐 If user has 2FA enabled, require a valid 2FA code
+        # 🔐 If user has 2FA enabled, require a valid email-based 2FA code
         if user.is_2fa_enabled:
             if not twofa_code:
-                return Response({"error": "2FA code is required"}, status=status.HTTP_401_UNAUTHORIZED)
+                code = str(random.randint(100000, 999999))
+                TwoFactorCode.objects.filter(user=user, is_used=False).update(is_used=True)
+                TwoFactorCode.objects.create(user=user, code=code)
+                try:
+                    send_mail(
+                        subject="Your Verification Code",
+                        message=f"Your verification code is: {code}\n\nThis code expires in 5 minutes.",
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[user.email],
+                        fail_silently=False,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send 2FA email to {user.email}: {e}")
+                return Response({
+                    "requires_2fa": True,
+                    "message": "Verification code sent to your email"
+                }, status=status.HTTP_200_OK)
 
-            if not user.totp_secret:
-                return Response({"error": "2FA secret not set. Contact admin."}, status=status.HTTP_403_FORBIDDEN)
+            valid_code = TwoFactorCode.objects.filter(
+                user=user, code=twofa_code, is_used=False
+            ).first()
 
-            totp = pyotp.TOTP(user.totp_secret)
-            if not totp.verify(twofa_code):
-                return Response({"error": "Invalid 2FA code"}, status=status.HTTP_401_UNAUTHORIZED)
+            if not valid_code or not valid_code.is_valid():
+                return Response({"error": "Invalid or expired 2FA code"}, status=status.HTTP_401_UNAUTHORIZED)
+
+            valid_code.is_used = True
+            valid_code.save()
 
         # ✅ Log user login activity
         log_activity(user, "LOGIN", {"ip": request.META.get("REMOTE_ADDR")})
@@ -1197,6 +1218,9 @@ class CreateUserView(APIView):
                 raw_client_secret
             )
 
+            # ✅ Trigger Nextcloud auto-provisioning
+            provision_nextcloud_user.delay(user.id)
+
             return Response({
                 "message": "User created successfully",
                 "user_id": user.id,
@@ -1487,7 +1511,7 @@ class SupersuperuserResetView(APIView):
             return Response({"error": "Invalid email or password"}, status=status.HTTP_403_FORBIDDEN)
 
         # Step 2: Verify against .env superuser
-        ADMIN_EMAIL = os.environ.get("DJANGO_SUPERUSER_EMAIL", "admin@aidocumines.com")
+        ADMIN_EMAIL = os.environ.get("DJANGO_SUPERUSER_EMAIL", "michael.kateregga@datasqan.com")
         ADMIN_PASSWORD = os.environ.get("DJANGO_SUPERUSER_PASSWORD", "superpassword")
         SECRETS_FILE_PATH = "logs/.superuser_secrets.json"
 
@@ -1591,7 +1615,7 @@ class SupersuperuserCleanDatabaseView(APIView):
             return Response({"error": "Invalid credentials"}, status=403)
 
         # 🧠 Must match env-based supersuperuser
-        env_email = os.environ.get("DJANGO_SUPERUSER_EMAIL", "admin@aidocumines.com")
+        env_email = os.environ.get("DJANGO_SUPERUSER_EMAIL", "michael.kateregga@datasqan.com")
         if not user.is_superuser or user.email.lower() != env_email.lower():
             return Response({"error": "Unauthorized"}, status=403)
 

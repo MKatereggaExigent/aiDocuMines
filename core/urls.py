@@ -13,6 +13,16 @@ from .views import (
     ServiceSummaryView,
 )
 
+from core.views_bulk import (
+    BulkServiceCatalogView,
+    BulkJobSubmitView,
+    BulkJobStatusView,
+    BulkJobResultsView,
+    BulkJobListView,
+    BulkJobCancelView,
+    BulkJobRetryView,
+)
+
 
 from core.onlyoffice_views import (
     OnlyOfficeConvertView,
@@ -75,6 +85,15 @@ urlpatterns = [
 
     # Health Checker
     path("health/", health_check, name="health_check"),
+
+    # Bulk Processing
+    path("bulk/catalog/", BulkServiceCatalogView.as_view(), name="bulk-catalog"),
+    path("bulk/submit/", BulkJobSubmitView.as_view(), name="bulk-submit"),
+    path("bulk/list/", BulkJobListView.as_view(), name="bulk-list"),
+    path("bulk/<str:job_id>/status/", BulkJobStatusView.as_view(), name="bulk-status"),
+    path("bulk/<str:job_id>/results/", BulkJobResultsView.as_view(), name="bulk-results"),
+    path("bulk/<str:job_id>/cancel/", BulkJobCancelView.as_view(), name="bulk-cancel"),
+    path("bulk/<str:job_id>/retry/", BulkJobRetryView.as_view(), name="bulk-retry"),
     
 ]
 

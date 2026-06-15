@@ -24,6 +24,7 @@ ENV/
 # Local env/secrets
 .env.*
 *.pem
+!oidc-private-key.pem
 *.key
 
 # Logs

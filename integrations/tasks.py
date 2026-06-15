@@ -16,6 +16,45 @@ from integrations.models import IntegrationLog
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def provision_nextcloud_user(self, user_id):
+    """
+    Full provisioning flow for a new user: create OIDC client + sync files.
+    Called automatically when a new user is created by an admin.
+    """
+    User = get_user_model()
+    try:
+        user = User.objects.get(id=user_id)
+        print(f"🚀 [provision_nextcloud_user] Starting provisioning for user {user.id}")
+
+        get_or_create_nextcloud_oidc_user(user)
+
+        client_name = user.client.name if hasattr(user, 'client') and user.client else str(user.id)
+        sync_user_to_nextcloud_host.delay(user.id, client_name)
+
+        IntegrationLog.objects.create(
+            user=user,
+            connector="nextcloud",
+            status="created",
+            details=f"Auto-provisioning initiated for user {user.id}"
+        )
+        print(f"✅ [provision_nextcloud_user] Provisioning queued for {user.email}")
+
+    except User.DoesNotExist:
+        print(f"❌ [provision_nextcloud_user] User {user_id} does not exist")
+    except Exception as e:
+        try:
+            IntegrationLog.objects.create(
+                user_id=user_id,
+                connector="nextcloud",
+                status="error",
+                details=f"Auto-provisioning failed: {str(e)}"
+            )
+        except Exception:
+            pass
+        print(f"❌ [provision_nextcloud_user] ERROR: {str(e)}")
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def generate_nextcloud_url_async(self, user_id):
     """
     Celery task to generate autologin URL for Nextcloud for a given user.

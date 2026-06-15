@@ -54,7 +54,7 @@ def get_or_create_nextcloud_oidc_user(user):
         defaults={
             "redirect_uris": os.getenv(
                 "OIDC_REDIRECT_URI",
-                "https://nextcloud.aidocumines.com/apps/user_oidc/code"
+                "https://nextcloud.apps.datasqan.com/apps/user_oidc/code"
             ),
         }
     )
@@ -74,12 +74,12 @@ def generate_nextcloud_oidc_url(user, state: str, nonce: str) -> str:
 
     nextcloud_oidc_login_url = os.getenv(
         "NEXTCLOUD_URL",
-        "https://nextcloud.aidocumines.com"
+        "https://nextcloud.apps.datasqan.com"
     ) + "/apps/user_oidc/oidc"
 
     redirect_uri = os.getenv(
         "OIDC_REDIRECT_URI",
-        "https://nextcloud.aidocumines.com/apps/user_oidc/code"
+        "https://nextcloud.apps.datasqan.com/apps/user_oidc/code"
     )
 
     query_params = {

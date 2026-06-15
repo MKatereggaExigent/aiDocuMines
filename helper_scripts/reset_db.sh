@@ -9,7 +9,7 @@ DB_PORT="5432"
 
 # 🔹 Superuser Credentials
 DJANGO_SUPERUSER_USERNAME="admin"
-DJANGO_SUPERUSER_EMAIL="admin@aidocumines.com"
+DJANGO_SUPERUSER_EMAIL="michael.kateregga@datasqan.com"
 DJANGO_SUPERUSER_PASSWORD="superpassword"
 
 

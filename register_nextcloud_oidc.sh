@@ -4,7 +4,7 @@ set -e
 echo "🔐 Registering OIDC client for Nextcloud..."
 
 SECRETS_FILE="logs/.superuser_secrets.json"
-REDIRECT_URI="https://nextcloud.aidocumines.com/index.php/apps/user_oidc/code"
+REDIRECT_URI="https://nextcloud.apps.datasqan.com/index.php/apps/user_oidc/code"
 
 # Ensure jq is available
 if ! command -v jq &>/dev/null; then
